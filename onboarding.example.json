@@ -1,0 +1,23 @@
+{
+  "tenant_id": "REPLACE-WITH-CLIENT-TENANT-GUID",
+  "subscription_id": "REPLACE-WITH-CLIENT-SUBSCRIPTION-GUID",
+  "resource_group": "SentinelRG",
+  "workspace_name": "Sentinel-Instance",
+  "client": "new-client",
+  "workspace_label": "primary",
+  "github_owner": "YOUR-ORGANIZATION",
+  "github_repo": "YOUR-DETECTION-REPOSITORY",
+  "oidc_subject_format": "immutable",
+  "app_owner_user_ids": [
+    "REPLACE-WITH-EXISTING-ENTRA-USER-OBJECT-ID"
+  ],
+  "production_reviewers": [
+    {
+      "type": "User",
+      "name": "REPLACE-WITH-GITHUB-LOGIN"
+    }
+  ],
+  "initial_rule_path": "",
+  "allow_missing_mitre": false,
+  "human_groups": []
+}

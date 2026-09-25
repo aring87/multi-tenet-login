@@ -1,0 +1,271 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Resource-group deployment: isolated Sentinel workspace preview/deploy RBAC for existing client-tenant service principals. Does not create Entra identities or GitHub environments."
+  },
+  "parameters": {
+    "targetName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 48,
+      "metadata": {
+        "description": "Your GitHub workspace target, for example acme-primary. Used in role display names."
+      }
+    },
+    "workspaceName": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 63,
+      "metadata": {
+        "description": "Existing Log Analytics workspace name in the resource group selected for this deployment. Not the workspace GUID."
+      }
+    },
+    "previewPrincipalObjectId": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "metadata": {
+        "description": "Object ID from Enterprise applications for the PREVIEW service principal in this client tenant. NOT the app registration Object ID or Application (client) ID. Must differ from deploymentPrincipalObjectId."
+      }
+    },
+    "deploymentPrincipalObjectId": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "metadata": {
+        "description": "Object ID from Enterprise applications for the DEPLOYMENT service principal in this client tenant. Must differ from previewPrincipalObjectId."
+      }
+    }
+  },
+  "variables": {
+    "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+    "scopeKey": "[toLower(variables('workspaceResourceId'))]",
+    "roleSuffix": "[uniqueString(variables('scopeKey'))]",
+    "previewRoleGuid": "[guid(variables('scopeKey'), 'mssp-sentinel-preview-v1')]",
+    "writerRoleGuid": "[guid(variables('scopeKey'), 'mssp-sentinel-writer-v1')]",
+    "deploymentRoleGuid": "[guid(variables('scopeKey'), 'mssp-sentinel-arm-deployment-v1')]",
+    "previewRoleId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('previewRoleGuid'))]",
+    "writerRoleId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('writerRoleGuid'))]",
+    "deploymentRoleId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('deploymentRoleGuid'))]",
+    "previewArmRoleGuid": "[guid(variables('scopeKey'), 'mssp-sentinel-arm-preview-v1')]",
+    "previewArmRoleId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('previewArmRoleGuid'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('previewRoleGuid')]",
+      "properties": {
+        "roleName": "[format('MSSP Sentinel Preview - {0} - {1}', parameters('targetName'), variables('roleSuffix'))]",
+        "description": "Read Sentinel analytics rules and query the selected workspace. No analytics-rule writes or deployment operations.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.SecurityInsights/alertRules/read",
+              "Microsoft.OperationalInsights/workspaces/read",
+              "Microsoft.OperationalInsights/workspaces/query/read",
+              "Microsoft.OperationalInsights/workspaces/query/*/read",
+              "Microsoft.OperationalInsights/workspaces/analytics/query/action"
+            ],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[resourceGroup().id]"
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('writerRoleGuid')]",
+      "properties": {
+        "roleName": "[format('MSSP Sentinel Rule Writer - {0} - {1}', parameters('targetName'), variables('roleSuffix'))]",
+        "description": "Six Sentinel/Log Analytics actions for rule read/write and query validation. No analytics-rule delete.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.SecurityInsights/alertRules/read",
+              "Microsoft.SecurityInsights/alertRules/write",
+              "Microsoft.OperationalInsights/workspaces/read",
+              "Microsoft.OperationalInsights/workspaces/query/read",
+              "Microsoft.OperationalInsights/workspaces/query/*/read",
+              "Microsoft.OperationalInsights/workspaces/analytics/query/action"
+            ],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[resourceGroup().id]"
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('deploymentRoleGuid')]",
+      "properties": {
+        "roleName": "[format('MSSP Sentinel ARM Deployment - {0} - {1}', parameters('targetName'), variables('roleSuffix'))]",
+        "description": "Resource-group ARM deployment operations. Resource writes require a separate role; no RBAC administration is granted.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.Resources/subscriptions/resourceGroups/read",
+              "Microsoft.Resources/deployments/*"
+            ],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[resourceGroup().id]"
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('previewArmRoleGuid')]",
+      "properties": {
+        "roleName": "[format('MSSP Sentinel ARM Preview - {0} - {1}', parameters('targetName'), variables('roleSuffix'))]",
+        "description": "ARM validation and what-if operations for preview. Use ProviderNoRbac for resource-read checks. No deployment create/write or rule-write permission.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.Resources/subscriptions/resourceGroups/read",
+              "Microsoft.Resources/deployments/read",
+              "Microsoft.Resources/deployments/operations/read",
+              "Microsoft.Resources/deployments/operationstatuses/read",
+              "Microsoft.Resources/deployments/validate/action",
+              "Microsoft.Resources/deployments/whatIf/action"
+            ],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[resourceGroup().id]"
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(variables('scopeKey'), toLower(variables('previewRoleId')), toLower(parameters('previewPrincipalObjectId')))]",
+      "dependsOn": [
+        "[variables('previewRoleId')]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('previewRoleId')]",
+        "principalId": "[parameters('previewPrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "Managed by sentinel-onboarding/azuredeploy.json."
+      },
+      "scope": "[variables('workspaceResourceId')]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(variables('scopeKey'), toLower(variables('writerRoleId')), toLower(parameters('deploymentPrincipalObjectId')))]",
+      "dependsOn": [
+        "[variables('writerRoleId')]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('writerRoleId')]",
+        "principalId": "[parameters('deploymentPrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "Managed by sentinel-onboarding/azuredeploy.json."
+      },
+      "scope": "[variables('workspaceResourceId')]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(toLower(resourceGroup().id), toLower(variables('deploymentRoleId')), toLower(parameters('deploymentPrincipalObjectId')))]",
+      "dependsOn": [
+        "[variables('deploymentRoleId')]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('deploymentRoleId')]",
+        "principalId": "[parameters('deploymentPrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "Managed by sentinel-onboarding/azuredeploy.json."
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(toLower(resourceGroup().id), toLower(variables('previewArmRoleId')), toLower(parameters('previewPrincipalObjectId')))]",
+      "dependsOn": [
+        "[variables('previewArmRoleId')]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('previewArmRoleId')]",
+        "principalId": "[parameters('previewPrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "Managed by sentinel-onboarding/azuredeploy.json; ARM preview operations only."
+      }
+    }
+  ],
+  "outputs": {
+    "targetName": {
+      "type": "string",
+      "value": "[parameters('targetName')]"
+    },
+    "tenantId": {
+      "type": "string",
+      "value": "[subscription().tenantId]"
+    },
+    "subscriptionId": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]"
+    },
+    "workspaceResourceId": {
+      "type": "string",
+      "value": "[variables('workspaceResourceId')]"
+    },
+    "previewPrincipalObjectId": {
+      "type": "string",
+      "value": "[parameters('previewPrincipalObjectId')]"
+    },
+    "deploymentPrincipalObjectId": {
+      "type": "string",
+      "value": "[parameters('deploymentPrincipalObjectId')]"
+    },
+    "previewRoleId": {
+      "type": "string",
+      "value": "[variables('previewRoleId')]"
+    },
+    "writerRoleId": {
+      "type": "string",
+      "value": "[variables('writerRoleId')]"
+    },
+    "armDeploymentRoleId": {
+      "type": "string",
+      "value": "[variables('deploymentRoleId')]"
+    },
+    "armDeploymentAssignmentScope": {
+      "type": "string",
+      "value": "[resourceGroup().id]"
+    },
+    "previewArmRoleId": {
+      "type": "string",
+      "value": "[variables('previewArmRoleId')]"
+    },
+    "armPreviewAssignmentScope": {
+      "type": "string",
+      "value": "[resourceGroup().id]"
+    }
+  }
+}

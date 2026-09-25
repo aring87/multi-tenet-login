@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "targetName": {
+      "value": "acme-primary"
+    },
+    "workspaceName": {
+      "value": "REPLACE-WITH-EXISTING-WORKSPACE-NAME"
+    },
+    "previewPrincipalObjectId": {
+      "value": "REPLACE-WITH-PREVIEW-SP-OBJECT-ID"
+    },
+    "deploymentPrincipalObjectId": {
+      "value": "REPLACE-WITH-DEPLOY-SP-OBJECT-ID"
+    }
+  }
+}

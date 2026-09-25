@@ -1,0 +1,16 @@
+# Local administration records and authentication caches
+desktop-data/
+.azure/
+.env
+.env.*
+*.state.json
+*.state.json.lock
+*.lock
+*.tmp
+client-onboarding.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+*.zip

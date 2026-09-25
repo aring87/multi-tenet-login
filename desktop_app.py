@@ -442,7 +442,7 @@ class App:
         def done(rows):
             rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
             self.subscriptions=rows
-            self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | Tenant: "+r["tenantId"] for r in rows])
+            self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+" | Tenant: "+r["tenantId"] for r in rows])
             self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
             self.subscription_changed()
         self.work("Waiting for Microsoft sign-in...",task,done)

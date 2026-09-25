@@ -77,6 +77,13 @@ class DesktopTests(unittest.TestCase):
              dict(name="AzureCloud",endpoints={"resourceManager":"https://management.azure.com/"}),Stop("AuthorizationFailed")]):
             self.assertIn("AuthorizationFailed",session.check_subscription(SUB))
 
+    def test_login_keeps_warned_subscription_and_excludes_tenant_placeholder(self):
+        session=backend.Session(self.data/"warned-login")
+        rows=[dict(id=SUB,tenantId=TENANT,state="Warned",name="Example"),
+              dict(id=TENANT,tenantId=TENANT,state="Enabled")]
+        with patch.object(session,"az",return_value=rows):
+            self.assertEqual(session.login(),rows[:1])
+
     def test_tenantless_login_does_not_pass_tenant_argument(self):
         session=backend.Session(self.data/"no-tenant")
         rows=[dict(id=SUB,tenantId=TENANT,state="Enabled",name="Example")]

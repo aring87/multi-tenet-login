@@ -92,11 +92,11 @@ class Session:
         if tenant_hint:
             args.extend(["--tenant", tenant_hint])
         accounts = self.az(*args) or []
-        subscriptions = [x for x in accounts if x.get("state") == "Enabled" and x.get("id") != x.get("tenantId")]
+        subscriptions = [x for x in accounts if x.get("id") != x.get("tenantId")]
         if re.fullmatch(r"[0-9a-fA-F-]{36}", tenant_hint):
             require(all(x["tenantId"].lower() == tenant_hint.lower() for x in subscriptions),
                     "Sign-in returned a different tenant.")
-        require(subscriptions, "Signed in, but no enabled subscriptions are visible. Check the account's Azure subscription access.")
+        require(subscriptions, "Signed in, but no subscriptions are visible. Check the account's Azure subscription access.")
         return subscriptions
 
     def refresh_subscriptions(self):

@@ -1,5 +1,20 @@
 # Sentinel Client Onboarding
 
+## Discover workspace details without a tenant ID
+
+1. Start the desktop app. Azure CLI and Python must be installed; no terminal commands are needed during use. GitHub CLI is only needed for full onboarding.
+2. Use **Sign in to CyberQP** if applicable and activate the client's JIT account there.
+3. Leave **Tenant ID or domain (optional)** blank. Clear a previously selected client's tenant when connecting to another client. Creating a saved client is optional.
+4. Click **Sign in & discover**. Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one.
+5. The app automatically selects the default accessible subscription and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which includes the tenant ID. Selecting another subscription automatically reloads its workspaces.
+6. Select the intended workspace if several are available. The **Workspace details** text box shows **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**. Workspace ID is the Log Analytics customer GUID, not the ARM resource path.
+7. Click **Copy workspace details** to copy the displayed text. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
+
+**Open Azure portal** is a separate browser shortcut. A portal-only sign-in cannot populate this app's authenticated session; use **Sign in & discover** to authorize discovery. The app never collects your password. Windows account window remains available for organizations that require broker-based authentication.
+
+Only resources accessible to the signed-in account are returned. No subscriptions means the account needs appropriate subscription access or the correct directory; no workspaces means check the selected subscription and workspace read access. Discovery lists Log Analytics workspaces and does not assert that Sentinel is enabled on each. Advanced permission/onboarding tools remain separate and require explicit review and apply.
+
+
 A local Windows desktop app for connecting to client Azure tenants, discovering Log Analytics workspaces, and preparing Microsoft Sentinel deployment permissions.
 
 ## What it does
@@ -22,9 +37,9 @@ Discovery and permissions-only mode do not require GitHub or CyberQP. Full onboa
 2. Install Python 3.10 or newer with Tkinter, and Azure CLI 2.76 or newer.
 3. Install GitHub CLI if you want full Azure + GitHub onboarding.
 4. Double-click **Start-Sentinel.cmd**.
-5. Select **Add client**, enter a display name, client slug, and tenant GUID or verified domain.
+5. Select **Add client**, optionally save a display name and client slug; the tenant GUID/domain can be left blank.
 6. Activate JIT access through your organization's normal process, then select **Sign in with Microsoft**.
-7. Choose a subscription and select **Discover workspaces**.
+7. Workspaces load automatically after sign-in or changing the subscription. Use **Refresh workspaces** to reload them.
 
 No third-party Python packages are required. The desktop uses the installed Azure CLI for Microsoft authentication.
 

@@ -50,6 +50,48 @@ class DesktopTests(unittest.TestCase):
         app.refresh_clients()
         return app
 
+    def test_tenantless_login_does_not_pass_tenant_argument(self):
+        session=backend.Session(self.data/"no-tenant")
+        rows=[dict(id=SUB,tenantId=TENANT,state="Enabled",name="Example")]
+        with patch.object(session,"az",return_value=rows) as az:
+            self.assertEqual(session.login(),rows)
+            az.assert_called_once_with("login","--allow-no-subscriptions")
+
+    def test_known_tenant_login_is_still_scoped(self):
+        session=backend.Session(self.data/"known-tenant")
+        rows=[dict(id=SUB,tenantId=TENANT,state="Enabled",name="Example")]
+        with patch.object(session,"az",return_value=rows) as az:
+            session.login(TENANT)
+            az.assert_called_once_with("login","--allow-no-subscriptions","--tenant",TENANT)
+
+    def test_signin_auto_discovers_and_subscription_switch_clears_details(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=ui.App(root)
+        session=MagicMock();session.env={};session.account={}
+        session.login.return_value=[dict(id=SUB,tenantId=TENANT,name="Example",isDefault=True)]
+        session.discover.return_value=[WORKSPACE]
+        def work(title,task,done):
+            done(task())
+        with patch.object(ui,"Session",return_value=session),patch.object(app,"work",side_effect=work):
+            app.login()
+            session.login.assert_called_once_with("")
+            session.discover.assert_called_once_with(SUB,TENANT)
+            details=app.details.get("1.0","end")
+            for value in (TENANT,SUB,WS,"rg-example-sentinel","law-example-sentinel"):
+                self.assertIn(value,details)
+            self.assertEqual(app.details.cget("state"),"disabled")
+            session.discover.return_value=[]
+            app.subscription_changed()
+            self.assertIsNone(app.workspace)
+            self.assertNotIn(WS,app.details.get("1.0","end"))
+            self.assertIn("No accessible workspaces",app.identity.get())
+
+    def test_client_can_be_saved_before_tenant_is_known(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.vars["tenant"].set("")
+        app.save_client()
+        self.assertEqual(json.loads(app.clientfile.read_text())[0]["tenant"],"")
+
     def test_public_app_starts_with_empty_inventory(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
         app=ui.App(root)

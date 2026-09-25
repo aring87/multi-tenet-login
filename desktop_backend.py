@@ -84,11 +84,14 @@ class Session:
         require(result.returncode == 0, result.stderr.strip() or "Azure operation failed.")
         return json.loads(result.stdout) if result.stdout.strip() else None
 
-    def login(self, tenant_hint):
-        tenant_hint = validate_tenant_hint(tenant_hint)
+    def login(self, tenant_hint=""):
+        tenant_hint = validate_tenant_hint(tenant_hint) if tenant_hint.strip() else ""
         self.log("Complete Microsoft sign-in with the client's authorized account and MFA.")
         # Browser sign-in by default. The desktop can opt into the Windows broker for policies that require it.
-        accounts = self.az("login", "--tenant", tenant_hint, "--allow-no-subscriptions")
+        args = ["login", "--allow-no-subscriptions"]
+        if tenant_hint:
+            args.extend(["--tenant", tenant_hint])
+        accounts = self.az(*args) or []
         subscriptions = [x for x in accounts if x.get("state") == "Enabled" and x.get("id") != x.get("tenantId")]
         if re.fullmatch(r"[0-9a-fA-F-]{36}", tenant_hint):
             require(all(x["tenantId"].lower() == tenant_hint.lower() for x in subscriptions),

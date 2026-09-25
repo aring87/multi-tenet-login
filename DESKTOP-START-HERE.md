@@ -1,5 +1,20 @@
 # Sentinel Client Onboarding — desktop app
 
+## Discover workspace details without a tenant ID
+
+1. Start the desktop app. Azure CLI and Python must be installed; no terminal commands are needed during use. GitHub CLI is only needed for full onboarding.
+2. Use **Sign in to CyberQP** if applicable and activate the client's JIT account there.
+3. Leave **Tenant ID or domain (optional)** blank. Clear a previously selected client's tenant when connecting to another client. Creating a saved client is optional.
+4. Click **Sign in & discover**. Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one.
+5. The app automatically selects the default accessible subscription and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which includes the tenant ID. Selecting another subscription automatically reloads its workspaces.
+6. Select the intended workspace if several are available. The **Workspace details** text box shows **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**. Workspace ID is the Log Analytics customer GUID, not the ARM resource path.
+7. Click **Copy workspace details** to copy the displayed text. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
+
+**Open Azure portal** is a separate browser shortcut. A portal-only sign-in cannot populate this app's authenticated session; use **Sign in & discover** to authorize discovery. The app never collects your password. Windows account window remains available for organizations that require broker-based authentication.
+
+Only resources accessible to the signed-in account are returned. No subscriptions means the account needs appropriate subscription access or the correct directory; no workspaces means check the selected subscription and workspace read access. Discovery lists Log Analytics workspaces and does not assert that Sentinel is enabled on each. Advanced permission/onboarding tools remain separate and require explicit review and apply.
+
+
 ## Start
 Double-click Start-Sentinel.cmd in the extracted folder. Keep all application files together. Python 3.10+ with Tkinter and Azure CLI 2.76+ are required; full GitHub onboarding also requires GitHub CLI. Install these dependencies before first use.
 
@@ -8,9 +23,9 @@ This is the first local desktop version. It does not require a web server, an ap
 ## First use
 1. Activate approved Azure access using your organization's normal process, if activation is required.
 2. Choose a saved client in Connect, or use Add client to create the first entry. No client is prefilled.
-3. For another client, select Add client and enter its display name, client slug and tenant GUID or verified tenant domain. A domain can be used when you have not yet collected the GUID.
-4. Click Connect app to Azure. Complete the Windows Microsoft account window or browser sign-in with the activated JIT account and MFA. This app has no password field.
-5. Choose the subscription, then click Discover workspaces.
+3. For another client, select Add client and enter its display name and client slug. Tenant GUID/domain is optional; leave it blank to discover the tenant after signing in.
+4. Click Sign in & discover. Complete the Windows Microsoft account window or browser sign-in with the activated JIT account and MFA. This app has no password field.
+5. Workspaces load automatically. Choose another subscription if needed; Refresh workspaces reloads the current selection.
 6. Select the correct Log Analytics workspace. The app displays the signed-in account, tenant ID, subscription ID, resource group, workspace name and workspace GUID. It lists accessible Log Analytics workspaces; verify that the selected workspace is the one using Sentinel.
 7. Click Copy workspace details if you only need the discovered information. Save client mapping retains the client name, slug and tenant hint for the dropdown.
 
@@ -71,7 +86,7 @@ Delete client removes the selected saved mapping after confirmation. It clears t
 Close an older open copy and reopen Start-Sentinel.cmd to load this version. No client records are deleted by installing the update.
 
 ## CyberQP browser shortcut and tenant entry
-On Connect, select the optional CyberQP region (US, EU, Canada), then click Sign in to CyberQP. The button opens the corresponding official portal in your default browser. Complete sign-in and any JIT activation there, then return to Connect app to Azure. No CyberQP credentials or API tokens are collected by the application.
+On Connect, select the optional CyberQP region (US, EU, Canada), then click Sign in to CyberQP. The button opens the corresponding official portal in your default browser. Complete sign-in and any JIT activation there, then return to Sign in & discover. No CyberQP credentials or API tokens are collected by the application.
 
 The Tenant ID or verified domain field is for a Directory (tenant) GUID or a verified tenant domain, such as client.onmicrosoft.com. Do not enter azure.portal.com, portal.azure.com, a website URL or a user email address. Find the tenant GUID under Microsoft Entra ID > Overview. The app now rejects common portal addresses before launching Azure sign-in. A syntactically valid domain must still belong to a real accessible tenant.
 
@@ -80,8 +95,8 @@ Portal regions are documented by [CyberQP](https://support.getquickpass.com/hc/e
 ## Azure portal access versus app authorization
 Open Azure portal opens https://portal.azure.com/ in your browser. Sign in there with your client account and select the correct directory. That website session does not automatically authorize this desktop app.
 
-To discover workspaces or apply permissions, supply the client's tenant ID/domain and click Connect app to Azure. Browser is the default app sign-in method; it uses Microsoft's Azure CLI browser authorization flow. If organizational policy requires the Windows broker, select Windows account window. The preference affects only this app's Azure CLI session.
+To discover workspaces or apply permissions, leave the tenant field blank (or optionally restrict it to a known client) and click Sign in & discover. Browser is the default app sign-in method; it uses Microsoft's Azure CLI browser authorization flow. If organizational policy requires the Windows broker, select Windows account window. The preference affects only this app's Azure CLI session.
 
 A previous failed login can leave no active Azure account. The app now treats that specific logout result as already signed out, so retrying or closing does not fail on an empty session. Other logout failures remain visible.
 
-Signing into portal.azure.com does not make portal.azure.com a tenant identifier. Keep the client's tenant GUID or verified domain in the tenant field.
+Signing into portal.azure.com does not make portal.azure.com a tenant identifier. Leave the tenant field blank, or use a known tenant GUID or verified domain.

@@ -19,7 +19,7 @@ from full_onboarding import validate_config
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Sentinel Client Onboarding")
+        root.title("Azure Workspace Discovery")
         root.geometry("1280x880")
         root.minsize(1120,740)
         root.configure(bg="#edf2f7")
@@ -82,7 +82,7 @@ class App:
         outer=ttk.Frame(parent,style="Card.TFrame",padding=22)
         ttk.Label(outer,text=title,style="CardTitle.TLabel").pack(anchor="w")
         if subtitle:
-            ttk.Label(outer,text=subtitle,style="Muted.TLabel",wraplength=530).pack(anchor="w",pady=(5,18))
+            ttk.Label(outer,text=subtitle,style="Muted.TLabel",wraplength=330).pack(anchor="w",pady=(5,18))
         else:
             ttk.Frame(outer,style="Card.TFrame",height=16).pack()
         body=ttk.Frame(outer,style="Card.TFrame")
@@ -123,9 +123,9 @@ class App:
         sidebar=tk.Frame(self.root,bg="#12213a",width=205)
         sidebar.pack(side="left",fill="y");sidebar.pack_propagate(False)
         tk.Label(sidebar,text="SENTINEL",bg="#12213a",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=24,pady=(34,4))
-        tk.Label(sidebar,text="CLIENT ONBOARDING",bg="#12213a",fg="#8ca5c5",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=24,pady=(0,38))
+        tk.Label(sidebar,text="WORKSPACE DISCOVERY",bg="#12213a",fg="#8ca5c5",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=24,pady=(0,38))
         self.nav=[]
-        for i,(title,desc) in enumerate([("Connect","Client & workspace"),("Configure","Permissions & identities"),("Review","Preview & apply")]):
+        for i,(title,desc) in enumerate([("Discover","Sign in & copy details"),("Configure","Permissions & identities"),("Review","Preview & apply")]):
             b=tk.Button(sidebar,text=f"0{i+1}   {title}\n       {desc}",justify="left",anchor="w",
                         command=lambda n=i:self.tabs.select(n),font=("Segoe UI",10),relief="flat",bd=0,
                         bg="#12213a",fg="#a9bad1",activebackground="#203b60",activeforeground="white",padx=18,pady=15)
@@ -163,40 +163,47 @@ class App:
             canvas.bind("<Configure>",lambda e,c=canvas,w=window:c.itemconfigure(w,width=e.width))
             self.page_contents.append(content)
         connect,settings,review=self.page_contents
-        connect.columnconfigure(0,weight=4);connect.columnconfigure(1,weight=6)
-        clientcard,body=self.card(connect,"Client profile","Choose a saved client or add another.")
+        connect.columnconfigure(0,weight=1,uniform="discovery");connect.columnconfigure(1,weight=1,uniform="discovery")
+        clientcard,body=self.card(connect,"Client profile (optional)","Sign in without creating a profile. Save a client later for quicker access.")
         clientcard.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
         self.clientbox=self.form(body,"Saved client","client_name",values=[])
         self.clientbox.bind("<<ComboboxSelected>>",self.client_changed)
         actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x",pady=(0,18))
         self.button(actions,"+ Add client",self.add_client).pack(side="left",padx=(0,8))
         self.button(actions,"Delete client",self.delete_client,"Danger.TButton").pack(side="left")
-        self.form(body,"Tenant ID or verified domain","tenant")
+        self.form(body,"Tenant ID or domain (optional)","tenant")
         self.form(body,"Client slug","client_slug")
-        ttk.Label(body,text="Use the client's tenant ID or verified domain, not an Azure portal address. Find the ID in Entra ID > Overview.",
+        ttk.Label(body,text="Leave the tenant field blank to sign in without an ID. A saved tenant restricts sign-in to that directory. Clear it when switching to a new client.",
                   style="Muted.TLabel",wraplength=300).pack(anchor="w",pady=(0,20))
         self.button(body,"Save client",self.save_client).pack(fill="x",pady=(0,10))
         self.button(body,"Import configuration",self.import_config).pack(fill="x")
+        details_body=body
         discovery,body=self.card(connect,"Azure workspace","Connect with the client's authorized Azure account.")
         discovery.grid(row=0,column=1,sticky="nsew",pady=(0,16))
         self.form(body,"CyberQP region - optional","cyberqp_region","US",list(CYBERQP_PORTALS))
         self.button(body,"Sign in to CyberQP",self.open_cyberqp).pack(anchor="w",pady=(0,10))
         ttk.Label(body,text="Opens your browser. Activate JIT access there, then return here.",
-                  style="Muted.TLabel",wraplength=470).pack(anchor="w",pady=(0,16))
+                  style="Muted.TLabel",wraplength=330).pack(anchor="w",pady=(0,16))
         self.button(body,"Open Azure portal",self.open_azure_portal).pack(anchor="w",pady=(0,10))
         ttk.Label(body,text="Portal access is separate. Connect the app below to discover workspaces.",
-                  style="Muted.TLabel",wraplength=470).pack(anchor="w",pady=(0,16))
+                  style="Muted.TLabel",wraplength=330).pack(anchor="w",pady=(0,16))
         self.form(body,"App sign-in method","login_method","Browser",["Browser","Windows account window"])
-        self.button(body,"Connect app to Azure",self.login,"Primary.TButton").pack(anchor="w",pady=(0,18))
+        self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(anchor="w",pady=(0,18))
         self.subbox=self.form(body,"Subscription","subscription",values=[])
         self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
-        self.button(body,"Discover workspaces",self.discover).pack(anchor="w",pady=(0,18))
+        self.button(body,"Refresh workspaces",self.discover).pack(anchor="w",pady=(0,18))
         self.wsbox=self.form(body,"Log Analytics workspace","workspace",values=[])
         self.wsbox.bind("<<ComboboxSelected>>",self.workspace_changed)
         self.identity=tk.StringVar(value="Workspace details will appear here after you sign in and discover.")
-        ttk.Label(body,textvariable=self.identity,style="Muted.TLabel",wraplength=470,justify="left").pack(fill="x",pady=(2,18))
+        body=details_body
+        ttk.Label(body,text="Workspace details",style="Field.TLabel").pack(anchor="w",pady=(2,6))
+        self.details=tk.Text(body,width=1,height=10,wrap="word",font=("Consolas",10),
+                             bg="#f6f8fc",fg="#233248",relief="flat",padx=12,pady=12)
+        self.details.pack(fill="x",pady=(0,12))
+        self.identity.trace_add("write",lambda *args:self.render_details())
+        self.render_details()
         self.button(body,"Copy workspace details",self.copy_workspace).pack(anchor="w")
-        self.button(connect,"Continue to configuration  >",lambda:self.tabs.select(1),"Primary.TButton").grid(
+        self.button(connect,"Advanced: permissions & onboarding  >",lambda:self.tabs.select(1),"Primary.TButton").grid(
             row=1,column=1,sticky="e",pady=(0,16))
         top,body=self.card(settings,"Setup scope","Choose what you want to configure for this workspace.")
         top.pack(fill="x",pady=(0,16))
@@ -368,8 +375,8 @@ class App:
     def add_client(self):
         name=simpledialog.askstring("Add client","Client display name:",parent=self.root)
         if not name: return
-        tenant=simpledialog.askstring("Add client","Tenant GUID or verified tenant domain (for example client.onmicrosoft.com):",parent=self.root)
-        if not tenant: return
+        tenant=simpledialog.askstring("Add client","Tenant ID or domain (optional; leave blank to discover after sign-in):",parent=self.root)
+        if tenant is None: return
         slug=simpledialog.askstring("Add client","Lowercase client slug:",initialvalue=re.sub(r"[^a-z0-9]+","-",name.lower()).strip("-"),parent=self.root)
         if not slug: return
         self.vars["client_name"].set(name); self.vars["tenant"].set(tenant); self.vars["client_slug"].set(slug)
@@ -378,13 +385,13 @@ class App:
     def save_client(self):
         v=self.values()
         try:
-            v["tenant"] = validate_tenant_hint(v["tenant"])
+            v["tenant"] = validate_tenant_hint(v["tenant"]) if v["tenant"] else ""
         except Stop as error:
             messagebox.showerror("Tenant details",str(error),parent=self.root)
             return
         self.vars["tenant"].set(v["tenant"])
-        if not re.fullmatch(r"[a-z][a-z0-9-]{1,47}",v["client_slug"]) or not v["client_name"] or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{2,252}",v["tenant"]):
-            messagebox.showerror("Client details","Supply a display name, lowercase client slug, and tenant GUID/domain."); return
+        if not re.fullmatch(r"[a-z][a-z0-9-]{1,47}",v["client_slug"]) or not v["client_name"] :
+            messagebox.showerror("Client details","Supply a display name and lowercase client slug. Tenant is optional."); return
         entry=dict(name=v["client_name"],slug=v["client_slug"],tenant=v["tenant"])
         self.clients=[c for c in self.clients if c["name"]!=entry["name"]]+[entry]
         self.clientfile.write_text(json.dumps(self.clients,indent=2),encoding="utf-8")
@@ -395,7 +402,7 @@ class App:
         try:
             if not webbrowser.open("https://portal.azure.com/",new=2):
                 raise RuntimeError("Could not open the browser. Open https://portal.azure.com/ manually.")
-            self.status.set("Azure portal opened. Use Connect app to Azure separately for workspace discovery.")
+            self.status.set("Azure portal opened. Use Sign in & discover to load workspace details into this app.")
         except Exception as error:
             messagebox.showerror("Open Azure portal",str(error),parent=self.root)
 
@@ -408,13 +415,14 @@ class App:
         try:
             if not webbrowser.open(url,new=2):
                 raise RuntimeError("Could not open the browser. Open " + url + " manually.")
-            self.status.set("CyberQP portal opened. Activate access there, then return to Connect app to Azure.")
+            self.status.set("CyberQP portal opened. Activate access there, then return to Sign in & discover.")
         except Exception as error:
             messagebox.showerror("Open CyberQP",str(error),parent=self.root)
 
     def login(self):
         try:
-            hint=validate_tenant_hint(self.vars["tenant"].get())
+            value=self.vars["tenant"].get().strip()
+            hint=validate_tenant_hint(value) if value else ""
         except Stop as error:
             messagebox.showerror("Tenant details",str(error),parent=self.root)
             return
@@ -431,29 +439,40 @@ class App:
             return self.session.login(hint)
         def done(rows):
             self.subscriptions=rows
-            self.subbox.configure(values=[r["name"]+" | "+r["id"] for r in rows])
-            self.subbox.current(0)
+            self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | Tenant: "+r["tenantId"] for r in rows])
+            self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
             self.subscription_changed()
-            self.status.set("Signed in. Choose a subscription and discover its workspaces.")
         self.work("Waiting for Microsoft sign-in...",task,done)
 
     def subscription_changed(self,event=None):
         self.workspace=None; self.plan=None; self.workspaces=[]
         self.wsbox.configure(values=[]); self.vars["workspace"].set("")
-        self.identity.set("Subscription selected. Discover workspaces to continue.")
+        index=self.subbox.current()
+        if index<0: return
+        sub=self.subscriptions[index]
+        self.auth_hint=sub["tenantId"]
+        self.vars["tenant"].set(self.auth_hint)
+        self.identity.set("Tenant ID: "+sub["tenantId"]+"\nSubscription ID: "+sub["id"]+
+                          "\nResource group: Pending discovery\nWorkspace name: Pending discovery\nWorkspace ID: Pending discovery")
+        self.discover()
 
     def discover(self):
         index=self.subbox.current()
         if not self.session or index<0:
             messagebox.showerror("Sign in first","Sign in and select a subscription."); return
         sub=self.subscriptions[index]
+        self.workspace=None; self.plan=None; self.workspaces=[]
+        self.wsbox.configure(values=[]); self.vars["workspace"].set("")
         def done(rows):
             self.workspaces=rows
             self.wsbox.configure(values=[r["workspace_name"]+" | "+r["resource_group"] for r in rows])
             if rows:
                 self.wsbox.current(0); self.workspace_changed()
-                self.status.set("Workspace details discovered. Review your selection.")
-            else: self.status.set("No workspaces visible in this subscription. Check access or select another subscription.")
+                self.status.set(f"Found {len(self.subscriptions)} subscription(s), {len(rows)} workspace(s) here. Confirm the selected destination before copying.")
+            else:
+                self.identity.set("Tenant ID: "+sub["tenantId"]+"\nSubscription ID: "+sub["id"]+
+                                  "\nResource group: Not available\nWorkspace name: No accessible workspaces\nWorkspace ID: Not available")
+                self.status.set("No workspaces visible in this subscription. Check access or select another subscription.")
         self.work("Discovering workspace details...",lambda:self.session.discover(sub["id"],sub["tenantId"]),done)
 
     def workspace_changed(self,event=None):
@@ -462,8 +481,9 @@ class App:
         self.workspace=dict(self.workspaces[index]); self.plan=None
         account=self.session.account or {}
         self.identity.set("Signed in: "+account.get("user",{}).get("name","unknown")+"\n"+
-            "\n".join(k.replace("_"," ").title()+": "+self.workspace[k] for k in
-                      ("tenant_id","subscription_id","resource_group","workspace_name","workspace_id")))
+            "\n".join(label+": "+self.workspace[key] for key,label in
+                      (("tenant_id","Tenant ID"),("subscription_id","Subscription ID"),("resource_group","Resource group"),
+                       ("workspace_name","Workspace name"),("workspace_id","Workspace ID"))))
 
     def payload(self):
         v=self.values()
@@ -513,12 +533,18 @@ class App:
             self.work("Applying reviewed setup..." if apply else "Building a read-only setup plan...",task,done)
         except Exception as error: messagebox.showerror("Setup details",str(error))
 
+    def render_details(self):
+        self.details.configure(state="normal")
+        self.details.delete("1.0","end")
+        self.details.insert("1.0",self.identity.get())
+        self.details.configure(state="disabled")
+
     def copy_workspace(self):
         if not self.workspace:
             messagebox.showinfo("Select workspace","Discover and select a workspace first.")
             return
         self.root.clipboard_clear()
-        self.root.clipboard_append(json.dumps(self.workspace,indent=2))
+        self.root.clipboard_append(self.identity.get())
         self.status.set("Workspace details copied to the clipboard.")
 
     def export_config(self):

@@ -120,19 +120,32 @@ class App:
         style.configure("Hidden.TNotebook",background="#f3f5f9",borderwidth=0,tabmargins=0)
         style.layout("Hidden.TNotebook.Tab",[])
         style.configure("Horizontal.TProgressbar",background="#245de9",troughcolor="#e8edf5",borderwidth=0)
-        sidebar=tk.Frame(self.root,bg="#12213a",width=205)
+        sidebar=tk.Frame(self.root,bg="#12213a",width=276)
         sidebar.pack(side="left",fill="y");sidebar.pack_propagate(False)
-        tk.Label(sidebar,text="SENTINEL",bg="#12213a",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=24,pady=(34,4))
-        tk.Label(sidebar,text="WORKSPACE DISCOVERY",bg="#12213a",fg="#8ca5c5",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=24,pady=(0,38))
+        tk.Label(sidebar,text="SENTINEL",bg="#12213a",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(30,4))
+        tk.Label(sidebar,text="WORKSPACE DISCOVERY",bg="#12213a",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
         self.nav=[]
         for i,(title,desc) in enumerate([("Discover","Sign in & copy details"),("Configure","Permissions & identities"),("Review","Preview & apply")]):
-            b=tk.Button(sidebar,text=f"0{i+1}   {title}\n       {desc}",justify="left",anchor="w",
-                        command=lambda n=i:self.tabs.select(n),font=("Segoe UI",10),relief="flat",bd=0,
-                        bg="#12213a",fg="#a9bad1",activebackground="#203b60",activeforeground="white",padx=18,pady=15)
-            b.pack(fill="x",padx=12,pady=4);self.nav.append(b)
-        bottom=tk.Frame(sidebar,bg="#12213a");bottom.pack(side="bottom",fill="x",padx=24,pady=24)
-        tk.Label(bottom,text="LOCAL WORKSPACE",bg="#12213a",fg="#738daa",font=("Segoe UI",8,"bold")).pack(anchor="w")
-        tk.Label(bottom,text="Your approved Azure access",bg="#12213a",fg="#b9c8da",font=("Segoe UI",9)).pack(anchor="w",pady=(6,16))
+            row=tk.Frame(sidebar,bg="#12213a",cursor="hand2",takefocus=1)
+            row.pack(fill="x",padx=12,pady=4)
+            number=tk.Label(row,text=f"0{i+1}",bg="#12213a",fg="#7893b3",
+                            font=("Segoe UI",9,"bold"),cursor="hand2")
+            number.grid(row=0,column=0,rowspan=2,sticky="n",padx=(12,12),pady=(13,0))
+            name=tk.Label(row,text=title,bg="#12213a",fg="#d8e5f5",
+                          font=("Segoe UI",11,"bold"),anchor="w",cursor="hand2")
+            name.grid(row=0,column=1,sticky="ew",padx=(0,8),pady=(10,0))
+            description=tk.Label(row,text=desc,bg="#12213a",fg="#9bb4d4",
+                                 font=("Segoe UI",9),anchor="w",justify="left",wraplength=190,cursor="hand2")
+            description.grid(row=1,column=1,sticky="ew",padx=(0,8),pady=(2,11))
+            row.columnconfigure(1,weight=1)
+            for part in (row,number,name,description):
+                part.bind("<Button-1>",lambda event,n=i:self.tabs.select(n))
+            row.bind("<Return>",lambda event,n=i:self.tabs.select(n))
+            row.bind("<space>",lambda event,n=i:self.tabs.select(n))
+            self.nav.append((row,number,name,description))
+        bottom=tk.Frame(sidebar,bg="#12213a");bottom.pack(side="bottom",fill="x",padx=22,pady=22)
+        tk.Label(bottom,text="LOCAL WORKSPACE",bg="#12213a",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w")
+        tk.Label(bottom,text="Your approved Azure access",bg="#12213a",fg="#c2d2e5",font=("Segoe UI",9),wraplength=220,justify="left").pack(anchor="w",pady=(6,16))
         tk.Button(bottom,text="Help & prerequisites",command=lambda:os.startfile(str(BASE/"DESKTOP-START-HERE.md")),
                   bg="#12213a",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w")
         tk.Button(bottom,text="Open app data",command=lambda:os.startfile(str(DATA)),
@@ -268,8 +281,13 @@ class App:
                    "Set up permissions for existing identities, or onboard a new client.",
                    "Confirm the destination, preview the setup, then apply."]
         self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
-        for i,button in enumerate(self.nav):
-            button.configure(bg="#223f67" if i==index else "#12213a",fg="white" if i==index else "#a9bad1")
+        for i,(row,number,name,description) in enumerate(self.nav):
+            selected=i==index
+            background="#244566" if selected else "#12213a"
+            row.configure(bg=background)
+            number.configure(bg=background,fg="#a9c8ff" if selected else "#7893b3")
+            name.configure(bg=background,fg="#ffffff" if selected else "#d8e5f5")
+            description.configure(bg=background,fg="#d5e5fb" if selected else "#9bb4d4")
 
     def update_mode(self):
         if self.vars["mode"].get()=="Permissions only":
@@ -668,4 +686,3 @@ def main():
 
 if __name__=="__main__":
     main()
-

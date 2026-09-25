@@ -183,7 +183,11 @@ class App:
         self.button(body,"Sign in to CyberQP",self.open_cyberqp).pack(anchor="w",pady=(0,10))
         ttk.Label(body,text="Opens your browser. Activate JIT access there, then return here.",
                   style="Muted.TLabel",wraplength=470).pack(anchor="w",pady=(0,16))
-        self.button(body,"Sign in with Microsoft",self.login,"Primary.TButton").pack(anchor="w",pady=(0,18))
+        self.button(body,"Open Azure portal",self.open_azure_portal).pack(anchor="w",pady=(0,10))
+        ttk.Label(body,text="Portal access is separate. Connect the app below to discover workspaces.",
+                  style="Muted.TLabel",wraplength=470).pack(anchor="w",pady=(0,16))
+        self.form(body,"App sign-in method","login_method","Browser",["Browser","Windows account window"])
+        self.button(body,"Connect app to Azure",self.login,"Primary.TButton").pack(anchor="w",pady=(0,18))
         self.subbox=self.form(body,"Subscription","subscription",values=[])
         self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
         self.button(body,"Discover workspaces",self.discover).pack(anchor="w",pady=(0,18))
@@ -387,6 +391,14 @@ class App:
         self.clientbox.configure(values=[c["name"] for c in self.clients])
         self.status.set("Client mapping saved. Credentials are not part of the client inventory.")
 
+    def open_azure_portal(self):
+        try:
+            if not webbrowser.open("https://portal.azure.com/",new=2):
+                raise RuntimeError("Could not open the browser. Open https://portal.azure.com/ manually.")
+            self.status.set("Azure portal opened. Use Connect app to Azure separately for workspace discovery.")
+        except Exception as error:
+            messagebox.showerror("Open Azure portal",str(error),parent=self.root)
+
     def open_cyberqp(self):
         region=self.vars["cyberqp_region"].get()
         url=CYBERQP_PORTALS.get(region)
@@ -396,7 +408,7 @@ class App:
         try:
             if not webbrowser.open(url,new=2):
                 raise RuntimeError("Could not open the browser. Open " + url + " manually.")
-            self.status.set("CyberQP portal opened. Activate access there, then return to Sign in with Microsoft.")
+            self.status.set("CyberQP portal opened. Activate access there, then return to Connect app to Azure.")
         except Exception as error:
             messagebox.showerror("Open CyberQP",str(error),parent=self.root)
 
@@ -411,6 +423,8 @@ class App:
         self.auth_hint=hint
         old=self.session
         self.session=Session(logger=self.log)
+        self.session.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] = (
+            "true" if self.vars["login_method"].get()=="Windows account window" else "false")
         def task():
             if old:
                 old.logout()

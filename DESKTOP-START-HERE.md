@@ -9,7 +9,7 @@ This is the first local desktop version. It does not require a web server, an ap
 1. Activate approved Azure access using your organization's normal process, if activation is required.
 2. Choose a saved client in Connect, or use Add client to create the first entry. No client is prefilled.
 3. For another client, select Add client and enter its display name, client slug and tenant GUID or verified tenant domain. A domain can be used when you have not yet collected the GUID.
-4. Click Sign in with Microsoft. Complete the Windows Microsoft account window or browser sign-in with the activated JIT account and MFA. This app has no password field.
+4. Click Connect app to Azure. Complete the Windows Microsoft account window or browser sign-in with the activated JIT account and MFA. This app has no password field.
 5. Choose the subscription, then click Discover workspaces.
 6. Select the correct Log Analytics workspace. The app displays the signed-in account, tenant ID, subscription ID, resource group, workspace name and workspace GUID. It lists accessible Log Analytics workspaces; verify that the selected workspace is the one using Sentinel.
 7. Click Copy workspace details if you only need the discovered information. Save client mapping retains the client name, slug and tenant hint for the dropdown.
@@ -71,8 +71,17 @@ Delete client removes the selected saved mapping after confirmation. It clears t
 Close an older open copy and reopen Start-Sentinel.cmd to load this version. No client records are deleted by installing the update.
 
 ## CyberQP browser shortcut and tenant entry
-On Connect, select the optional CyberQP region (US, EU, Canada), then click Sign in to CyberQP. The button opens the corresponding official portal in your default browser. Complete sign-in and any JIT activation there, then return to Sign in with Microsoft. No CyberQP credentials or API tokens are collected by the application.
+On Connect, select the optional CyberQP region (US, EU, Canada), then click Sign in to CyberQP. The button opens the corresponding official portal in your default browser. Complete sign-in and any JIT activation there, then return to Connect app to Azure. No CyberQP credentials or API tokens are collected by the application.
 
 The Tenant ID or verified domain field is for a Directory (tenant) GUID or a verified tenant domain, such as client.onmicrosoft.com. Do not enter azure.portal.com, portal.azure.com, a website URL or a user email address. Find the tenant GUID under Microsoft Entra ID > Overview. The app now rejects common portal addresses before launching Azure sign-in. A syntactically valid domain must still belong to a real accessible tenant.
 
 Portal regions are documented by [CyberQP](https://support.getquickpass.com/hc/en-us/articles/23325164900119-Getting-started-with-the-CyberQP-API). This shortcut is optional and does not implement API-based JIT activation.
+
+## Azure portal access versus app authorization
+Open Azure portal opens https://portal.azure.com/ in your browser. Sign in there with your client account and select the correct directory. That website session does not automatically authorize this desktop app.
+
+To discover workspaces or apply permissions, supply the client's tenant ID/domain and click Connect app to Azure. Browser is the default app sign-in method; it uses Microsoft's Azure CLI browser authorization flow. If organizational policy requires the Windows broker, select Windows account window. The preference affects only this app's Azure CLI session.
+
+A previous failed login can leave no active Azure account. The app now treats that specific logout result as already signed out, so retrying or closing does not fail on an empty session. Other logout failures remain visible.
+
+Signing into portal.azure.com does not make portal.azure.com a tenant identifier. Keep the client's tenant GUID or verified domain in the tenant field.

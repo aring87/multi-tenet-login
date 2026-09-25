@@ -58,6 +58,7 @@ class Session:
         self.log = logger or (lambda message: None)
         self.env = dict(os.environ, AZURE_CONFIG_DIR=str(self.folder),
                         AZURE_CORE_LOGIN_EXPERIENCE_V2="off",
+                        AZURE_CORE_ENABLE_BROKER_ON_WINDOWS="false",
                         MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*",
                         PYTHONIOENCODING="utf-8")
         self.az_exe = shutil.which("az")
@@ -86,7 +87,7 @@ class Session:
     def login(self, tenant_hint):
         tenant_hint = validate_tenant_hint(tenant_hint)
         self.log("Complete Microsoft sign-in with the client's authorized account and MFA.")
-        # Uses Windows' supported account broker when available; browser sign-in otherwise.
+        # Browser sign-in by default. The desktop can opt into the Windows broker for policies that require it.
         accounts = self.az("login", "--tenant", tenant_hint, "--allow-no-subscriptions")
         subscriptions = [x for x in accounts if x.get("state") == "Enabled" and x.get("id") != x.get("tenantId")]
         if re.fullmatch(r"[0-9a-fA-F-]{36}", tenant_hint):
@@ -113,7 +114,12 @@ class Session:
 
     def logout(self):
         if self.az_exe:
-            self.az("logout")
+            try:
+                self.az("logout")
+            except Stop as error:
+                if "there are no active accounts" not in str(error).lower():
+                    raise
+                self.log("No Azure account is active in this app session; continuing.")
         self.account = None
 
 class DesktopCLI(CLI):

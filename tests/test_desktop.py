@@ -7,7 +7,7 @@ import tempfile
 import tkinter as tk
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import desktop_backend as backend
 import desktop_app as ui
@@ -92,6 +92,46 @@ class DesktopTests(unittest.TestCase):
                 app.open_cyberqp()
                 browser.assert_called_with(url,new=2)
             session.assert_not_called()
+
+    def test_logout_of_empty_session_is_harmless(self):
+        session=backend.Session(self.data/"empty")
+        session.az_exe="fake"
+        with patch.object(session,"az",side_effect=Stop("ERROR: There are no active accounts.")):
+            session.logout()
+        self.assertIsNone(session.account)
+
+    def test_logout_does_not_hide_other_failures(self):
+        session=backend.Session(self.data/"bad")
+        session.az_exe="fake"
+        with patch.object(session,"az",side_effect=Stop("Access denied")):
+            with self.assertRaisesRegex(Stop,"Access denied"):session.logout()
+
+    def test_retry_continues_after_empty_previous_session(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root)
+        old=backend.Session(self.data/"old");old.az_exe="fake"
+        app.session=old
+        new=MagicMock();new.env={}
+        with patch.object(old,"az",side_effect=Stop("There are no active accounts.")),patch.object(ui,"Session",return_value=new),patch.object(app,"work",side_effect=lambda title,task,done:task()):
+            app.login()
+        new.login.assert_called_once_with(TENANT)
+        self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"false")
+
+    def test_windows_broker_can_be_selected(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.vars["login_method"].set("Windows account window")
+        new=MagicMock();new.env={}
+        with patch.object(ui,"Session",return_value=new),patch.object(app,"work"):
+            app.login()
+        self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"true")
+
+    def test_portal_button_opens_portal_without_app_authentication(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=ui.App(root)
+        with patch.object(ui.webbrowser,"open",return_value=True) as browser,patch.object(ui,"Session") as session:
+            app.open_azure_portal()
+        browser.assert_called_once_with("https://portal.azure.com/",new=2)
+        session.assert_not_called()
 
     def test_workspace_discovery_extracts_all_ids(self):
         self.assertEqual(WORKSPACE["resource_group"],"rg-example-sentinel")

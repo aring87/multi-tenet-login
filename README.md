@@ -82,3 +82,8 @@ Live authentication, tenant policies, API permissions, and a disabled-rule deplo
 | onboard-all.sh | Optional Git Bash launcher |
 | onboarding.example.json | Placeholder configuration for command-line onboarding |
 | tests/ | Offline regression tests |
+
+
+## License
+
+Licensed under the [MIT License](LICENSE).

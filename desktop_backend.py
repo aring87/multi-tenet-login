@@ -99,6 +99,41 @@ class Session:
         require(subscriptions, "Signed in, but no enabled subscriptions are visible. Check the account's Azure subscription access.")
         return subscriptions
 
+    def refresh_subscriptions(self):
+        rows=self.az("account","list","--all","--refresh") or []
+        return [r for r in rows if r.get("id") != r.get("tenantId")]
+
+    def check_subscription(self, subscription):
+        subscription=guid(subscription.strip(),"subscription ID")
+        account=self.az("account","show")
+        cloud=self.az("cloud","show")
+        endpoint=cloud["endpoints"]["resourceManager"].rstrip("/")
+        report=["Signed in: "+account.get("user",{}).get("name","unknown"),
+                "Authentication tenant: "+account["tenantId"],"Cloud: "+cloud["name"],
+                "Requested subscription ID: "+subscription]
+        try:
+            sub=self.az("rest","--method","get","--url",endpoint+"/subscriptions/"+subscription+"?api-version=2022-12-01")
+        except Stop as error:
+            return "\n".join(report)+"\nSubscription lookup failed:\n"+str(error)
+        require(sub.get("subscriptionId","").lower()==subscription,"Subscription response mismatch.")
+        report.extend(["Subscription name: "+sub.get("displayName","unknown"),
+                       "Subscription state: "+sub.get("state","unknown"),
+                       "Tenant ID: "+sub.get("tenantId","Not returned by Azure")])
+        try:
+            result=self.az("rest","--method","get","--url",endpoint+"/subscriptions/"+subscription+
+                           "/providers/Microsoft.OperationalInsights/workspaces?api-version=2025-07-01")
+            rows=result.get("value",[])
+            for item in rows:
+                record=workspace_record(dict(id=item["id"],customerId=item.get("properties",{}).get("customerId")),
+                                        subscription,sub.get("tenantId"))
+                report.extend(["", "Resource group: "+record["resource_group"],
+                               "Workspace name: "+record["workspace_name"],"Workspace ID: "+record["workspace_id"]])
+            if not rows: report.append("No accessible workspaces returned by Azure in this subscription.")
+            if result.get("nextLink"): report.append("Additional workspace pages exist; this diagnostic shows the first page.")
+        except Stop as error:
+            report.append("Workspace lookup failed:\n"+str(error))
+        return "\n".join(report)
+
     def discover(self, subscription, tenant):
         self.az("account", "set", "--subscription", subscription)
         account = self.az("account", "show")

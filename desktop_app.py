@@ -191,6 +191,8 @@ class App:
         self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(anchor="w",pady=(0,18))
         self.subbox=self.form(body,"Subscription","subscription",values=[])
         self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
+        self.button(body,"Refresh subscriptions",self.refresh_subscriptions).pack(anchor="w",pady=(0,8))
+        self.button(body,"Check missing subscription",self.check_subscription).pack(anchor="w",pady=(0,12))
         self.button(body,"Refresh workspaces",self.discover).pack(anchor="w",pady=(0,18))
         self.wsbox=self.form(body,"Log Analytics workspace","workspace",values=[])
         self.wsbox.bind("<<ComboboxSelected>>",self.workspace_changed)
@@ -443,6 +445,40 @@ class App:
             self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
             self.subscription_changed()
         self.work("Waiting for Microsoft sign-in...",task,done)
+
+    def refresh_subscriptions(self):
+        if not self.session or not self.subscriptions:
+            messagebox.showinfo("Sign in first","Complete Sign in & discover first."); return
+        current=self.subscriptions[self.subbox.current()]["id"]
+        def done(rows):
+            self.clear_selection()
+            self.subscriptions=rows
+            self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+
+                                          " | Tenant: "+r["tenantId"] for r in rows])
+            if rows:
+                self.subbox.current(next((i for i,r in enumerate(rows) if r["id"]==current),0))
+                self.subscription_changed()
+            else: self.status.set("Azure returned no subscriptions after refresh.")
+        self.work("Refreshing subscriptions from Azure...",self.session.refresh_subscriptions,done)
+
+    def check_subscription(self):
+        if not self.session or not self.subscriptions:
+            messagebox.showinfo("Sign in first","Complete Sign in & discover first."); return
+        value=simpledialog.askstring("Check missing subscription","Paste the subscription ID shown in Azure portal:",parent=self.root)
+        if not value: return
+        try: value=guid(value.strip(),"subscription ID")
+        except Stop as error:
+            messagebox.showerror("Subscription ID",str(error)); return
+        def done(report):
+            window=tk.Toplevel(self.root);window.title("Subscription diagnostic - read only");window.geometry("820x540")
+            box=tk.Text(window,wrap="word",font=("Consolas",10));box.pack(fill="both",expand=True,padx=16,pady=16)
+            box.insert("1.0",report);box.configure(state="disabled")
+            def copy():
+                self.root.clipboard_clear();self.root.clipboard_append(report)
+            ttk.Button(window,text="Copy results",command=copy).pack(pady=(0,12))
+            self.status.set("Subscription diagnostic complete. Review the separate results window.")
+            window.lift()
+        self.work("Checking subscription access and workspaces...",lambda:self.session.check_subscription(value),done)
 
     def subscription_changed(self,event=None):
         self.workspace=None; self.plan=None; self.workspaces=[]

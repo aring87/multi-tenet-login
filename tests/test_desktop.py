@@ -50,6 +50,33 @@ class DesktopTests(unittest.TestCase):
         app.refresh_clients()
         return app
 
+    def test_refresh_keeps_non_enabled_subscriptions(self):
+        session=backend.Session(self.data/"refresh")
+        rows=[dict(id=SUB,tenantId=TENANT,state="Warned"),dict(id=TENANT,tenantId=TENANT)]
+        with patch.object(session,"az",return_value=rows) as az:
+            self.assertEqual(session.refresh_subscriptions(),rows[:1])
+            az.assert_called_once_with("account","list","--all","--refresh")
+
+    def test_direct_check_reports_workspaces_without_changing_selection(self):
+        session=backend.Session(self.data/"direct")
+        responses=[dict(tenantId=TENANT,user={"name":"example"}),
+                   dict(name="AzureCloud",endpoints={"resourceManager":"https://management.azure.com/"}),
+                   dict(subscriptionId=SUB,tenantId=TENANT,state="Enabled"),
+                   dict(value=[dict(id=ITEM["id"],properties={"customerId":WS})])]
+        with patch.object(session,"az",side_effect=responses) as az:
+            report=session.check_subscription(SUB)
+            self.assertIn(WS,report)
+            self.assertIn("law-example-sentinel",report)
+            for call in az.call_args_list:
+                self.assertNotIn("set",call.args)
+                self.assertNotIn("put",call.args)
+
+    def test_direct_check_preserves_access_error(self):
+        session=backend.Session(self.data/"denied")
+        with patch.object(session,"az",side_effect=[dict(tenantId=TENANT),
+             dict(name="AzureCloud",endpoints={"resourceManager":"https://management.azure.com/"}),Stop("AuthorizationFailed")]):
+            self.assertIn("AuthorizationFailed",session.check_subscription(SUB))
+
     def test_tenantless_login_does_not_pass_tenant_argument(self):
         session=backend.Session(self.data/"no-tenant")
         rows=[dict(id=SUB,tenantId=TENANT,state="Enabled",name="Example")]

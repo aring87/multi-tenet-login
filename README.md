@@ -102,3 +102,7 @@ Live authentication, tenant policies, API permissions, and a disabled-rule deplo
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+## Missing subscription troubleshooting
+
+After sign-in, use **Refresh subscriptions** to request a fresh list including non-Enabled states. If a subscription is still absent, choose **Check missing subscription** and paste its subscription ID from Azure portal. The read-only diagnostic shows the app account, authentication tenant, cloud, subscription state, and workspace details or the Azure error. **Copy results** copies the diagnostic text. This does not grant permissions, change the selected deployment destination, or bypass access checks. Diagnostic results may contain client identifiers; share only with authorized recipients.

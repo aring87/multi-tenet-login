@@ -69,3 +69,10 @@ The app now uses a three-step sidebar: Connect, Configure, Review. Configure dis
 Delete client removes the selected saved mapping after confirmation. It clears the active workspace selection and preview, but retains local onboarding state and leaves Azure, GitHub and CyberQP resources unchanged. Deleting the final saved client leaves the dropdown empty; Add client restores an entry. Deletion is blocked while an operation is running.
 
 Close an older open copy and reopen Start-Sentinel.cmd to load this version. No client records are deleted by installing the update.
+
+## CyberQP browser shortcut and tenant entry
+On Connect, select the optional CyberQP region (US, EU, Canada), then click Sign in to CyberQP. The button opens the corresponding official portal in your default browser. Complete sign-in and any JIT activation there, then return to Sign in with Microsoft. No CyberQP credentials or API tokens are collected by the application.
+
+The Tenant ID or verified domain field is for a Directory (tenant) GUID or a verified tenant domain, such as client.onmicrosoft.com. Do not enter azure.portal.com, portal.azure.com, a website URL or a user email address. Find the tenant GUID under Microsoft Entra ID > Overview. The app now rejects common portal addresses before launching Azure sign-in. A syntactically valid domain must still belong to a real accessible tenant.
+
+Portal regions are documented by [CyberQP](https://support.getquickpass.com/hc/en-us/articles/23325164900119-Getting-started-with-the-CyberQP-API). This shortcut is optional and does not implement API-based JIT activation.

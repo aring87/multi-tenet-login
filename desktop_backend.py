@@ -28,6 +28,29 @@ def workspace_record(item, subscription, tenant):
                 resource_group=match[2], workspace_name=match[3],
                 workspace_id=guid(item.get("customerId"), "workspace GUID"), resource_id=resource_id)
 
+CYBERQP_PORTALS = {
+    "US": "https://admin.getquickpass.com/",
+    "EU": "https://eu-admin.getquickpass.com/",
+    "Canada": "https://ca.admin.cyberqp.com/",
+}
+
+def validate_tenant_hint(value):
+    hint = (value or "").strip().lower()
+    guidance = ("Enter the client's Directory (tenant) ID or verified tenant domain "
+                "(for example client.onmicrosoft.com). An Azure portal URL is not a tenant. "
+                "Find the ID in Microsoft Entra ID > Overview.")
+    portals = {"azure.portal.com", "portal.azure.com", "entra.microsoft.com",
+               "login.microsoftonline.com", "portal.office.com", "admin.microsoft.com",
+               "azure.microsoft.com"}
+    require(hint not in portals and "://" not in hint and "/" not in hint and "@" not in hint, guidance)
+    if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", hint):
+        return guid(hint, "tenant ID")
+    labels = hint.split(".")
+    require(len(hint) <= 253 and len(labels) >= 2 and not all(x.isdigit() for x in labels)
+            and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", x) for x in labels)
+            and re.search(r"[a-z]", labels[-1]), guidance)
+    return hint
+
 class Session:
     def __init__(self, folder=None, logger=None):
         self.folder = Path(folder or DATA / "sessions" / str(uuid.uuid4()))
@@ -61,8 +84,7 @@ class Session:
         return json.loads(result.stdout) if result.stdout.strip() else None
 
     def login(self, tenant_hint):
-        require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{2,252}", tenant_hint or ""),
-                "Enter the client's tenant GUID or verified tenant domain.")
+        tenant_hint = validate_tenant_hint(tenant_hint)
         self.log("Complete Microsoft sign-in with the client's authorized account and MFA.")
         # Uses Windows' supported account broker when available; browser sign-in otherwise.
         accounts = self.az("login", "--tenant", tenant_hint, "--allow-no-subscriptions")

@@ -57,6 +57,42 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.vars["github_owner"].get(),"")
         self.assertEqual(app.vars["github_repo"].get(),"")
 
+    def test_tenant_hint_accepts_guid_and_verified_domain_syntax(self):
+        self.assertEqual(backend.validate_tenant_hint(TENANT),TENANT)
+        self.assertEqual(backend.validate_tenant_hint(" Client.OnMicrosoft.com "),"client.onmicrosoft.com")
+        self.assertEqual(backend.validate_tenant_hint("customer.example"),"customer.example")
+
+    def test_tenant_hint_rejects_portals_urls_and_usernames(self):
+        for value in ("azure.portal.com","portal.azure.com","https://portal.azure.com",
+                      "entra.microsoft.com","user@example.com","common","127.0.0.1","bad..example"):
+            with self.subTest(value=value),self.assertRaises(Stop):
+                backend.validate_tenant_hint(value)
+
+    def test_invalid_tenant_stops_before_session_or_login(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=ui.App(root);app.vars["tenant"].set("azure.portal.com")
+        with patch.object(ui.messagebox,"showerror") as error,patch.object(ui,"Session") as session:
+            app.login()
+            session.assert_not_called()
+            self.assertIn("Directory (tenant) ID",error.call_args.args[1])
+
+    def test_invalid_tenant_not_saved(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.vars["tenant"].set("portal.azure.com")
+        with patch.object(ui.messagebox,"showerror"):
+            app.save_client()
+        self.assertFalse(app.clientfile.exists())
+
+    def test_cyberqp_opens_selected_region_without_authentication(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=ui.App(root)
+        with patch.object(ui.webbrowser,"open",return_value=True) as browser,patch.object(ui,"Session") as session:
+            for region,url in backend.CYBERQP_PORTALS.items():
+                app.vars["cyberqp_region"].set(region)
+                app.open_cyberqp()
+                browser.assert_called_with(url,new=2)
+            session.assert_not_called()
+
     def test_workspace_discovery_extracts_all_ids(self):
         self.assertEqual(WORKSPACE["resource_group"],"rg-example-sentinel")
         self.assertEqual(WORKSPACE["workspace_id"],WS)

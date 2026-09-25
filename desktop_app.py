@@ -9,10 +9,11 @@ import threading
 import time
 import tkinter as tk
 import traceback
+import webbrowser
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
-                             config_from_workspace, permission_run, full_run)
+                             config_from_workspace, permission_run, full_run, validate_tenant_hint, CYBERQP_PORTALS)
 from full_onboarding import validate_config
 
 class App:
@@ -172,12 +173,16 @@ class App:
         self.button(actions,"Delete client",self.delete_client,"Danger.TButton").pack(side="left")
         self.form(body,"Tenant ID or verified domain","tenant")
         self.form(body,"Client slug","client_slug")
-        ttk.Label(body,text="Use the customer's tenant domain if you do not have its GUID yet.",
+        ttk.Label(body,text="Use the client's tenant ID or verified domain, not an Azure portal address. Find the ID in Entra ID > Overview.",
                   style="Muted.TLabel",wraplength=300).pack(anchor="w",pady=(0,20))
         self.button(body,"Save client",self.save_client).pack(fill="x",pady=(0,10))
         self.button(body,"Import configuration",self.import_config).pack(fill="x")
         discovery,body=self.card(connect,"Azure workspace","Connect with the client's authorized Azure account.")
         discovery.grid(row=0,column=1,sticky="nsew",pady=(0,16))
+        self.form(body,"CyberQP region - optional","cyberqp_region","US",list(CYBERQP_PORTALS))
+        self.button(body,"Sign in to CyberQP",self.open_cyberqp).pack(anchor="w",pady=(0,10))
+        ttk.Label(body,text="Opens your browser. Activate JIT access there, then return here.",
+                  style="Muted.TLabel",wraplength=470).pack(anchor="w",pady=(0,16))
         self.button(body,"Sign in with Microsoft",self.login,"Primary.TButton").pack(anchor="w",pady=(0,18))
         self.subbox=self.form(body,"Subscription","subscription",values=[])
         self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
@@ -368,6 +373,12 @@ class App:
 
     def save_client(self):
         v=self.values()
+        try:
+            v["tenant"] = validate_tenant_hint(v["tenant"])
+        except Stop as error:
+            messagebox.showerror("Tenant details",str(error),parent=self.root)
+            return
+        self.vars["tenant"].set(v["tenant"])
         if not re.fullmatch(r"[a-z][a-z0-9-]{1,47}",v["client_slug"]) or not v["client_name"] or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{2,252}",v["tenant"]):
             messagebox.showerror("Client details","Supply a display name, lowercase client slug, and tenant GUID/domain."); return
         entry=dict(name=v["client_name"],slug=v["client_slug"],tenant=v["tenant"])
@@ -376,8 +387,26 @@ class App:
         self.clientbox.configure(values=[c["name"] for c in self.clients])
         self.status.set("Client mapping saved. Credentials are not part of the client inventory.")
 
+    def open_cyberqp(self):
+        region=self.vars["cyberqp_region"].get()
+        url=CYBERQP_PORTALS.get(region)
+        if not url:
+            messagebox.showerror("CyberQP region","Choose US, EU, or Canada.",parent=self.root)
+            return
+        try:
+            if not webbrowser.open(url,new=2):
+                raise RuntimeError("Could not open the browser. Open " + url + " manually.")
+            self.status.set("CyberQP portal opened. Activate access there, then return to Sign in with Microsoft.")
+        except Exception as error:
+            messagebox.showerror("Open CyberQP",str(error),parent=self.root)
+
     def login(self):
-        hint=self.vars["tenant"].get().strip()
+        try:
+            hint=validate_tenant_hint(self.vars["tenant"].get())
+        except Stop as error:
+            messagebox.showerror("Tenant details",str(error),parent=self.root)
+            return
+        self.vars["tenant"].set(hint)
         self.clear_selection()
         self.auth_hint=hint
         old=self.session

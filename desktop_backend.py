@@ -63,14 +63,14 @@ class Session:
     def login(self, tenant_hint):
         require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{2,252}", tenant_hint or ""),
                 "Enter the client's tenant GUID or verified tenant domain.")
-        self.log("Complete Microsoft sign-in with the client's activated JIT account and MFA.")
+        self.log("Complete Microsoft sign-in with the client's authorized account and MFA.")
         # Uses Windows' supported account broker when available; browser sign-in otherwise.
         accounts = self.az("login", "--tenant", tenant_hint, "--allow-no-subscriptions")
         subscriptions = [x for x in accounts if x.get("state") == "Enabled" and x.get("id") != x.get("tenantId")]
         if re.fullmatch(r"[0-9a-fA-F-]{36}", tenant_hint):
             require(all(x["tenantId"].lower() == tenant_hint.lower() for x in subscriptions),
                     "Sign-in returned a different tenant.")
-        require(subscriptions, "Signed in, but no enabled subscriptions are visible. Check the client's JIT Azure access.")
+        require(subscriptions, "Signed in, but no enabled subscriptions are visible. Check the account's Azure subscription access.")
         return subscriptions
 
     def discover(self, subscription, tenant):

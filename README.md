@@ -5,14 +5,16 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 ## What it does
 
 - Saves client names and tenant IDs/domains in a local dropdown.
-- Opens Microsoft sign-in for an already-activated JIT account.
+- Opens Microsoft sign-in for an authorized Azure account, including JIT accounts.
 - Discovers accessible subscriptions and Log Analytics workspace details.
 - Previews and applies scoped permissions for existing preview/deployment service principals.
 - Optionally onboards Azure identities, OIDC, GitHub environments, and a client configuration pull request.
 - Deletes saved client entries without deleting cloud resources.
 - Requires a successful matching preview before Apply.
 
-CyberQP account activation is manual in this version. The public app starts with an empty client list and no preconfigured organization.
+The app is independent of any employer, customer, or privileged-access provider. CyberQP is optional; activate access through your own provider if your organization requires it. The app starts with an empty client list and blank GitHub settings.
+
+Discovery and permissions-only mode do not require GitHub or CyberQP. Full onboarding requires a compatible private detection repository and GitHub plan supporting its environment policies.
 
 ## Start on Windows
 
@@ -45,14 +47,14 @@ Full onboarding assumes an existing main-based workflow using environment names 
 - [Permissions-only Git Bash route](GIT-BASH-QUICKSTART.md)
 - [Verification notes](VALIDATION.md)
 
-## Local data and access
+## Public examples\n\nExamples use fictional resource names and placeholder or synthetic identifiers. No actual client inventory is distributed. See [Privacy and publication notes](PRIVACY.md).\n\n## Local data and access
 
 Runtime data lives in desktop-data/, which is excluded from Git:
 - Saved client mappings.
 - Per-session Azure CLI configuration and authentication caches.
 - Onboarding state and generated parameter files.
 
-Do not commit or share this folder. The application has no password-entry field. Microsoft manages authentication through its normal broker/browser flow. Signing out of the app's Azure session does not deactivate CyberQP JIT access or sign out other browser/Windows sessions.
+Do not commit or share this folder. The application has no password-entry field. Microsoft manages authentication through its normal broker/browser flow. Signing out of the app's Azure session does not deactivate access at your privileged-access provider or sign out other browser/Windows sessions.
 
 Use an approved onboarding account with the required Azure/Entra permissions. Runtime deployment identities do not receive RBAC administration privileges. Existing and inherited grants remain additive.
 

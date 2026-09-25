@@ -16,8 +16,8 @@ def gid(n):
     return f"11111111-1111-4111-8111-{n:012d}"
 
 def config():
-    return dict(tenant_id=gid(1), subscription_id=gid(2), resource_group="SentinelRG",
-        workspace_name="Sentinel-Instance", client="acme", workspace_label="primary",
+    return dict(tenant_id=gid(1), subscription_id=gid(2), resource_group="rg-example-sentinel",
+        workspace_name="law-example-sentinel", client="acme", workspace_label="primary",
         github_owner="test-org", github_repo="detections", app_owner_user_ids=[gid(3)],
         production_reviewers=[{"type":"User", "name":"reviewer"}], oidc_subject_format="immutable",
         initial_rule_path="rules/sentinel/testing/test.yml", human_groups=[])
@@ -40,7 +40,7 @@ class Cloud:
         self.assignments = []
         self.writes = []
         self.fail_deployment = False
-        self.workspace = {"id": f"/subscriptions/{gid(2)}/resourceGroups/SentinelRG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Instance", "customerId":gid(4)}
+        self.workspace = {"id": f"/subscriptions/{gid(2)}/resourceGroups/rg-example-sentinel/providers/Microsoft.OperationalInsights/workspaces/law-example-sentinel", "customerId":gid(4)}
     def az(self, *a, write=False):
         if write:
             assert self.apply

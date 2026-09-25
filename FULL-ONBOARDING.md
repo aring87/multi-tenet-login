@@ -7,7 +7,7 @@ Run this once for each client workspace. One JSON file identifies the client, wo
 
 It creates two single-tenant app registrations and their enterprise applications, app ownership, environment-specific OIDC credentials, GitHub preview and production environments, main-only branch restrictions, production reviewers with self-review prevented, AZURE_CLIENT_ID environment variables, four scoped Azure roles and assignments, optional human access groups, and a client target file in a pull request.
 
-It reuses the supplied azuredeploy.json. The web-only procedure remains available in PORTAL-ONLY.md. The older onboard-permissions.sh is an alternative for operators who have already created the identities and GitHub settings.
+It reuses the supplied azuredeploy.json. The web-only procedure remains available in PORTAL-ONLY.md. The permissions-only onboard-permissions.sh is an alternative for operators who have already created the identities and GitHub settings.
 
 This automates onboarding to the existing private detection repository. It does not create the repository, Sentinel workspace, connectors, JIT accounts, GitHub teams, or the detection pipeline itself. It does not run a rule deployment, merge the pull request, or alter existing rule YAML.
 
@@ -15,13 +15,13 @@ This automates onboarding to the existing private detection repository. It does 
 
 Install Git for Windows (Git Bash), Azure CLI 2.76.0 or newer, GitHub CLI, and Python 3.10 or newer. No Python packages or local repository clone are required. Extract the whole ZIP to a simple folder, such as C:/SentinelOnboarding; keep full_onboarding.py and azuredeploy.json together.
 
-Activate the client-approved CyberQP/JIT account and the required onboarding access:
+Activate the client-approved Azure account and the required onboarding access:
 - Entra permissions to create applications/service principals and manage their owners and federated credentials. Application Administrator or Cloud Application Administrator is a possible approved assignment; existing ownership and tenant app-registration policy may allow narrower access.
 - If using human groups, permission to create/manage those security groups, their owners, and membership. Groups Administrator is a possible approved assignment.
 - Azure resource-group read/deployment permissions plus roleDefinitions/write and roleAssignments/write over the intended assignable scopes. An approved temporary Owner assignment at the resource group is a straightforward bootstrap option, subject to tenant policies and conditions. Contributor alone cannot administer RBAC.
 - GitHub repository administrator access, permitted GitHub CLI authentication, Actions enabled, and a private Enterprise repository supporting required environment reviewers.
 - At least one production reviewer with repository read access who is different from the person initiating deployment. You may specify a GitHub team by its slug instead.
-- The existing pipeline must use target-preview and target-production environment names and vars.AZURE_CLIENT_ID. The supplied workflow version used main for cloud operations and required one rule path.
+- The existing pipeline must use target-preview and target-production environment names and vars.AZURE_CLIENT_ID. Full onboarding configures main-only environments; your workflow must support these conventions.
 
 These onboarding privileges belong to the human administrator. Runtime apps receive only the scoped roles below.
 
@@ -40,7 +40,7 @@ Copy onboarding.example.json to client-onboarding.json and edit it with your nor
 | client | Lowercase slug, for example acme |
 | workspace_label | primary, secondary, or another lowercase slug |
 | github_owner / github_repo | Your existing private organization/repository |
-| oidc_subject_format | immutable for the ID-containing subjects seen in your working setup; legacy only if verified for that repository |
+| oidc_subject_format | Choose immutable or legacy to match the actual OIDC subject emitted by your repository |
 | app_owner_user_ids | Approved existing Entra user Object IDs in this client tenant |
 | production_reviewers | GitHub User login or Team slug; these are different identities from the Azure app owners |
 | initial_rule_path | Optional existing rule on main; leave empty for no initial rule |
@@ -118,7 +118,7 @@ The sequence is:
 
 Adding --apply authorizes all these steps in that run. The script does not pause after the ARM what-if.
 
-The deployment writer role has all six actions discussed:
+The deployment writer role has all six rule and query actions:
 - Microsoft.SecurityInsights/alertRules/read
 - Microsoft.SecurityInsights/alertRules/write
 - Microsoft.OperationalInsights/workspaces/read
@@ -132,7 +132,7 @@ Preview gets the five read/query actions, without alertRules/write. Both apps al
 
 1. Open GitHub Settings > Environments > <target>-production. Verify reviewers, Prevent self-review, and main-only deployment.
 2. Uncheck Allow administrators to bypass configured protection rules, then save, if your approved policy requires no administrator bypass. The script does not change this UI setting.
-3. Verify preview also allows main only. This package intentionally uses main for Azure-connected preview; CI on a working branch remains offline. It does not implement the earlier branch-preview variant.
+3. Verify preview also allows main only. This package intentionally uses main for Azure-connected preview; CI on a working branch remains offline.
 4. In Azure, verify that preview and deployment are different apps and that the production credential ends in -production. Credential display names alone do not determine trust.
 5. Review the pull request and successful CI; merge it through the normal review process.
 6. If initial_rule_path was empty, add a disabled test rule selection and change the target's enabled field to true through another reviewed change. An empty rules list does not import existing analytics rules.

@@ -18,7 +18,7 @@ SUB="22222222-2222-4222-8222-222222222222"
 WS="33333333-3333-4333-8333-333333333333"
 P1="44444444-4444-4444-8444-444444444444"
 P2="55555555-5555-4555-8555-555555555555"
-ITEM={"id":f"/subscriptions/{SUB}/resourceGroups/SentinelRG/providers/Microsoft.OperationalInsights/workspaces/Sentinel-Instance","customerId":WS}
+ITEM={"id":f"/subscriptions/{SUB}/resourceGroups/rg-example-sentinel/providers/Microsoft.OperationalInsights/workspaces/law-example-sentinel","customerId":WS}
 WORKSPACE=backend.workspace_record(ITEM,SUB,TENANT)
 
 class FakeSession:
@@ -58,7 +58,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.vars["github_repo"].get(),"")
 
     def test_workspace_discovery_extracts_all_ids(self):
-        self.assertEqual(WORKSPACE["resource_group"],"SentinelRG")
+        self.assertEqual(WORKSPACE["resource_group"],"rg-example-sentinel")
         self.assertEqual(WORKSPACE["workspace_id"],WS)
         self.assertEqual(WORKSPACE["tenant_id"],TENANT)
     def test_cross_subscription_workspace_rejected(self):

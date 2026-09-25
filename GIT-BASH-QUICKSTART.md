@@ -15,7 +15,7 @@ No local Git clone is required. The script uses Bash and Azure CLI; Python, jq a
 ## 2. Complete the client's one-time identity setup
 
 Follow PORTAL-ONLY.md through the identity/environment steps:
-- Activate the approved CyberQP/JIT onboarding account in the client tenant.
+- Activate the approved Azure onboarding account in the client tenant.
 - Create the separate preview and deployment apps.
 - Configure their exact OIDC environment subjects.
 - Record each Enterprise application's Object ID.
@@ -144,7 +144,7 @@ Keep .sh files with LF line endings. The included .gitattributes helps preserve 
 | Workspace mismatch | Recheck subscription, resource group and workspace resource name |
 | AuthorizationFailed during validation | Check the onboarding user's role-definition, role-assignment and deployment permissions |
 | ARM preview on runtime identity fails | Check ProviderNoRbac and runtime CLI version; do not grant preview the writer role |
-| Runtime preview runs are skipped | The supplied sentinel.yml restricts prepare to main; use the actual workflow's supported branch |
+| Runtime preview runs are skipped | Check both your workflow's branch condition and its environment policy |
 | Apply fails after create starts | Inspect Azure deployment operations for any partial changes |
 
 ## Validation status

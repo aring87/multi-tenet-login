@@ -1,8 +1,8 @@
 # SOP: Sentinel client onboarding entirely through the websites
 
-Version 1.1 | Applies to the existing private MSSP YOUR-DETECTION-REPOSITORY repository.
+Reference procedure for an organization-managed private Sentinel detection repository.
 
-This procedure sets up a new client workspace through Microsoft Entra, Azure portal, and GitHub. No terminal is required. the operator can use the separate GIT-BASH-QUICKSTART.md to replace the Azure permission-deployment step while retaining the rest of this procedure.
+This procedure sets up a new client workspace through Microsoft Entra, Azure portal, and GitHub. No terminal is required. You can use the separate GIT-BASH-QUICKSTART.md to replace the Azure permission-deployment step while retaining the rest of this procedure.
 
 ## 1. Define the target
 
@@ -23,7 +23,7 @@ Another workspace for the same client uses a different target/file, such as acme
 
 ## 2. Verify Azure and GitHub prerequisites
 
-Activate the approved client CyberQP/JIT access. In Azure portal, select the correct directory before opening the subscription.
+Activate the client's approved Azure access through your organization's access-management process. In Azure portal, select the correct directory before opening the subscription.
 
 Confirm:
 - The workspace already exists and Microsoft Sentinel is enabled.
@@ -85,7 +85,7 @@ If recreating the repository:
 1. Have an organization administrator create a private repository under the correct organization.
 2. Add the approved pipeline files through Add file > Upload files, preserving .github/workflows, scripts, rules, clients and dependency files. Extract archives first.
 3. Place manual workflow definitions on the default branch so the Run workflow button can be available.
-4. In Settings > Actions > General, allow the approved actions according to enterprise policy. The Azure login jobs require id-token: write in their workflow YAML; the supplied workflow already declares it.
+4. In Settings > Actions > General, allow the approved actions according to enterprise policy. The Azure login jobs require id-token: write in their workflow YAML; verify that your workflow declares it.
 5. Assign engineering access and the reviewer team through the organization's normal repository/team access process.
 
 Configure main protection under Settings > Rules > Rulesets (or the organization's existing branch-protection policy): require pull requests, the appropriate approvals, and the actual Sentinel CI check. Let CI run once so you can select its real check name. A production environment reviewer approval is separate from pull-request approval.
@@ -115,9 +115,9 @@ The client folder, client field and target prefix must agree. Use only one rules
 
 allow_missing_mitre is an existing pipeline option, not an Azure permission. Keep it only where the team's approved exception policy allows missing MITRE metadata.
 
-Start with an empty list while configuring access. Before the first selected-workspace run, select one approved disabled test rule: the supplied local sentinel.yml requires a rule path.
+Start with an empty list while configuring access. Before the first selected-workspace run, select one approved disabled test rule: configure the rule path expected by your workflow.
 
-The supplied target input is free text. If your actual workflow was changed to a dropdown, update its allowed targets in the same pull request.
+A compatible workflow may accept the target as free text. If your actual workflow was changed to a dropdown, update its allowed targets in the same pull request.
 
 ## 7. Create GitHub environments
 
@@ -126,7 +126,7 @@ Open Settings > Environments > New environment. Create acme-primary-preview and 
 | Setting | Preview | Production |
 |---|---|---|
 | Azure client ID | Preview app client ID | Deployment app client ID |
-| Branches | main for the supplied main-only workflow | main |
+| Branches | main for the full-onboarding defaults | main |
 | Required reviewers | Per organization policy | Approved reviewer/team |
 | Prevent self-review | Per policy | Enable when a separate reviewer is available |
 | Administrator bypass | Per policy | Normally disabled |
@@ -134,9 +134,9 @@ Open Settings > Environments > New environment. Create acme-primary-preview and 
 
 Select Selected branches and tags and actually add a Branch rule for main. Selecting the dropdown without adding a rule does not impose that restriction.
 
-The supplied local workflow restricts its prepare job to main. If the current repository intentionally supports branch previews, configure preview branch rules to match those branches as well. Do not assume changing the environment's branch rule will override a workflow's own main-only condition.
+The full-onboarding automation creates main-only environment policies. If the current repository intentionally supports branch previews, configure preview branch rules to match those branches as well. Do not assume changing the environment's branch rule will override a workflow's own main-only condition.
 
-Under each environment's Variables, add AZURE_CLIENT_ID with the matching application client ID. The supplied workflow reads tenant and subscription IDs from the target YAML. Check your current YAML before adding redundant variables or secrets.
+Under each environment's Variables, add AZURE_CLIENT_ID with the matching application client ID. A compatible workflow reads tenant and subscription IDs from the target YAML. Check your current YAML before adding redundant variables or secrets.
 
 Save protection and branch rules. GitHub required-reviewer lists need only one listed reviewer to approve; they are not a requirement for every listed person to approve.
 
@@ -152,7 +152,7 @@ For each Entra application:
 5. Enter the exact subject from the matching GitHub environment.
 6. Use a unique credential name, review and save.
 
-Your repository previously used an immutable subject containing organization and repository IDs, in this form:
+Repositories configured for immutable subjects include organization and repository IDs, for example:
 
 ```text
 repo:<OWNER>@<OWNER-ID>/<REPOSITORY>@<REPOSITORY-ID>:environment:acme-primary-preview
@@ -186,7 +186,7 @@ The template creates four roles and four assignments:
 | Sentinel ARM Preview | Preview application | Resource group |
 | Sentinel ARM Deployment | Deployment application | Resource group |
 
-The writer role contains the operator's six confirmed actions:
+The writer role contains the six rule and query actions:
 
 ```text
 Microsoft.SecurityInsights/alertRules/read
@@ -203,7 +203,7 @@ Review effective access, including inherited and group-based grants. Adding a re
 
 ## 10. Confirm preview's validation mode
 
-The supplied workflow runs cloud.py preview and saves a what-if artifact. Before testing the new preview identity, inspect scripts/cloud.py using the GitHub website.
+A compatible preview workflow should validate the rules and save a what-if artifact. Before testing the new preview identity, inspect scripts/cloud.py using the GitHub website.
 
 For ARM what-if/validate calls performed by preview, confirm that the code supplies --validation-level ProviderNoRbac with Azure CLI 2.76.0 or later. This lets the provider check resource-read permissions. Default Provider validation can request rule-write permission.
 
@@ -216,7 +216,7 @@ The matching cloud.py was not available when this package was prepared. No Pytho
 1. On the working branch, add one client-approved disabled test rule to the target's rules list.
 2. Keep the same rule ID when modifying an existing test rule; generate a new ID only for a new rule identity.
 3. Commit, open a pull request, and let Sentinel CI pass.
-4. If the supplied main-only workflow is current, merge after review, then open Actions > Sentinel - selected workspace > Run workflow.
+4. If your workflow uses main-only preview, merge after review, then open Actions > Sentinel - selected workspace > Run workflow.
 5. Select main, target acme-primary, the exact selected rule path, and mode preview.
 6. Review successful authentication, query checks and what-if output.
 7. Run the same target/rule from main with mode deploy.

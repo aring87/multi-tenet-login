@@ -1,8 +1,8 @@
 {
   "tenant_id": "REPLACE-WITH-CLIENT-TENANT-GUID",
   "subscription_id": "REPLACE-WITH-CLIENT-SUBSCRIPTION-GUID",
-  "resource_group": "SentinelRG",
-  "workspace_name": "Sentinel-Instance",
+  "resource_group": "rg-example-sentinel",
+  "workspace_name": "law-example-sentinel",
   "client": "new-client",
   "workspace_label": "primary",
   "github_owner": "YOUR-ORGANIZATION",

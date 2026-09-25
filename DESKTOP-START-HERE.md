@@ -6,7 +6,7 @@ Double-click Start-Sentinel.cmd in the extracted folder. Keep all application fi
 This is the first local desktop version. It does not require a web server, an app registration for the desktop interface, or an AI service.
 
 ## First use
-1. Activate the client's approved JIT account in CyberQP as usual.
+1. Activate approved Azure access using your organization's normal process, if activation is required.
 2. Choose a saved client in Connect, or use Add client to create the first entry. No client is prefilled.
 3. For another client, select Add client and enter its display name, client slug and tenant GUID or verified tenant domain. A domain can be used when you have not yet collected the GUID.
 4. Click Sign in with Microsoft. Complete the Windows Microsoft account window or browser sign-in with the activated JIT account and MFA. This app has no password field.
@@ -21,7 +21,7 @@ A CyberQP customer name and an Azure tenant are not assumed to be the same ident
 ### Permissions only
 Use this for existing preview and deployment applications. Enter their Enterprise applications > Object ID values. The app verifies both resolve to service principals and uses the shared Azure permission template. GitHub access, app-owner user IDs and reviewer settings are not needed for this operation.
 
-Preview performs Azure template validation and what-if. Apply repeats those checks and creates the scoped RBAC resources. The writer has the six previously agreed rule/query actions; the preview identity lacks rule-write. Separate ARM roles are assigned at the resource group.
+Preview performs Azure template validation and what-if. Apply repeats those checks and creates the scoped RBAC resources. The writer has the six documented rule/query actions; the preview identity lacks rule-write. Separate ARM roles are assigned at the resource group.
 
 ### Full Azure + GitHub onboarding
 Use this for a new client target. Fill in the GitHub organization/repository, approved Azure app-owner user Object IDs, production reviewers, and OIDC format. Sign in to GitHub using the button if needed; follow the browser authorization and any one-time code shown in Review.
@@ -46,7 +46,7 @@ Use the same approved JIT bootstrap permissions described in FULL-ONBOARDING.md.
 
 The desktop keeps its Azure CLI configuration in a separate folder per session under desktop-data/sessions. Azure CLI may cache authentication tokens there. The Microsoft Windows account broker/browser may also retain sign-in state under Microsoft's normal behavior. The app does not collect or store passwords.
 
-Sign out of Azure session clears that app session's Azure CLI login. Closing the app normally also requests logout. This does not deactivate the CyberQP JIT account or sign you out of other Microsoft browser/Windows sessions. Finish JIT access through the normal CyberQP process.
+Sign out of Azure session clears that app session's Azure CLI login. Closing the app normally also requests logout. This does not deactivate access at your privileged-access provider or sign you out of other Microsoft browser/Windows sessions. Finish JIT access through your organization's normal process.
 
 desktop-data/clients.json contains the saved dropdown mappings. desktop-data/runs holds resource state and parameter files needed for retrying partial onboarding. Treat this as local administration data and do not commit or share desktop-data. It is excluded from the downloadable ZIP.
 

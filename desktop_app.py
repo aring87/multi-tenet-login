@@ -440,6 +440,7 @@ class App:
                 old.logout()
             return self.session.login(hint)
         def done(rows):
+            rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
             self.subscriptions=rows
             self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | Tenant: "+r["tenantId"] for r in rows])
             self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
@@ -452,6 +453,7 @@ class App:
         current=self.subscriptions[self.subbox.current()]["id"]
         def done(rows):
             self.clear_selection()
+            rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
             self.subscriptions=rows
             self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+
                                           " | Tenant: "+r["tenantId"] for r in rows])

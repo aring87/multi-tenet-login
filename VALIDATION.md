@@ -24,3 +24,19 @@ paragraph wrapping. Live Azure collection is pending: the installed app's saved
 session returned "Please run az login". No live client evidence was collected.
 Use the acceptance steps in AUDIT-EVIDENCE.md before treating live collection as
 validated. Framework mapping and compliance conclusions remain outside this release.
+
+## Coverage and findings validation (2026-09-26)
+
+Version 2 adds bounded log-query splitting, daily evidence coverage, optional
+workspace-specific requirements and findings linked to original evidence records.
+112 offline tests passed on the installed Python 3.10 runtime, including 30 new
+checks for split recovery, unresolved ranges, query/row limits, current-day
+coverage, conservative findings, evidence links and isolated requirements storage.
+The report was exercised in a browser using synthetic data: findings filtering,
+source links and report layout worked. The desktop requirements editor was
+checked at the minimum window size. Existing Tkinter teardown warnings remain in
+the multi-root test suite; assertions pass.
+
+The user reported a successful live collection with version 1. Version 2's new
+splitting/coverage/findings behavior has not yet been validated on a live tenant.
+No client data was used for the synthetic report or included in this change.

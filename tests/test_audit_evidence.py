@@ -177,7 +177,10 @@ class AuditTests(unittest.TestCase):
         bad=dict(WORKSPACE,workspace_name="<script>alert(1)</script>")
         with patch.object(audit.Collector,"run",return_value=[dict(key="workspace",title="<script>bad</script>",status="collected",note="<img src=x>",records=[{"name":"=1+1"}])]):
             result=audit.collect_evidence(self.session,bad,"2024-01-01","2024-01-02",self.folder)
-        self.assertNotIn("<script>",(Path(result["folder"])/"report.html").read_text())
+        report=(Path(result["folder"])/"report.html").read_text()
+        self.assertNotIn("<script>alert(1)</script>",report)
+        self.assertNotIn("<script>bad</script>",report)
+        self.assertIn("&lt;script&gt;bad&lt;/script&gt;",report)
         self.assertIn("'=1+1",(Path(result["folder"])/"workspace.csv").read_text(encoding="utf-8-sig"))
 
     def test_msi_azure_cli_bypasses_cmd_with_literal_url(self):

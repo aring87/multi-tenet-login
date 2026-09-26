@@ -329,6 +329,46 @@ class DesktopTests(unittest.TestCase):
         message.assert_called_once()
         choose.assert_not_called()
 
+    def test_audit_requirements_are_local_and_workspace_specific(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.workspace=dict(WORKSPACE)
+        app.vars["audit_retention"].set("90")
+        app.vars["audit_tables"].set("Heartbeat, SecurityEvent")
+        app.vars["audit_rules"].set("Critical rule; rule-id")
+        app.save_audit_requirements()
+        original=app.audit_requirements_path()
+        self.assertTrue(original.exists())
+        app.workspace=dict(WORKSPACE,workspace_id=P1)
+        app.load_audit_requirements()
+        self.assertEqual(app.vars["audit_retention"].get(),"")
+        self.assertEqual(app.vars["audit_tables"].get(),"")
+        app.workspace=dict(WORKSPACE)
+        app.load_audit_requirements()
+        self.assertEqual(app.audit_requirements()["minimum_retention_days"],90)
+        self.assertEqual(app.audit_requirements()["expected_tables"],["Heartbeat","SecurityEvent"])
+        app.clear_selection()
+        self.assertEqual(app.vars["audit_rules"].get(),"")
+
+    def test_audit_invalid_requirement_does_not_open_destination_dialog(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
+        app.vars["audit_tables"].set("Heartbeat | take 1")
+        with patch.object(ui.messagebox,"showerror") as message,patch.object(ui.filedialog,"askdirectory") as choose:
+            app.collect_audit()
+        message.assert_called_once();choose.assert_not_called()
+
+    def test_audit_requirements_editor_collapses_without_losing_values(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root)
+        self.assertFalse(app.audit_requirements_frame.winfo_manager())
+        app.toggle_audit_requirements()
+        self.assertTrue(app.audit_requirements_frame.winfo_manager())
+        app.vars["audit_retention"].set("90")
+        app.toggle_audit_requirements()
+        self.assertFalse(app.audit_requirements_frame.winfo_manager())
+        self.assertEqual(app.audit_requirements()["minimum_retention_days"],90)
+        self.assertIn("90 days",app.audit_requirement_summary.get())
+
     def test_audit_action_uses_captured_workspace_and_reports_results(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
         app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()

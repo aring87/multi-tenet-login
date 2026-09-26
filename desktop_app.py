@@ -17,6 +17,7 @@ from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerpri
 from full_onboarding import validate_config
 from datetime import datetime, timedelta, timezone
 from audit_evidence import collect_evidence, date_range
+from audit_analysis import validate_expectations
 
 class App:
     def __init__(self, root):
@@ -100,6 +101,8 @@ class App:
         style.configure(".",font=("Segoe UI",10),foreground="#233248")
         style.configure("TFrame",background="#f3f5f9")
         style.configure("Card.TFrame",background="#ffffff")
+        style.configure("Card.TLabelframe",background="#ffffff",bordercolor="#d7dee8")
+        style.configure("Card.TLabelframe.Label",background="#ffffff",foreground="#35455d",font=("Segoe UI",10,"bold"))
         style.configure("TLabel",background="#f3f5f9")
         style.configure("CardTitle.TLabel",font=("Segoe UI",13,"bold"),background="white",foreground="#13243b")
         style.configure("Field.TLabel",font=("Segoe UI",10,"bold"),background="white",foreground="#35455d")
@@ -279,14 +282,29 @@ class App:
         right=ttk.Frame(dates,style="Card.TFrame");right.pack(side="left",fill="x",expand=True)
         self.form(left,"Start date (UTC, YYYY-MM-DD)","audit_start",(today-timedelta(days=29)).isoformat())
         self.form(right,"End date (UTC, inclusive)","audit_end",today.isoformat())
-        ttk.Label(body,text="Collects workspace/table settings, Azure role assignments, analytics rules, connectors, diagnostic settings, incidents created in the period, and available Sentinel health/audit logs and usage summaries.\n\nConfiguration is a current snapshot. Missing access, expired logs and incomplete results are reported separately. This first version collects technical evidence; it does not score SOC 2, ISO 27001 or CMMC compliance.",style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,18))
-        self.button(body,"Collect evidence & save package",self.collect_audit,"Primary.TButton").pack(anchor="w")
+        ttk.Label(body,text="Collects current workspace settings and period evidence. The report shows daily coverage, incomplete requests and observations backed by evidence. No compliance score is assigned.",style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,18))
+        self.audit_requirements_toggle=self.button(body,"Edit client requirements (optional)",self.toggle_audit_requirements)
+        self.audit_requirements_toggle.pack(anchor="w",pady=(0,10))
+        self.audit_requirement_summary=tk.StringVar()
+        ttk.Label(body,textvariable=self.audit_requirement_summary,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,14))
+        requirements=ttk.LabelFrame(body,text="Client requirements",style="Card.TLabelframe",padding=14)
+        self.audit_requirements_frame=requirements
+        self.form(requirements,"Minimum searchable retention (days; blank skips comparison)","audit_retention")
+        self.form(requirements,"Expected log tables (comma separated; up to 20)","audit_tables")
+        self.form(requirements,"Critical rules required enabled (IDs or exact names; separate with ;)","audit_rules")
+        ttk.Label(requirements,text="Use the client's approved requirements. Retention compares the workspace default and listed tables only, not archive retention. Expected tables receive direct daily-count queries. Critical rule names must be unique.",style="Muted.TLabel",wraplength=610,justify="left").pack(anchor="w",pady=(0,12))
+        self.button(requirements,"Save requirements for this workspace",self.save_audit_requirements).pack(anchor="w")
+        self.audit_collect_button=self.button(body,"Collect evidence & save package",self.collect_audit,"Primary.TButton")
+        self.audit_collect_button.pack(anchor="w")
+        for key in ("audit_retention","audit_tables","audit_rules"):
+            self.vars[key].trace_add("write",lambda *args:self.update_audit_requirements_summary())
+        self.update_audit_requirements_summary()
         resultcard,body=self.card(audit,"Evidence results","Packages contain a readable report, JSON/CSV evidence and a file-hash manifest.")
         resultcard.pack(fill="x",pady=(0,16))
         self.audit_summary=tk.StringVar(value="No evidence collected yet. Choose an approved local folder when collecting.")
         ttk.Label(body,textvariable=self.audit_summary,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,16))
         actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
-        self.button(actions,"Open report",lambda:self.open_evidence(True)).pack(side="left",padx=(0,10))
+        self.button(actions,"Open coverage & findings",lambda:self.open_evidence(True)).pack(side="left",padx=(0,10))
         self.button(actions,"Open package folder",self.open_evidence).pack(side="left")
         self.tabs.bind("<<NotebookTabChanged>>",self.page_changed)
         self.page_changed()
@@ -361,6 +379,8 @@ class App:
             while True:
                 kind,data=self.events.get_nowait()
                 if kind=="log":
+                    if self.busy and self.operation_page==3:
+                        self.status.set(data[:220])
                     self.logbox.configure(state="normal")
                     self.logbox.insert("end",data+"\n"); self.logbox.see("end")
                     self.logbox.configure(state="disabled")
@@ -402,6 +422,7 @@ class App:
             require(self.session and self.workspace,"Sign in and select a discovered workspace first.")
             start,end=self.vars["audit_start"].get().strip(),self.vars["audit_end"].get().strip()
             date_range(start,end)
+            expectations=self.audit_requirements()
         except Stop as error:
             messagebox.showerror("Audit evidence",str(error),parent=self.root);return
         destination=filedialog.askdirectory(title="Choose an approved local folder for client evidence",parent=self.root)
@@ -412,13 +433,69 @@ class App:
         def done(result):
             self.evidence_folder=Path(result["folder"])
             rows=result["manifest"]["results"]
+            assessment=result["manifest"].get("analysis_summary",{})
             self.audit_summary.set("Workspace: "+workspace["workspace_name"]+"\n"+
+                f"Observed issues: {assessment.get('observed_issues',0)} | Needs review: {assessment.get('needs_review',0)} | Insufficient evidence: {assessment.get('insufficient_evidence',0)}\n\n"+
                 "\n".join(r["title"]+": "+r["status"].replace("_"," ")+f" ({r['record_count']} records)" for r in rows)+
                 "\n\nSaved to: "+result["folder"])
             self.status.set("Evidence package saved. Review collection statuses and limitations in the report.")
             self.tabs.select(3)
         self.work("Collecting read-only Azure / Sentinel evidence...",
-                  lambda:collect_evidence(session,workspace,start,end,destination),done,page=3)
+                  lambda:collect_evidence(session,workspace,start,end,destination,expectations),done,page=3)
+
+    def audit_requirements(self):
+        value=self.vars["audit_retention"].get().strip()
+        require(not value or value.isascii() and value.isdigit(),"Enter a whole number of retention days, or leave it blank.")
+        return validate_expectations(dict(minimum_retention_days=int(value) if value else None,
+            expected_tables=[x.strip() for x in self.vars["audit_tables"].get().split(",") if x.strip()],
+            critical_rules=[x.strip() for x in self.vars["audit_rules"].get().split(";") if x.strip()]))
+
+    def toggle_audit_requirements(self):
+        if self.audit_requirements_frame.winfo_manager():
+            self.audit_requirements_frame.pack_forget()
+            self.audit_requirements_toggle.configure(text="Edit client requirements (optional)")
+        else:
+            self.audit_requirements_frame.pack(fill="x",pady=(0,18),before=self.audit_collect_button)
+            self.audit_requirements_toggle.configure(text="Hide client requirements")
+
+    def update_audit_requirements_summary(self):
+        days=self.vars["audit_retention"].get().strip()
+        tables=len([x for x in self.vars["audit_tables"].get().split(",") if x.strip()])
+        rules=len([x for x in self.vars["audit_rules"].get().split(";") if x.strip()])
+        self.audit_requirement_summary.set(
+            f"Requirements for this run: searchable retention {days or 'not specified'}{' days' if days else ''}; {tables} expected tables; {rules} critical rules."
+            if days or tables or rules else "No client requirements entered. Collection and general observations still run.")
+
+    def audit_requirements_path(self):
+        require(self.workspace,"Select a discovered workspace first.")
+        return DATA/"audit-requirements"/guid(self.workspace["tenant_id"],"tenant")/(guid(self.workspace["workspace_id"],"workspace")+".json")
+
+    def save_audit_requirements(self):
+        if self.busy:return
+        try:
+            value=self.audit_requirements()
+            path=self.audit_requirements_path()
+            path.parent.mkdir(parents=True,exist_ok=True)
+            temporary=path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(value,indent=2),encoding="utf-8")
+            temporary.replace(path)
+            self.status.set("Audit requirements saved locally for "+self.workspace["workspace_name"]+".")
+        except (Stop,OSError) as error:
+            messagebox.showerror("Audit requirements",str(error),parent=self.root)
+
+    def load_audit_requirements(self):
+        for key in ("audit_retention","audit_tables","audit_rules"):
+            if key in self.vars:self.vars[key].set("")
+        if not self.workspace:return
+        try:
+            path=self.audit_requirements_path()
+            if not path.exists():return
+            value=validate_expectations(json.loads(path.read_text(encoding="utf-8")))
+            self.vars["audit_retention"].set(str(value["minimum_retention_days"]) if value["minimum_retention_days"] is not None else "")
+            self.vars["audit_tables"].set(", ".join(value["expected_tables"]))
+            self.vars["audit_rules"].set("; ".join(value["critical_rules"]))
+        except (Stop,OSError,ValueError) as error:
+            messagebox.showerror("Audit requirements","Saved requirements could not be loaded: "+str(error),parent=self.root)
 
     def open_evidence(self,report=False):
         if not self.evidence_folder:
@@ -443,6 +520,7 @@ class App:
 
     def clear_selection(self):
         self.subscriptions=[]; self.workspaces=[]; self.workspace=None; self.plan=None
+        self.load_audit_requirements()
         self.subbox.configure(values=[]); self.wsbox.configure(values=[])
         self.vars["subscription"].set(""); self.vars["workspace"].set("")
         self.identity.set("No authenticated workspace selected.")
@@ -591,6 +669,7 @@ class App:
         index=self.wsbox.current()
         if index<0: return
         self.workspace=dict(self.workspaces[index]); self.plan=None
+        self.load_audit_requirements()
         account=self.session.account or {}
         self.identity.set("Signed in: "+account.get("user",{}).get("name","unknown")+"\n"+
             "\n".join(label+": "+self.workspace[key] for key,label in

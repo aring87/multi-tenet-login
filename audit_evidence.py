@@ -10,12 +10,16 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit, unquote
 
 from desktop_backend import Stop, require, workspace_record
+from audit_analysis import validate_expectations, analyze, render_dashboard, render_evidence_links
 
-VERSION = "1.0"
+VERSION = "2.0"
 ARM = "https://management.azure.com"
 LOGS = "https://api.loganalytics.io"
 MAX_PAGES = 200
 LOG_LIMIT = 10000
+MAX_LOG_REQUESTS = 127
+MAX_LOG_RECORDS = 100000
+MIN_LOG_WINDOW = timedelta(minutes=1)
 
 
 def utcnow():
@@ -24,6 +28,7 @@ def utcnow():
 
 def date_range(start, end):
     try:
+        require(bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", start)) and bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", end)), "Use dates in YYYY-MM-DD format.")
         first, last = date.fromisoformat(start), date.fromisoformat(end)
         require(first <= last, "Start date must be on or before end date.")
         require(last <= datetime.now(timezone.utc).date(), "End date cannot be in the future.")
@@ -53,6 +58,89 @@ class Collector:
         self.session, self.workspace = session, dict(workspace)
         self.base = ARM + quote(workspace["resource_id"], safe="/")
         self.results = []
+
+    def collect_log(self, key, title, table, first, after, summary=False):
+        """Split oversized/partial queries into disjoint half-open intervals.
+
+        Only leaf responses contribute records. A discarded parent response must
+        never be counted alongside its children. Attempts and unresolved ranges
+        remain in the evidence even when the request/record budget is reached.
+        """
+        result = dict(key=key, title=title, status="error", collected_at_utc=utcnow(),
+                      source=table, records=[], requests=[], segments=[], table=table,
+                      period_start_utc=first.isoformat(), period_end_utc_exclusive=after.isoformat(),
+                      record_kind="daily_summary" if summary else "events",
+                      note="UTC period evidence within this account's visibility. Empty days do not prove an outage. Large queries are split; unresolved intervals remain explicit.")
+        self.results.append(result)
+        pending = [(first, after)]
+        requests = 0
+        while pending:
+            lo, hi = pending.pop()
+            segment = dict(start_utc=lo.isoformat(), end_utc_exclusive=hi.isoformat())
+            if requests >= MAX_LOG_REQUESTS or len(result["records"]) >= MAX_LOG_RECORDS:
+                result["segments"].append(segment | dict(status="not_queried", record_count=0, error="Collection safety limit reached; narrow the date range."))
+                continue
+            self.session.log(f"Collecting {table}: {lo.date()} through {hi.date()} (request {requests+1})")
+            query = f"{table} | where TimeGenerated >= datetime({lo.isoformat()}) and TimeGenerated < datetime({hi.isoformat()})"
+            if summary:
+                query += " | summarize Records=count(), FirstRecord=min(TimeGenerated), LastRecord=max(TimeGenerated) by Day=startofday(TimeGenerated)"
+                if table == "Usage":
+                    query = query.replace("Records=count()", "Records=count(), Quantity=sum(Quantity)").replace("by Day=startofday(TimeGenerated)", "by Day=startofday(TimeGenerated), DataType, QuantityUnit")
+                query += " | order by Day asc"
+            else:
+                query += " | order by TimeGenerated asc"
+            query += f" | take {LOG_LIMIT+1}"
+            url = LOGS+"/v1/workspaces/"+self.workspace["workspace_id"]+"/query?query="+quote(query, safe="")
+            attempt = segment | dict(query=query, url=url, requested_at_utc=utcnow())
+            result["requests"].append(attempt)
+            requests += 1
+            rows, problem, status = [], None, "error"
+            try:
+                response = self.get(url)
+                require(isinstance(response, dict), "Invalid log query response.")
+                primary = next((t for t in response.get("tables", []) if t.get("name") == "PrimaryResult"), None)
+                require(primary is not None, safe_error(json.dumps(response.get("error") or "No primary result table")))
+                columns = [c["name"] for c in primary["columns"]]
+                require(len(set(columns)) == len(columns) and all(len(row) == len(columns) for row in primary["rows"]), "Invalid log query rows.")
+                rows = [dict(zip(columns, row)) for row in primary["rows"]]
+                if response.get("error") or len(rows) > LOG_LIMIT:
+                    problem = safe_error(json.dumps(response.get("error") or "Row limit exceeded"))
+                    status = "partial"
+                else:
+                    status = "collected" if rows else "no_records"
+            except Exception as error:
+                problem, status = safe_error(error), error_status(error)
+                # Some CLI/API failures carry no body. Retry by narrowing only
+                # recognized size/time limits, never denied or unavailable sources.
+                if status == "error" and any(word in problem.lower() for word in ("partialerror", "e_query_result_set_too_large", "timeout", "timed out")):
+                    status = "partial"
+            attempt.update(status=status, returned_rows=len(rows), finished_at_utc=utcnow())
+            if problem: attempt["error"] = problem
+            if status == "partial" and hi-lo > MIN_LOG_WINDOW and requests < MAX_LOG_REQUESTS:
+                midpoint = lo+(hi-lo)/2
+                attempt["superseded_by_split"] = True
+                pending.extend([(midpoint, hi), (lo, midpoint)])
+                continue
+            remaining = MAX_LOG_RECORDS-len(result["records"])
+            accepted = rows[:min(LOG_LIMIT, remaining)]
+            if len(accepted) < len(rows):
+                status, problem = "partial", "Export record limit reached; narrow the date range."
+            offset = len(result["records"])
+            result["records"].extend(accepted)
+            segment.update(status=status, record_count=len(accepted), first_record_index=offset)
+            if problem: segment["error"] = problem
+            result["segments"].append(segment)
+        result["segments"].sort(key=lambda s:s["start_utc"])
+        incomplete = [s for s in result["segments"] if s["status"] not in ("collected", "no_records")]
+        if incomplete:
+            statuses = {s["status"] for s in incomplete}
+            result["status"] = next(iter(statuses)) if len(statuses)==1 and len(incomplete)==len(result["segments"]) and not result["records"] else "partial"
+            if result["status"] == "not_queried": result["status"] = "partial"
+            result["error"] = f"{len(incomplete)} time interval(s) incomplete. See segments and requests."
+        else:
+            result["status"] = "collected" if result["records"] else "no_records"
+        result["finished_at_utc"] = utcnow()
+        return result
 
     def get(self, url, original=None):
         parsed = urlsplit(url)
@@ -112,11 +200,14 @@ class Collector:
         result["finished_at_utc"] = utcnow()
         return result
 
-    def run(self, start, end):
+    def run(self, start, end, expectations=None):
+        expectations = validate_expectations(expectations)
         first, after = date_range(start, end)
+        period_start = datetime.fromisoformat(first.replace("Z", "+00:00"))
+        period_end = min(datetime.fromisoformat(after.replace("Z", "+00:00")), datetime.now(timezone.utc))
         self.session.verify(self.workspace)
         cloud = self.session.az("cloud", "show")
-        require(cloud.get("name") == "AzureCloud", "Evidence v1 supports Azure public cloud only.")
+        require(cloud.get("name") == "AzureCloud", "Evidence collection supports Azure public cloud only.")
         current = self.get(self.base+"?api-version=2025-07-01")
         verified = workspace_record(dict(id=current.get("id"), customerId=current.get("properties", {}).get("customerId")),
                                     self.workspace["subscription_id"], self.workspace["tenant_id"])
@@ -145,12 +236,10 @@ class Collector:
             "Current incident records filtered by creation date (UTC); excludes incidents created earlier, even if active in the period. Does not collect comments or reconstruct status history.")
         for key, title, table in [("health", "Sentinel health events", "SentinelHealth"),
                                    ("audit", "Sentinel audit events", "SentinelAudit")]:
-            query = f"{table} | where TimeGenerated >= datetime({first}) and TimeGenerated < datetime({after}) | order by TimeGenerated desc | take {LOG_LIMIT+1}"
-            self.collect(key, title, LOGS+"/v1/workspaces/"+self.workspace["workspace_id"]+"/query?query="+quote(query, safe=""),
-                "Requires previously enabled monitoring and retained data. At most 10,000 rows exported; larger results are marked partial.", query=query)
-        query = f"Usage | where TimeGenerated >= datetime({first}) and TimeGenerated < datetime({after}) | summarize UsageRecords=count(), FirstUsageRecord=min(TimeGenerated), LastUsageRecord=max(TimeGenerated), Quantity=sum(Quantity) by DataType, QuantityUnit | order by DataType asc | take {LOG_LIMIT+1}"
-        self.collect("usage", "Available table usage summary", LOGS+"/v1/workspaces/"+self.workspace["workspace_id"]+"/query?query="+quote(query, safe=""),
-            "Summary of available Usage records, not a complete ingestion or connector-gap assessment. Zero rows does not prove no ingestion.", query=query)
+            self.collect_log(key, title, table, period_start, period_end)
+        self.collect_log("usage", "Daily Usage records (not source events)", "Usage", period_start, period_end, summary=True)
+        for index, table in enumerate(expectations["expected_tables"]):
+            self.collect_log(f"expected_{index}", "Expected log table: "+table, table, period_start, period_end, summary=True)
         self.session.verify(self.workspace)
         return self.results
 
@@ -171,20 +260,31 @@ def csv_value(value):
     return "'"+text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
 
 
-def collect_evidence(session, workspace, start, end, destination):
+def collect_evidence(session, workspace, start, end, destination, expectations=None):
     date_range(start, end)
+    expectations = validate_expectations(expectations)
     started = utcnow()
     collector = Collector(session, workspace)
-    results = collector.run(start, end)
+    results = collector.run(start, end, expectations)
+    assessment = analyze(results, start, end, expectations)
     folder = Path(destination) / ("evidence-"+workspace["workspace_id"]+"-"+
                                 datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"-"+uuid.uuid4().hex[:8])
     folder.mkdir(parents=True, exist_ok=False)
     manifest = dict(schema_version=VERSION, started_at_utc=started, finished_at_utc=utcnow(),
                     workspace=dict(workspace), period=dict(start_date_utc=start, end_date_utc_inclusive=end),
                     scope="Azure/Sentinel technical evidence only; no compliance determination or framework control mapping.",
-                    results=[], files={})
+                    expectations=expectations, analysis_summary=assessment["summary"], results=[], files={})
     def write_json(path, value):
         path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_json(folder/"coverage.json", assessment["coverage"])
+    write_json(folder/"findings.json", assessment["findings"])
+    write_json(folder/"requirements.json", expectations)
+    with (folder/"findings.csv").open("w", newline="", encoding="utf-8-sig") as output:
+        writer=csv.writer(output)
+        writer.writerow(["ID", "Classification", "Finding", "Observation", "Next step", "Evidence"])
+        for finding in assessment["findings"]:
+            writer.writerow([csv_value(finding[k]) for k in ("id", "classification", "title", "observation", "next_step")]+[json.dumps(finding["evidence"])])
+    (folder/"evidence.html").write_text(render_evidence_links(results, assessment["findings"]), encoding="utf-8")
     for result in results:
         write_json(folder/(result["key"]+".json"), result)
         rows = [flatten(row) for row in result["records"]]
@@ -203,7 +303,8 @@ def collect_evidence(session, workspace, start, end, destination):
 <title>Azure / Sentinel Audit Evidence</title><style>body{font:16px Segoe UI,sans-serif;color:#233248;background:#f3f5f9;margin:32px;line-height:1.5}main{max-width:1200px;margin:auto}h1{color:#14263e}table{border-collapse:collapse;background:white;width:100%}td,th{padding:14px;text-align:left;vertical-align:top;border-bottom:1px solid #d7dee8}th{background:#e4eaf3}code{overflow-wrap:anywhere}a{color:#245de9}</style><main><h1>Azure / Sentinel Audit Evidence</h1>"""
     report += f"<p><b>Workspace:</b> {esc(workspace['workspace_name'])}<br><b>Tenant:</b> {esc(workspace['tenant_id'])}<br><b>Resource:</b> <code>{esc(workspace['resource_id'])}</code><br><b>Period:</b> {esc(start)} through {esc(end)} (UTC, inclusive)<br><b>Collected:</b> {esc(manifest['finished_at_utc'])}</p>"
     report += "<p>Read-only technical evidence. Configuration is a current snapshot; logs and incident creation dates use the selected period. This package does not establish SOC 2, ISO 27001 or CMMC compliance.</p><p>Collected means the request succeeded within the signed-in account's visibility, not that a control passed. No records, unavailable, access denied, error and partial results require review. Retention, enabled monitoring and access can limit evidence. Client-sensitive data may be present; store and share through approved channels.</p>"
-    report += "<table><tr><th>Evidence</th><th>Collection status</th><th>Records</th><th>Scope and limitations</th></tr>"+sections+"</table><p>manifest.json records scope, timestamps, queries, requests and SHA-256 file hashes. Hashes detect later changes; they are not signatures or independent attestations. CSV cells are protected against spreadsheet formula execution; JSON retains original values.</p></main></html>"
+    report += render_dashboard(assessment, expectations)
+    report += "<h2>Collection inventory</h2><table><tr><th>Evidence</th><th>Collection status</th><th>Records</th><th>Scope and limitations</th></tr>"+sections+"</table><p>manifest.json records scope, timestamps, queries, requests and SHA-256 file hashes. Hashes detect later changes; they are not signatures or independent attestations. CSV cells are protected against spreadsheet formula execution; JSON retains original values.</p></main></html>"
     (folder/"report.html").write_text(report, encoding="utf-8")
     for path in sorted(folder.iterdir()):
         manifest["files"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()

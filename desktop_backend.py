@@ -67,6 +67,13 @@ class Session:
 
     def execute(self, executable, args, data=None, timeout=900):
         require(executable, "Required tool is missing. Install Azure CLI / GitHub CLI and restart this app.")
+        # The MSI wrapper invokes this exact interpreter. Bypass cmd.exe so REST
+        # query separators, percent escapes and pagination links remain literal.
+        if executable == self.az_exe and Path(executable).name.lower() == "az.cmd":
+            interpreter = Path(executable).parent.parent / "python.exe"
+            if interpreter.is_file():
+                executable = str(interpreter)
+                args = ["-IBm", "azure.cli", *args]
         if executable.lower().endswith((".cmd", ".bat")):
             require(all(not re.search(r'[&|<>^%!\r\n"]', str(x)) for x in args),
                     "An argument contains unsupported Windows shell characters.")

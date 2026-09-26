@@ -1,5 +1,6 @@
 # Local administration records and authentication caches
 desktop-data/
+evidence-*/
 .azure/
 .env
 .env.*

@@ -320,7 +320,31 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.vars["client_name"].get(),"Example client")
         self.assertEqual(app.vars["mode"].get(),"Permissions only")
         self.assertIsNone(app.session)
-        self.assertEqual(len(app.tabs.tabs()),3)
+        self.assertEqual(len(app.tabs.tabs()),4)
+    def test_audit_requires_discovered_workspace(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root)
+        with patch.object(ui.messagebox,"showerror") as message,patch.object(ui.filedialog,"askdirectory") as choose:
+            app.collect_audit()
+        message.assert_called_once()
+        choose.assert_not_called()
+
+    def test_audit_action_uses_captured_workspace_and_reports_results(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
+        app.vars["audit_start"].set("2024-01-01");app.vars["audit_end"].set("2024-01-02")
+        result=dict(folder=str(self.data/"evidence-example"),manifest=dict(results=[dict(title="Rules",status="access_denied",record_count=0)]))
+        with patch.object(ui.filedialog,"askdirectory",return_value=str(self.data)),patch.object(ui,"collect_evidence",return_value=result) as collect,patch.object(app,"work") as launch:
+            app.collect_audit()
+            self.assertEqual(launch.call_args.kwargs["page"],3)
+            app.workspace=None
+            returned=launch.call_args.args[1]()
+            launch.call_args.args[2](returned)
+        self.assertEqual(collect.call_args.args[1],WORKSPACE)
+        self.assertIn("access denied",app.audit_summary.get())
+        self.assertEqual(app.tabs.index("current"),3)
+        self.assertIsNone(app.plan)
+
     def test_gui_blocks_apply_without_plan(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
         app=self.make_app(root)

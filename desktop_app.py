@@ -15,6 +15,8 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
                              config_from_workspace, permission_run, full_run, validate_tenant_hint, CYBERQP_PORTALS)
 from full_onboarding import validate_config
+from datetime import datetime, timedelta, timezone
+from audit_evidence import collect_evidence, date_range
 
 class App:
     def __init__(self, root):
@@ -37,6 +39,8 @@ class App:
         self.clients = self.read_clients()
         self.vars = {}
         self.controls = []
+        self.evidence_folder = None
+        self.operation_page = 2
         self.build()
         self.refresh_clients()
         self.root.after(100,self.poll)
@@ -125,7 +129,7 @@ class App:
         tk.Label(sidebar,text="SENTINEL",bg="#12213a",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(30,4))
         tk.Label(sidebar,text="WORKSPACE DISCOVERY",bg="#12213a",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
         self.nav=[]
-        for i,(title,desc) in enumerate([("Discover","Sign in & copy details"),("Configure","Permissions & identities"),("Review","Preview & apply")]):
+        for i,(title,desc) in enumerate([("Discover","Sign in & copy details"),("Configure","Permissions & identities"),("Review","Preview & apply"),("Audit Evidence","Read-only Azure & Sentinel")]):
             row=tk.Frame(sidebar,bg="#12213a",cursor="hand2",takefocus=1)
             row.pack(fill="x",padx=12,pady=4)
             number=tk.Label(row,text=f"0{i+1}",bg="#12213a",fg="#7893b3",
@@ -164,7 +168,7 @@ class App:
         self.tabs=ttk.Notebook(main,style="Hidden.TNotebook");self.tabs.pack(fill="both",expand=True,padx=26,pady=(0,12))
         self.page_contents=[]
         self.page_canvases=[]
-        for name in ("Connect","Configure","Review"):
+        for name in ("Connect","Configure","Review","Audit Evidence"):
             page=ttk.Frame(self.tabs);self.tabs.add(page,text=name)
             canvas=tk.Canvas(page,bg="#f3f5f9",highlightthickness=0,bd=0)
             scroll=ttk.Scrollbar(page,orient="vertical",command=canvas.yview)
@@ -175,7 +179,7 @@ class App:
             content.bind("<Configure>",lambda e,c=canvas:c.configure(scrollregion=c.bbox("all")))
             canvas.bind("<Configure>",lambda e,c=canvas,w=window:c.itemconfigure(w,width=e.width))
             self.page_contents.append(content)
-        connect,settings,review=self.page_contents
+        connect,settings,review,audit=self.page_contents
         connect.columnconfigure(0,weight=1,uniform="discovery");connect.columnconfigure(1,weight=1,uniform="discovery")
         clientcard,body=self.card(connect,"Client profile (optional)","Sign in without creating a profile. Save a client later for quicker access.")
         clientcard.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
@@ -265,6 +269,25 @@ class App:
         logscroll=ttk.Scrollbar(logframe,orient="vertical",command=self.logbox.yview)
         logscroll.pack(side="right",fill="y");self.logbox.pack(fill="both",expand=True)
         self.logbox.configure(yscrollcommand=logscroll.set)
+        auditcard,body=self.card(audit,"Collect Azure / Sentinel evidence",
+            "Read-only collection using your signed-in Azure access. Choose a workspace in Discover first.")
+        auditcard.pack(fill="x",pady=(0,16))
+        ttk.Label(body,textvariable=self.identity,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,18))
+        today=datetime.now(timezone.utc).date()
+        dates=ttk.Frame(body,style="Card.TFrame");dates.pack(fill="x")
+        left=ttk.Frame(dates,style="Card.TFrame");left.pack(side="left",fill="x",expand=True,padx=(0,16))
+        right=ttk.Frame(dates,style="Card.TFrame");right.pack(side="left",fill="x",expand=True)
+        self.form(left,"Start date (UTC, YYYY-MM-DD)","audit_start",(today-timedelta(days=29)).isoformat())
+        self.form(right,"End date (UTC, inclusive)","audit_end",today.isoformat())
+        ttk.Label(body,text="Collects workspace/table settings, Azure role assignments, analytics rules, connectors, diagnostic settings, incidents created in the period, and available Sentinel health/audit logs and usage summaries.\n\nConfiguration is a current snapshot. Missing access, expired logs and incomplete results are reported separately. This first version collects technical evidence; it does not score SOC 2, ISO 27001 or CMMC compliance.",style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,18))
+        self.button(body,"Collect evidence & save package",self.collect_audit,"Primary.TButton").pack(anchor="w")
+        resultcard,body=self.card(audit,"Evidence results","Packages contain a readable report, JSON/CSV evidence and a file-hash manifest.")
+        resultcard.pack(fill="x",pady=(0,16))
+        self.audit_summary=tk.StringVar(value="No evidence collected yet. Choose an approved local folder when collecting.")
+        ttk.Label(body,textvariable=self.audit_summary,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,16))
+        actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
+        self.button(actions,"Open report",lambda:self.open_evidence(True)).pack(side="left",padx=(0,10))
+        self.button(actions,"Open package folder",self.open_evidence).pack(side="left")
         self.tabs.bind("<<NotebookTabChanged>>",self.page_changed)
         self.page_changed()
         self.root.bind("<MouseWheel>",self.scroll_page)
@@ -276,10 +299,11 @@ class App:
 
     def page_changed(self,event=None):
         index=self.tabs.index("current")
-        titles=["Connect your client","Configure workspace setup","Review & apply"]
+        titles=["Connect your client","Configure workspace setup","Review & apply","Audit evidence"]
         subtitles=["Discover the right workspace without navigating the Azure portal.",
                    "Set up permissions for existing identities, or onboard a new client.",
-                   "Confirm the destination, preview the setup, then apply."]
+                   "Confirm the destination, preview the setup, then apply.",
+                   "Collect and export Azure / Sentinel evidence for the selected workspace."]
         self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
         for i,(row,number,name,description) in enumerate(self.nav):
             selected=i==index
@@ -345,8 +369,10 @@ class App:
                     self.set_busy(False)
                     if error:
                         self.plan=None
-                        self.status.set("Stopped - see the details in Review & apply.")
-                        self.log(error); self.tabs.select(2)
+                        self.status.set("Stopped - "+error[:160])
+                        self.log(error); self.tabs.select(self.operation_page)
+                        if self.operation_page==3:
+                            self.audit_summary.set("Collection stopped: "+error)
                         messagebox.showerror("Operation stopped",error)
                     else:
                         self.status.set("Ready")
@@ -360,14 +386,44 @@ class App:
         for widget,state in self.controls:
             widget.configure(state="disabled" if busy else state)
 
-    def work(self,title,task,done=None):
+    def work(self,title,task,done=None,page=2):
         if self.busy: return
+        self.operation_page=page
         self.set_busy(True); self.status.set(title); self.log(title)
         def run():
             try: result,error=task(),None
             except Exception as ex: result,error=None,str(ex)
             self.events.put(("done",(done,result,error)))
         threading.Thread(target=run,daemon=True).start()
+
+    def collect_audit(self):
+        if self.busy: return
+        try:
+            require(self.session and self.workspace,"Sign in and select a discovered workspace first.")
+            start,end=self.vars["audit_start"].get().strip(),self.vars["audit_end"].get().strip()
+            date_range(start,end)
+        except Stop as error:
+            messagebox.showerror("Audit evidence",str(error),parent=self.root);return
+        destination=filedialog.askdirectory(title="Choose an approved local folder for client evidence",parent=self.root)
+        if not destination:return
+        workspace=dict(self.workspace);session=self.session
+        self.evidence_folder=None
+        self.audit_summary.set("Collecting evidence for "+workspace["workspace_name"]+". This may take several minutes.")
+        def done(result):
+            self.evidence_folder=Path(result["folder"])
+            rows=result["manifest"]["results"]
+            self.audit_summary.set("Workspace: "+workspace["workspace_name"]+"\n"+
+                "\n".join(r["title"]+": "+r["status"].replace("_"," ")+f" ({r['record_count']} records)" for r in rows)+
+                "\n\nSaved to: "+result["folder"])
+            self.status.set("Evidence package saved. Review collection statuses and limitations in the report.")
+            self.tabs.select(3)
+        self.work("Collecting read-only Azure / Sentinel evidence...",
+                  lambda:collect_evidence(session,workspace,start,end,destination),done,page=3)
+
+    def open_evidence(self,report=False):
+        if not self.evidence_folder:
+            messagebox.showinfo("Audit evidence","Collect an evidence package first.",parent=self.root);return
+        os.startfile(str(self.evidence_folder / "report.html" if report else self.evidence_folder))
 
     def values(self):
         return {k:v.get().strip() if isinstance(v.get(),str) else v.get() for k,v in self.vars.items()}

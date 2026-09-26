@@ -22,6 +22,7 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 - Saves client names and tenant IDs/domains in a local dropdown.
 - Opens Microsoft sign-in for an authorized Azure account, including JIT accounts.
 - Discovers accessible subscriptions and Log Analytics workspace details.
+- Collects read-only Azure/Sentinel audit evidence with dated JSON/CSV exports and a readable report. See [Audit Evidence](AUDIT-EVIDENCE.md) for scope and limitations.
 - Previews and applies scoped permissions for existing preview/deployment service principals.
 - Optionally onboards Azure identities, OIDC, GitHub environments, and a client configuration pull request.
 - Deletes saved client entries without deleting cloud resources.

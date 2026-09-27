@@ -1,0 +1,50 @@
+id: 3a463478-1873-46ac-af5f-cdefc6f76952
+name: Account created containing _jit suffix outside of CyberQP
+description: Detects creation of a user account with a "_jit" suffix where the initiator is not CyberQP. Accounts with this
+  suffix are expected to be created only by CyberQP as part of just-in-time access provisioning. Creation by any other initiator
+  may indicate unauthorized account creation or an attempt to mimic/masquerade legitimate JIT accounts.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Medium
+enabled: true
+query: "AuditLogs\r\n| where Category =~ \"UserManagement\"\r\n| where OperationName == \"Add user\"\r\n| extend InitiatingUserUPN\
+  \ = tostring(InitiatedBy.user.userPrincipalName)\r\n| extend InitiatingUserId = tostring(InitiatedBy.user.id)\r\n| extend\
+  \ InitiatingIPAddress = tostring(InitiatedBy.user.ipAddress)\r\n| extend InitiatingAppName = tostring(InitiatedBy.app.displayName)\r\
+  \n| extend TargetUPN = tostring(TargetResources[0].userPrincipalName)\r\n| extend TargetDisplayName = tostring(TargetResources[0].displayName)\r\
+  \n| extend TargetUserType = tostring(TargetResources[0].userType)\r\n| where InitiatingAppName !~ \"CyberQP\"\r\n| where\
+  \ InitiatingAppName !~ \"Quickpass\"\r\n| where InitiatingAppName !~ \"Quickpass - GCCH\"\r\n| where TargetUPN contains\
+  \ \"_jit\"\r\n| project TimeGenerated,  OperationName, Category, Result, InitiatingUserUPN, InitiatingUserId, InitiatingIPAddress,\
+  \ InitiatingAppName, TargetUPN, TargetDisplayName, TargetUserType"
+queryFrequency: PT1H
+queryPeriod: PT2H
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics:
+- Persistence
+- DefenseEvasion
+techniques:
+- T1136
+- T1078
+- T0849
+subTechniques:
+- T1136.003
+- T1078.004
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: TargetUPN
+createIncident: true
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5H
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

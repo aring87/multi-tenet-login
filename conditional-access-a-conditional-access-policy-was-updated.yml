@@ -1,0 +1,84 @@
+id: 38b705de-7567-4ef1-93ab-4d74733aeced
+name: Conditional Access - A Conditional Access policy was updated
+description: A Conditional Access policy was updated in Entra ID.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Low
+enabled: true
+query: |-
+  // A Conditional Access policy was updated.
+  AuditLogs
+  | where OperationName in ("Update conditional access policy")
+  | where Result == "success"
+  | extend modifiedBy = InitiatedBy.user.userPrincipalName
+  | extend CAPolicy = TargetResources[0].displayName
+  | extend NewCAPolicySettings = TargetResources[0].modifiedProperties[0].newValue
+  | extend OldCAPolicySettings = TargetResources[0].modifiedProperties[0].oldValue
+  // get the general settings of the NEW CA policy
+  | extend NewGeneralSettings = parse_json(tostring(parse_json(tostring(TargetResources[0].modifiedProperties))[0].newValue))
+  // get the general setting of the OLD CA policy
+  | extend OldGeneralSettings = parse_json(tostring(parse_json(tostring(TargetResources[0].modifiedProperties))[0].oldValue))
+  // get the new conditions
+  | extend NewConditions = parse_json(tostring(parse_json(tostring(parse_json(tostring(TargetResources[0].modifiedProperties))[0].newValue)).conditions))
+  // get the old conditions
+  | extend OldConditions = parse_json(tostring(parse_json(tostring(parse_json(tostring(TargetResources[0].modifiedProperties))[0].oldValue)).conditions))
+  //users
+  | extend ChangedUser = iff(tostring(OldConditions.users) != tostring(NewConditions.users), "Users ", "")
+  // applications
+  | extend ChangedApplications = iff(tostring(OldConditions.applications) != tostring(NewConditions.applications), "Applications ", "")
+  | order by TimeGenerated
+  // clientAppTypes
+  | extend ChangedClientAppTypes= iff(tostring(OldConditions.clientAppTypes) != tostring(NewConditions.clientAppTypes), "ClientAppTypes ", "")
+  //locations
+  | extend ChangedLocations= iff(tostring(OldConditions.locations) != tostring(NewConditions.locations), "Locations ", "")
+  | order by TimeGenerated
+  //platforms
+  | extend ChangedPlatforms= iff(tostring(OldConditions.platforms) != tostring(NewConditions.platforms), "Platforms ", "")
+  // Devices
+  | extend ChangedDevices= iff(tostring(OldConditions.devices) != tostring(NewConditions.devices), "Devices ", "")
+  //servicePrincipalRiskLevels
+  | extend ChangedServicePrincipalRiskLevels= iff(tostring(OldConditions.servicePrincipalRiskLevels) != tostring(NewConditions.servicePrincipalRiskLevels), "ServicePrincipalRiskLevels ", "")
+  // SignInRiskLevels
+  | extend ChangedSignInRiskLevels= iff(tostring(OldConditions.signInRiskLevels) != tostring(NewConditions.signInRiskLevels), "SignInRiskLevels ", "")
+  //userRiskLevels
+  | extend ChangedUserRiskLevels= iff(tostring(OldConditions.userRiskLevels) != tostring(NewConditions.userRiskLevels), "UserRiskLevels ", "")
+  // grantcontrols
+  | extend ChangedGrantControl = iff(tostring(OldGeneralSettings.grantControls) != tostring(NewGeneralSettings.grantControls), "GrantControl ", "")
+  // state (policy enabled or not)
+  | extend ChangedState = iff(tostring(OldGeneralSettings.state) != tostring(NewGeneralSettings.state), "State ", "")
+  // sessionControl
+  | extend ChangedSessionControl = iff(tostring(OldGeneralSettings.sessionControls) != tostring(NewGeneralSettings.sessionControls), "SessionControl ", "")
+  // show CA policy changes that were True
+  | extend Summary = strcat(modifiedBy, " has ", OperationName, " called ", CAPolicy, ". The following changes were done: ", ChangedUser, ChangedApplications, ChangedClientAppTypes, ChangedLocations, ChangedPlatforms, ChangedServicePrincipalRiskLevels, ChangedSignInRiskLevels, ChangedUserRiskLevels, ChangedGrantControl, ChangedState, ChangedSessionControl, ChangedDevices)
+  | project
+      TimeGenerated,
+      Summary,
+      Result,
+      OperationName,
+      CAPolicy,
+      modifiedBy,
+      NewCAPolicySettings,
+      OldCAPolicySettings
+queryFrequency: PT15M
+queryPeriod: PT15M
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT1H
+suppressionEnabled: false
+tactics:
+- DefenseEvasion
+techniques: []
+subTechniques: []
+alertRuleTemplateName: ccca6b88-a7b6-41c9-9be2-fc3daeb65b26
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

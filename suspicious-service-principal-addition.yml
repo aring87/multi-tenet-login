@@ -1,0 +1,40 @@
+id: 0417eafb-c8c2-41a4-bf85-cdeffc23b447
+name: Suspicious Service Principal Addition
+description: This search looks for the addition of service principals and returns the name of the principal, the user that
+  created it, and the IP address used when the principal was created.  Further information is returned from the query to help
+  identify what the principal is and who added it.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Medium
+enabled: true
+query: "AuditLogs\n| where OperationName == \"Add service principal\"\n| where Result == \"success\"\n| extend InitiatedByUser\
+  \ = tostring(InitiatedBy.user.id)\n| where isnotempty(InitiatedByUser)\n| extend UserName = tostring(InitiatedBy.user.userPrincipalName)\n\
+  | where not(UserName has_any(\"priv\", \"jit\", \"jitnew\"))\n| extend SP_Name = tostring(TargetResources[0].displayName)\n\
+  | where SP_Name !has \"AvePoint\"\n| extend \n    SP_ObjectId = tostring(TargetResources[0].id),\n    ClientAppName = tostring(parse_json(tostring(InitiatedBy.user)).displayName),\n\
+  \    IPAddress = tostring(parse_json(tostring(InitiatedBy.user)).ipAddress)\n| mv-expand AdditionalDetails\n| extend ClientAppId\
+  \ = AdditionalDetails.value\n    | where tostring(AdditionalDetails.key) == \"AppId\"\n| project \n    TimeGenerated,\n\
+  \    UserName,\n    InitiatedByUser,\n    IPAddress,\n    SP_Name,\n    SP_ObjectId,\n    ClientAppName,\n    ClientAppId,\n\
+  \    OperationName,\n    Result\n| order by TimeGenerated desc"
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics:
+- Persistence
+- PrivilegeEscalation
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

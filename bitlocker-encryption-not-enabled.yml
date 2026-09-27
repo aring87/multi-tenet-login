@@ -1,0 +1,110 @@
+id: 4e8b7d3f-2c19-4f6a-9b5d-7a3e1c8f5d02
+name: BitLocker disabled on managed Windows device - Intune
+description: |
+  Detects Intune-managed Windows devices whose latest available record
+  within seven days reports EncryptionStatusString = False.
+  This is a device-state detection, not evidence of a transition or attack.
+  Results may repeat while the device remains unencrypted.
+  Ownership and join type provide a device risk label.
+  Compliance context identifies discrepancies requiring investigation.
+
+owner: security-engineering
+status: baseline
+enabled: true
+severity: High
+kind: Scheduled
+
+queryFrequency: PT6H
+queryPeriod: P7D
+triggerOperator: GreaterThan
+triggerThreshold: 0
+
+tactics:
+  - DefenseEvasion
+techniques: []
+
+query: |
+  let Lookback = 7d;
+  let UnencryptedDevices =
+      IntuneDevices
+      | where TimeGenerated > ago(Lookback)
+      | where OS == "Windows"
+      | summarize arg_max(TimeGenerated, *) by DeviceId
+      | where EncryptionStatusString == "False"
+      | project DeviceId, DeviceName, EncryptionStatusString, TimeGenerated,
+          OS, OSVersion, Manufacturer, Model, Ownership, ManagedBy,
+          JoinType, DeviceRegistrationState, SerialNumber, UPN,
+          UserEmail, PrimaryUser, LastContact, DeviceState,
+          CompliantState, GraphDeviceIsManaged, StorageTotal, StorageFree;
+  let ComplianceContext =
+      IntuneDeviceComplianceOrg
+      | where TimeGenerated > ago(Lookback)
+      | summarize arg_max(TimeGenerated, *) by DeviceId
+      | project DeviceId, ComplianceState, InGracePeriodUntil,
+          DeviceHealthThreatLevel;
+  UnencryptedDevices
+  | join kind=leftouter ComplianceContext on DeviceId
+  | extend Severity = case(
+      isempty(Ownership) or isempty(JoinType), "Unknown - Needs Review",
+      Ownership == "Corporate" and JoinType == "Azure AD joined", "Critical",
+      Ownership == "Corporate" and JoinType == "Azure AD registered", "High",
+      Ownership == "Personal", "Medium",
+      "Unknown - Needs Review"
+    )
+  | extend ComplianceGapFlag = case(
+      isempty(ComplianceState),
+          "No matching compliance state available; verify directly.",
+      ComplianceState == "Compliant",
+          "Compliance reports Compliant despite reported lack of encryption; investigate.",
+      ComplianceState == "NonCompliant" or ComplianceState == "Not Compliant",
+          "Compliance also reports the device as noncompliant.",
+      "Other compliance state; review the reported value."
+    )
+  | extend InGracePeriodUntil = tostring(InGracePeriodUntil)
+  | extend InGracePeriodUntil = iif(
+      InGracePeriodUntil in (
+          "9999-12-31T23:59:59Z",
+          "12/31/9999 11:59:59 PM"
+      ),
+      "N/A - no grace period",
+      InGracePeriodUntil
+    )
+  | extend AccountName = tostring(split(UPN, "@")[0]),
+           AccountUPNSuffix = tostring(split(UPN, "@")[1])
+  | project TimeGenerated, DeviceName, DeviceId, Severity,
+      EncryptionStatusString, ComplianceGapFlag, ComplianceState,
+      InGracePeriodUntil, DeviceHealthThreatLevel, UPN,
+      AccountName, AccountUPNSuffix, UserEmail, PrimaryUser,
+      OS, OSVersion, Manufacturer, Model, Ownership, ManagedBy,
+      JoinType, DeviceRegistrationState, SerialNumber,
+      StorageTotal, StorageFree, LastContact, DeviceState,
+      GraphDeviceIsManaged
+  | sort by Severity asc
+
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: DeviceName
+  - entityType: Account
+    fieldMappings:
+      - identifier: Name
+        columnName: AccountName
+      - identifier: UPNSuffix
+        columnName: AccountUPNSuffix
+
+customDetails:
+  DeviceRiskLabel: Severity
+  ComplianceGapFlag: ComplianceGapFlag
+  ComplianceState: ComplianceState
+  EncryptionStatus: EncryptionStatusString
+
+createIncident: true
+groupingConfiguration:
+  enabled: true
+  reopenClosedIncident: false
+  lookbackDuration: PT6H
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

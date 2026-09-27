@@ -1,0 +1,32 @@
+id: f93b0a07-8f27-40f0-be7c-40e0115bcb19
+name: 'O365: No successful authentication in 30 Days'
+description: This rule checks for user account inactivity over a 30 day period. If there are no successful login attempts
+  within the 30 day period, the account should be disabled.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Informational
+enabled: true
+query: "SigninLogs\n| extend d = parse_json(AuthenticationDetails)\n| extend LoginTimestamp = todatetime(d[0].authenticationStepDateTime)\n\
+  | where OperationName == \"Sign-in activity\" and isnotempty(AlternateSignInName) \n| summarize max(LoginTimestamp) by AlternateSignInName,\
+  \ Identity\n| where max_LoginTimestamp < ago(30d)\n| distinct AlternateSignInName, Identity"
+queryFrequency: P1D
+queryPeriod: P14D
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics: []
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

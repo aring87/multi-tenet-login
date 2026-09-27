@@ -1,0 +1,49 @@
+id: a4de610b-0bb1-4a9c-a1e6-be882a8970d4
+name: Conditional Access - A Conditional Access policy was disabled
+description: A Conditional Access policy was disabled in Entra ID.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Low
+enabled: true
+query: |-
+  // A Conditional Access policy was disabled.
+  AuditLogs
+  | where OperationName in ("Update conditional access policy")
+  | where Result == "success"
+  | extend modifiedBy = InitiatedBy.user.userPrincipalName
+  | extend CAPolicy = TargetResources[0].displayName
+  | extend NewCAPolicySettings = TargetResources[0].modifiedProperties[0].newValue
+  | extend OldCAPolicySettings = TargetResources[0].modifiedProperties[0].oldValue
+  | where OldCAPolicySettings == "enabled" and NewCAPolicySettings == "disabled"
+  | project
+      TimeGenerated,
+      OperationName,
+      CAPolicy,
+      modifiedBy,
+      Result,
+      NewCAPolicySettings,
+      OldCAPolicySettings
+  | order by TimeGenerated desc
+queryFrequency: PT15M
+queryPeriod: PT15M
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT1H
+suppressionEnabled: false
+tactics:
+- DefenseEvasion
+techniques: []
+subTechniques: []
+alertRuleTemplateName: 40702da1-ae8a-4e46-ac1f-9327ca6ef588
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

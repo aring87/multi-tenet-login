@@ -1,0 +1,56 @@
+id: 801d409c-5809-42cf-9ca5-e6fccddae98c
+name: CrowdStrike Detections
+description: Detections from CrowdStrike
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: High
+enabled: true
+query: |-
+  CrowdStrikeDetections
+  | where Status == "new"
+  | extend Pattern = parse_json(PatternDispositionDetails)
+  | where isnotempty(Pattern)
+  | mv-expand QuarantinedFile = QuarantinedFiles
+  | mv-apply Action = bag_keys(Pattern) on (
+      extend ActionKey = tostring(Action)
+      | where Pattern[ActionKey] == true
+      | summarize TrueActionsList = make_set(ActionKey)
+  )
+  //| where array_length(TrueActionsList) > 0
+  | project
+      ["Alert Name"] = Name,
+      Description,
+      ["Alert Link"] = FalconHostLink,
+      ["Created At"] = CreatedTimestamp,
+      DeviceHostname = tostring(Device.hostname),
+      DevicePlatform = tostring(Device.platform_name),
+      Cmdline,
+      Filename,
+      Filepath,
+      Sha256 = tostring(IocContext.sha256),
+      ParentFilepath = tostring(ParentDetails.filepath),
+      ParentUser = tostring(ParentDetails.user_name),
+      TrueActionsList,
+      QuarantinedFilename = tostring(QuarantinedFile.filename),
+      QuarantinedSha256 = tostring(QuarantinedFile.sha256)
+queryFrequency: PT5M
+queryPeriod: PT5M
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics: []
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

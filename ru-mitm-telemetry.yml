@@ -1,0 +1,138 @@
+id: 780a8314-b3b1-4320-9147-3d4100b5f4f6
+name: RU MiTM telemetry
+description: |-
+  AiTM telemetry was identified where a user account has successfully logged into the tenant meeting the following criteria from an IP geolocation greater than 240 miles away:
+  Distant Geolocation
+  Same Session
+  Different User Agent
+
+  High Confidence for Token Replay = Same Session + Different User Agent
+  LikelyMITM = Different User Agent (Currently Medium Confidence)
+  Same Session ID = Session Reuse + Distant Geolocation
+  Distant Geo = Low Confidence
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Medium
+enabled: true
+query: |-
+  let MinDistanceMiles = 240.0;
+  let MaxGapMinutes = 120;
+  let RU = dynamic(["mhill@dodsecurity.com", "tshelton@dodsecurity.com", "rdalmas@dodsecurity.com", "mali@dodsecurity.com", "cheiner@dodsecurity.com", "jstoltz@dodsecurity.com"]);
+  let NormalizeUA = (ua: string) { tolower(trim(@" \t\r\n", coalesce(ua, ""))) };
+  let Base =
+      union isfuzzy=true
+          (
+          SigninLogs
+          | where UserPrincipalName in~ (RU)
+          | where ResultType == "0"
+          | project
+              TimeGenerated,
+              Identity = tostring(Identity),
+              App = tostring(AppDisplayName),
+              IPAddress = tostring(IPAddress),
+              UserAgent = tostring(UserAgent),
+              SessionId = tostring(Id),
+              LocationDetails = LocationDetails,
+              SourceTable = "SigninLogs"
+          ),
+          (
+          AADNonInteractiveUserSignInLogs
+          | where UserPrincipalName in~ (RU)
+          | where ResultType == "0"
+          | project
+              TimeGenerated,
+              Identity = tostring(Identity),
+              App = tostring(ResourceDisplayName),
+              IPAddress = tostring(IPAddress),
+              UserAgent = tostring(UserAgent),
+              SessionId = tostring(SessionId),
+              LocationDetails = LocationDetails,
+              SourceTable = "AADNonInteractiveUserSignInLogs"
+          );
+  Base
+  | extend UserAgentNorm = NormalizeUA(UserAgent)
+  | extend
+      Geo = LocationDetails_dynamic,
+      Lat = todouble(parse_json(tostring(LocationDetails_dynamic.geoCoordinates)).latitude),
+      Lon = todouble(parse_json(tostring(LocationDetails_dynamic.geoCoordinates)).longitude),
+      Country = tostring(LocationDetails_dynamic.country),
+      Region = tostring(LocationDetails_dynamic.state),
+      City = tostring(LocationDetails_dynamic.city)
+  | where isnotempty(Identity) and isnotempty(App) and isnotempty(IPAddress)
+  | where isnotnull(Lat) and isnotnull(Lon)
+  | sort by Identity asc, App asc, TimeGenerated asc
+  | serialize
+  | extend
+      PrevIdentity = prev(Identity),
+      PrevApp = prev(App),
+      PrevTime = prev(TimeGenerated),
+      PrevIP = prev(IPAddress),
+      PrevUA = prev(UserAgentNorm),
+      PrevLat = prev(Lat),
+      PrevLon = prev(Lon),
+      PrevCountry = prev(Country),
+      PrevCity = prev(City),
+      PrevSessionId = prev(SessionId),
+      UserAgent = NormalizeUA(UserAgent)
+  | where Identity == PrevIdentity and App == PrevApp
+  | where isnotnull(PrevLat) and isnotnull(PrevLon)
+  | where IPAddress != PrevIP
+  | extend
+      TimeDeltaMinutes = datetime_diff("minute", TimeGenerated, PrevTime),
+      DistanceMiles = geo_distance_2points(Lat, Lon, PrevLat, PrevLon) / 1609.344,
+      UAChanged = UserAgentNorm != PrevUA,
+      SameSessionId = iff(isempty(SessionId) or isempty(PrevSessionId), false, SessionId == PrevSessionId)
+  | where DistanceMiles >= MinDistanceMiles and TimeDeltaMinutes between (0 .. MaxGapMinutes)
+  | extend GapReason = case(
+                           SameSessionId and UAChanged,
+                           "HighConfidence_TokenReplay",
+                           UAChanged,
+                           "LikelyMITM_ChangedUserAgent",
+                           SameSessionId,
+                           "SessionReuse_DistantGeo",
+                           "DistantGeo"
+                       )
+  | project
+      TimeGenerated,
+      Identity,
+      App,
+      SourceTable,
+      PrevTime,
+      TimeDeltaMinutes,
+      DistanceMiles = round(DistanceMiles, 1),
+      GapReason,
+      UAChanged,
+      SameSessionId,
+      PrevIP,
+      IPAddress,
+      PrevCountry,
+      PrevCity,
+      Country,
+      City,
+      PrevUA,
+      UserAgent
+  | order by TimeGenerated desc
+queryFrequency: PT15M
+queryPeriod: P1D
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics:
+- CredentialAccess
+- LateralMovement
+- DefenseEvasion
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

@@ -1,0 +1,112 @@
+id: 48fbde35-e85a-4d24-80b3-07136ed0070c
+name: Silent Log Source Detection
+description: This rule detects critical log sources that have gone silent past a given time period.  This is important because
+  these log sources are not directly influenced by user activity.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: High
+enabled: true
+query: |-
+  //============================================================
+  //COMPONENT 1: Silent Log Source Detection - Analytics Rule
+  //Deploy as: Scheduled Analytics Rule
+  //Frequency: Every 1h | Lookback: 24h | Severity: High
+  //============================================================
+  // - Define your critical sources here -
+  //Add or remove entries to match your environment.
+  //"TableName" must be the exact Log Analytics table name.
+  //"SilenceThresholdHours" is how long with no data = alert.
+  //Heartbeat, MicrosoftGraphActivityLogs, SecurityEvent, CommonSecurityLog
+  let CriticalSources = datatable(
+      SourceLabel: string,
+      TableName: string,
+      SilenceThresholdHours: int
+  )[
+      //Infrastructure / endpoint health
+      "AzureMonitor Agent Heartbeat", "Heartbeat", 4,
+      "Windows Security Events", "SecurityEvent", 4,
+      "Graph Activity", "MicrosftGraphActivityLogs", 4,
+      // Network / perimeter (CommonSecurityLog covers CEF-forwarded sources)
+      "Firewall CEF", "CommonSecurityLog", 4,
+      "Proxy CEF", "CommonSecurityLog", 4,
+  // - PLACEHOLDER: Replace with custom table names -
+  //"Syslog Forwarder",               "<YourCustomTable>",      4,
+  ];
+  // - Per-source last-seen timestamps -
+  let HeartbeatLast = Heartbeat
+      | summarize LastSeen = max(TimeGenerated)
+      | extend SourceLabel = "AzureMonitor Agent Heartbeat";
+  let SecurityEventLast = SecurityEvent
+      | summarize LastSeen = max(TimeGenerated)
+      | extend SourceLabel = "Windows Security Events";
+  //CommonSecurityLog: split by DeviceVendor+DeviceProduct so a single
+  //CEF pipeline can surface per-device silence, not just table-level silence.
+  let CSLLast = CommonSecurityLog
+      | summarize LastSeen = max(TimeGenerated) by DeviceVendor, DeviceProduct
+      | extend SourceLabel = strcat(DeviceVendor, " / ", DeviceProduct);
+  let GraphLast = MicrosoftGraphActivityLogs
+      | summarize LastSeen = max(TimeGenerated)
+      | extend SourceLabel = "Graph Activity";
+  // - Union all last-seen rows -
+  let AllLastSeen = union
+          (GraphLast
+          | project SourceLabel, LastSeen),
+          (HeartbeatLast
+          | project SourceLabel, LastSeen),
+          (SecurityEventLast
+          | project SourceLabel, LastSeen),
+          (CSLLast
+          | project SourceLabel, LastSeen);
+  // - Compare against thresholds -
+  CriticalSources
+  | join kind=leftouter AllLastSeen on SourceLabel
+  | extend
+      LastSeen         = coalesce(LastSeen, datetime(1970-01-01)),   // never seen = epoch
+      HoursSinceLastLog = datetime_diff('hour', now(), LastSeen)
+  | where HoursSinceLastLog >= SilenceThresholdHours
+      or isnull(LastSeen)
+  | project
+      SourceLabel,
+      TableName,
+      SilenceThresholdHours,
+      LastSeen,
+      HoursSinceLastLog,
+      //The severity matches the Sentinel incident card
+      AlertSeverity    = case(
+                         HoursSinceLastLog >= 48,
+                         "High",
+                         HoursSinceLastLog >= 24,
+                         "Medium",
+                         "Low"
+                     ),
+      AlertDetail      = strcat(
+                         SourceLabel,
+                         " has not logged in ",
+                         tostring(HoursSinceLastLog),
+                         " hours. ",
+                         "Threshold: ",
+                         tostring(SilenceThresholdHours),
+                         "h."
+                     )
+  | order by HoursSinceLastLog desc
+queryFrequency: PT1H
+queryPeriod: P1D
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics: []
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

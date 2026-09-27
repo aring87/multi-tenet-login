@@ -1,0 +1,60 @@
+id: 3f4ca249-dc4c-44aa-97f5-3bc15aa14259
+name: High-Severity Defender Recommendations
+description: 0223980 - Microsoft Defender Recommendations
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Informational
+enabled: true
+query: |-
+  // Org-level summary of software update "recommendations"
+  let severity_score = (s:string)
+  {
+    case(s=="Critical",4, s=="High",3, s=="Medium",2, s=="Low",1, 0)
+  };
+  DeviceTvmSoftwareVulnerabilities
+  | extend SevScore = severity_score(VulnerabilitySeverityLevel)
+  | join kind=leftouter (
+      DeviceTvmSoftwareVulnerabilitiesKB
+      | project CveId,
+               IsExploitAvailable,
+               CvssScore = todouble(CvssScore),
+               PublishedDate
+  ) on CveId
+  | summarize
+      AffectedDevices       = dcount(DeviceId),
+      Vendors               = make_set(SoftwareVendor, 5),
+      Platforms             = make_set(OSPlatform, 5),
+      CVEs                  = make_set(CveId, 100),
+      CveCount              = dcount(CveId),
+      WorstSevScore         = max(SevScore),
+      ExploitAvailFlag      = max(case(IsExploitAvailable == true, 1, 0)),
+      MaxCvss               = max(CvssScore),
+      LatestCvePublished    = max(PublishedDate)
+    by SoftwareName, RecommendedSecurityUpdate, RecommendedSecurityUpdateId
+  | extend WorstSeverity = case(WorstSevScore==4,"Critical",
+                                WorstSevScore==3,"High",
+                                WorstSevScore==2,"Medium",
+                                WorstSevScore==1,"Low","Unknown"),
+           ExploitAvailable = iff(ExploitAvailFlag==1, true, false)
+  | order by AffectedDevices desc, WorstSevScore desc
+queryFrequency: P7D
+queryPeriod: P7D
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics: []
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

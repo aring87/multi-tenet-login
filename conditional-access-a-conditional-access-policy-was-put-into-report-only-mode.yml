@@ -1,0 +1,49 @@
+id: 4f86ebec-7f93-49f7-a09b-3633fba3f43c
+name: Conditional Access - A Conditional Access policy was put into report-only mode
+description: A Conditional Access policy was put into report-only mode in Entra ID.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Low
+enabled: true
+query: |-
+  // A Conditional Access policy was put into report-only mode.
+  AuditLogs
+  | where OperationName in ("Update conditional access policy")
+  | where Result == "success"
+  | extend modifiedBy = InitiatedBy.user.userPrincipalName
+  | extend CAPolicy = TargetResources[0].displayName
+  | extend NewCAPolicySettings = TargetResources[0].modifiedProperties[0].newValue
+  | extend OldCAPolicySettings = TargetResources[0].modifiedProperties[0].oldValue
+  | where OldCAPolicySettings == "enabled" and NewCAPolicySettings == "enabledForReportingButNotEnforced"
+  | project
+      TimeGenerated,
+      OperationName,
+      CAPolicy,
+      modifiedBy,
+      Result,
+      OldCAPolicySettings,
+      NewCAPolicySettings
+  | order by TimeGenerated desc
+queryFrequency: PT15M
+queryPeriod: PT15M
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT1H
+suppressionEnabled: false
+tactics:
+- DefenseEvasion
+techniques: []
+subTechniques: []
+alertRuleTemplateName: 5588de32-73b1-40b9-bddc-4d9e74051859
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

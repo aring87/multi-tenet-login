@@ -1,0 +1,34 @@
+id: a7f960c0-0599-4df5-b161-ef368489120a
+name: Silent Log Source - AuditLogs
+description: This rule checks if AuditLogs have been ingested in the last 24 hours. If no logs have been received in a 24
+  hour period, there may be an issue with the data source.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Medium
+enabled: true
+query: |-
+  AuditLogs
+  | summarize LastLogTime = max(TimeGenerated)
+  | extend HoursSinceLastLog = datetime_diff("second", now(), LastLogTime) / 3600.0
+  | where HoursSinceLastLog >= 24
+queryFrequency: P1D
+queryPeriod: P1D
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics: []
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

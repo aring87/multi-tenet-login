@@ -1,0 +1,39 @@
+id: 7a4bb732-83a5-4817-b27a-086ffab5c44a
+name: Silent Log Source - AADNonInteractiveUserSignInLogs
+description: 'TODO: no description in export.'
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: Medium
+enabled: true
+query: |-
+  let TimeNow = now();
+  let LookbackPeriod = 7d;
+  let SilentThreshold = 1d;
+  let ActiveStart = TimeNow - LookbackPeriod;
+  let ActiveEnd = TimeNow - SilentThreshold;
+  let SilentStart = ActiveEnd;
+  let SilentEnd = TimeNow;
+  AADNonInteractiveUserSignInLogs
+      | extend Source = "AADNonInteractiveUserSignInLogs", TenantId = TenantId
+      | project TimeGenerated, Source, TenantId
+queryFrequency: P7D
+queryPeriod: P7D
+triggerOperator: LessThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics: []
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

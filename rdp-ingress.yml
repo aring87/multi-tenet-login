@@ -1,0 +1,35 @@
+id: 0fc47659-ecc2-40ab-be3b-23fd5afa51d6
+name: RDP Ingress
+description: |-
+  Defines a set of historic RDP devices by filtering the DeviceNetworkEvents for successful connections ('ActionType == "ConnectionSuccess"') to a Private IP over port 3389 within 30 days.
+  It filters the DeviceNetworkEvents table again, within the last hour, for successful connections to an internal IP over port 3389.  It also excludes any "historic_rdp_devices", which identifies machines making their first RDP connection within the last 30 days.
+owner: security-engineering
+status: baseline
+kind: Scheduled
+severity: High
+enabled: true
+query: "let historic_rdp_devices = toscalar(\n\tDeviceNetworkEvents\n\t| where TimeGenerated > ago (30d)\n\t| where ActionType\
+  \ == \"ConnectionSuccess\"\n\t| where RemoteIPType == \"Private\"\n\t| where RemotePort == 3389\n\t| summarize make_set(DeviceId)\n\
+  );\nDeviceNetworkEvents\n| where TimeGenerated > ago(1h) \n| where ActionType == \"ConnectionSuccess\" \n| where RemoteIPType\
+  \ == \"Private\"\n| where RemotePort == 3389\n| where DeviceId !in (historic_rdp_devices)"
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: GreaterThan
+triggerThreshold: 0
+suppressionDuration: PT5H
+suppressionEnabled: false
+tactics:
+- LateralMovement
+techniques: []
+subTechniques: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+createIncident: false
+groupingConfiguration:
+  enabled: false
+  reopenClosedIncident: false
+  lookbackDuration: PT5M
+  matchingMethod: AllEntities
+  groupByEntities: []
+  groupByAlertDetails: []
+  groupByCustomDetails: []

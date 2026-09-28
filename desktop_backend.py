@@ -10,7 +10,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from full_onboarding import CLI, Onboard, Stop, guid, require, validate_config
+from lighthouse_onboarding import CLI, Onboard, Stop, guid, require, validate_config
 
 BASE = Path(__file__).resolve().parent
 DATA = BASE / "desktop-data"
@@ -185,17 +185,32 @@ class DesktopCLI(CLI):
         return json.loads(result.stdout) if result.stdout.strip() else None
 
 def config_from_workspace(workspace, client, label, fields, extras=None):
+    """Build a delegation onboarding config from a discovered workspace.
+
+    Under the Lighthouse model the per-client fields are gone: no app owners, no
+    OIDC subject format, no per-client reviewers or environments, no human groups.
+    What remains constant for every client comes from settings - the managing
+    tenant, the three pipeline group Object IDs, and the two shared environment
+    names."""
     require(workspace, "Select a discovered workspace first.")
+    constants = ("managing_tenant_id", "deploy_group_object_id", "read_group_object_id",
+                 "engineer_group_object_id", "preview_environment", "production_environment")
+    for key in constants:
+        require(fields.get(key), f"Missing {key}. Set the managing tenant, the three pipeline "
+                                 "group Object IDs and the two shared environment names in settings.")
     config = dict(tenant_id=workspace["tenant_id"], subscription_id=workspace["subscription_id"],
                   resource_group=workspace["resource_group"], workspace_name=workspace["workspace_name"],
-                  client=client, workspace_label=label, github_owner=fields["github_owner"],
-                  github_repo=fields["github_repo"], oidc_subject_format=fields["oidc_subject_format"],
-                  app_owner_user_ids=[x.strip() for x in fields["app_owners"].split(",") if x.strip()],
-                  production_reviewers=[{"type": fields["reviewer_type"], "name": x.strip()}
-                                        for x in fields["reviewers"].split(",") if x.strip()],
-                  initial_rule_path=fields["rule_path"], allow_missing_mitre=fields["allow_missing_mitre"],
-                  human_groups=(extras or {}).get("human_groups", []))
-    for key in ("existing_preview_app_client_id", "existing_deploy_app_client_id"):
+                  client=client, workspace_label=label,
+                  github_owner=fields["github_owner"], github_repo=fields["github_repo"],
+                  managing_tenant_id=fields["managing_tenant_id"],
+                  deploy_group_object_id=fields["deploy_group_object_id"],
+                  read_group_object_id=fields["read_group_object_id"],
+                  engineer_group_object_id=fields["engineer_group_object_id"],
+                  preview_environment=fields["preview_environment"],
+                  production_environment=fields["production_environment"],
+                  initial_rule_path=fields["rule_path"],
+                  allow_missing_mitre=fields["allow_missing_mitre"])
+    for key in ("msp_offer_name", "delegation_location"):
         if fields.get(key):
             config[key] = fields[key]
     # Validation derives target; do not include that internal field in exported configuration.
@@ -203,38 +218,12 @@ def config_from_workspace(workspace, client, label, fields, extras=None):
     return config
 
 def permission_run(session, workspace, target, principals, apply=False):
-    require(re.fullmatch(r"[a-z][a-z0-9-]{1,49}", target), "Use a lowercase target ID.")
-    first, second = [guid(x, "service principal Object ID") for x in principals]
-    require(first != second, "Preview and deployment service principals must differ.")
-    session.verify(workspace)
-    for value in (first, second):
-        principal = session.az("ad", "sp", "show", "--id", value)
-        require(principal["id"].lower() == value, "Use the enterprise application's Object ID, not the app's client ID.")
-    current = session.az("monitor", "log-analytics", "workspace", "show",
-                         "--subscription", workspace["subscription_id"], "--resource-group", workspace["resource_group"],
-                         "--workspace-name", workspace["workspace_name"])
-    verified = workspace_record(current, workspace["subscription_id"], workspace["tenant_id"])
-    require(verified["workspace_id"] == workspace["workspace_id"], "Workspace changed since discovery.")
-    params = {"parameters": {k: {"value": v} for k, v in dict(targetName=target,
-        workspaceName=workspace["workspace_name"], previewPrincipalObjectId=first,
-        deploymentPrincipalObjectId=second).items()}}
-    folder = DATA / "runs" / target
-    folder.mkdir(parents=True, exist_ok=True)
-    paramfile = folder / "permissions.parameters.json"
-    paramfile.write_text(json.dumps(params, indent=2), encoding="utf-8")
-    common = ["--subscription", workspace["subscription_id"], "--resource-group", workspace["resource_group"],
-              "--name", "onboard-" + target, "--template-file", str(BASE / "azuredeploy.json"),
-              "--parameters", "@" + str(paramfile), "--mode", "Incremental"]
-    session.log("Validating permissions and retrieving Azure what-if...")
-    session.az("deployment", "group", "validate", *common)
-    preview = session.az("deployment", "group", "what-if", *common, "--no-pretty-print")
-    session.log(json.dumps(preview, indent=2))
-    if apply:
-        session.log("Applying the scoped permission template...")
-        result = session.az("deployment", "group", "create", *common)
-        require(result.get("properties", {}).get("provisioningState") == "Succeeded", "Permission deployment did not succeed.")
-        return "Permissions applied successfully."
-    return "Permission plan completed. No role assignments were changed."
+    """Retired. Kept so the UI reports why rather than failing obscurely."""
+    raise Stop(
+        "Permissions-only mode is retired. Client access is now granted by an Azure Lighthouse "
+        "delegation that assigns built-in roles to managing-tenant groups, not by per-client "
+        "custom roles on per-client service principals. Use full onboarding, which deploys the "
+        "delegation and opens the target pull request.")
 
 def full_run(session, config, apply=False):
     validate_config(config)
@@ -256,11 +245,10 @@ def full_run(session, config, apply=False):
         buffer = io.StringIO()
         try:
             with contextlib.redirect_stdout(buffer):
-                Onboard(config, DesktopCLI(session, apply), state, BASE / "azuredeploy.json").run()
+                Onboard(config, DesktopCLI(session, apply), state, BASE / "lighthouse-onboard.json").run()
         finally:
             session.log(buffer.getvalue())
         return "Full onboarding completed." if apply else "Full onboarding plan completed; no cloud resources changed."
     finally:
         if acquired:
             lock.unlink()
-

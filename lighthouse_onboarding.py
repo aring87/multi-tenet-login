@@ -318,7 +318,7 @@ class Onboard:
         return "\n".join(lines) + "\n"
 
     def inspect_target(self):
-        filename = ("workspace.yml" if self.c["workspace_label"] == "primary"
+        filename = ("workspace.yml" if self.c["workspace_label"] in ("primary", "workspace")
                     else "workspace-" + self.c["workspace_label"] + ".yml")
         self.target_path = f"clients/{self.c['client']}/{filename}"
         self.branch = "onboard/" + self.c["target"]

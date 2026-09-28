@@ -13,11 +13,17 @@ import webbrowser
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
-                             config_from_workspace, permission_run, full_run, validate_tenant_hint, CYBERQP_PORTALS)
-from full_onboarding import validate_config
+                             config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
+from lighthouse_onboarding import validate_config
 from datetime import datetime, timedelta, timezone
 from audit_evidence import collect_evidence, date_range
 from audit_analysis import validate_expectations
+
+# Constants that are identical for every client under the delegated model. They are
+# entered once and persisted locally, rather than retyped per onboarding.
+SETTINGS_KEYS = ("github_owner", "github_repo", "managing_tenant_id", "deploy_group_object_id",
+                 "read_group_object_id", "engineer_group_object_id", "preview_environment",
+                 "production_environment", "msp_offer_name", "delegation_location")
 
 class App:
     def __init__(self, root):
@@ -37,7 +43,9 @@ class App:
         self.plan = None
         self.extras = {}
         self.clientfile = DATA / "clients.json"
+        self.settingsfile = DATA / "settings.json"
         self.clients = self.read_clients()
+        self.settings = self.read_settings()
         self.vars = {}
         self.controls = []
         self.evidence_folder = None
@@ -60,6 +68,42 @@ class App:
                 messagebox.showerror("Client inventory",str(error))
                 return []
         return []
+
+    def read_settings(self):
+        if self.settingsfile.exists():
+            try:
+                value=json.loads(self.settingsfile.read_text(encoding="utf-8"))
+                require(isinstance(value,dict), "Invalid saved settings.")
+                require(not (value.keys()-set(SETTINGS_KEYS)), "Saved settings contain unknown fields.")
+                require(all(isinstance(v,str) for v in value.values()), "Saved settings must be strings.")
+                return value
+            except Exception as error:
+                messagebox.showerror("Settings",str(error))
+                return {}
+        return {}
+
+    def save_settings(self):
+        value={k:self.vars[k].get().strip() for k in SETTINGS_KEYS if k in self.vars}
+        for key in ("managing_tenant_id","deploy_group_object_id","read_group_object_id",
+                    "engineer_group_object_id"):
+            if value.get(key):
+                try:
+                    value[key]=guid(value[key],key.replace("_"," "))
+                except Stop as error:
+                    messagebox.showerror("Settings",str(error),parent=self.root)
+                    return
+        try:
+            temp=self.settingsfile.with_suffix(".tmp")
+            temp.write_text(json.dumps(value,indent=2),encoding="utf-8")
+            temp.replace(self.settingsfile)
+        except OSError as error:
+            messagebox.showerror("Settings",str(error),parent=self.root)
+            return
+        self.settings=value
+        for key,current in value.items():
+            if key in self.vars:
+                self.vars[key].set(current)
+        self.status.set("Managing-tenant settings saved locally. They apply to every client onboarding.")
 
     def var(self,name,default=""):
         self.vars[name]=tk.StringVar(value=default)
@@ -132,7 +176,7 @@ class App:
         tk.Label(sidebar,text="SENTINEL",bg="#12213a",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(30,4))
         tk.Label(sidebar,text="WORKSPACE DISCOVERY",bg="#12213a",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
         self.nav=[]
-        for i,(title,desc) in enumerate([("Discover","Sign in & copy details"),("Configure","Permissions & identities"),("Review","Preview & apply"),("Audit Evidence","Read-only Azure & Sentinel")]):
+        for i,(title,desc) in enumerate([("Discover","Sign in & copy details"),("Configure","Delegation & target file"),("Review","Preview & apply"),("Audit Evidence","Read-only Azure & Sentinel")]):
             row=tk.Frame(sidebar,bg="#12213a",cursor="hand2",takefocus=1)
             row.pack(fill="x",padx=12,pady=4)
             number=tk.Label(row,text=f"0{i+1}",bg="#12213a",fg="#7893b3",
@@ -225,34 +269,44 @@ class App:
         self.identity.trace_add("write",lambda *args:self.render_details())
         self.render_details()
         self.button(body,"Copy workspace details",self.copy_workspace).pack(anchor="w")
-        self.button(connect,"Advanced: permissions & onboarding  >",lambda:self.tabs.select(1),"Primary.TButton").grid(
+        self.button(connect,"Advanced: delegation & onboarding  >",lambda:self.tabs.select(1),"Primary.TButton").grid(
             row=1,column=1,sticky="e",pady=(0,16))
-        top,body=self.card(settings,"Setup scope","Choose what you want to configure for this workspace.")
+        top,body=self.card(settings,"This client",
+            "Onboarding deploys one Azure Lighthouse delegation in the client's tenant and opens a target-file pull request. "
+            "No app registrations, federated credentials, GitHub environments or custom roles are created per client.")
         top.pack(fill="x",pady=(0,16))
-        modebox=self.form(body,"Operation","mode","Permissions only",["Permissions only","Full Azure + GitHub onboarding"])
-        modebox.bind("<<ComboboxSelected>>",lambda e:self.update_mode())
         self.form(body,"Workspace identity label","label","primary")
         ttk.Label(body,text="The primary label uses workspace.yml. Additional labels keep separate workspace files and targets.",
-                  style="Muted.TLabel",wraplength=810).pack(anchor="w")
-        self.permissioncard,body=self.card(settings,"Existing application permissions","Use the enterprise application's Object ID for each identity.")
-        self.permissioncard.pack(fill="x",pady=(0,16))
-        self.form(body,"Preview service principal Object ID","preview_principal")
-        self.form(body,"Deployment service principal Object ID","deploy_principal")
-        self.fullcard,body=self.card(settings,"Azure & GitHub onboarding","Configure separate identities, environments and a client pull request.")
-        self.form(body,"GitHub organization","github_owner","")
-        self.form(body,"GitHub repository","github_repo","")
-        self.form(body,"App owner user Object IDs - comma separated","app_owners")
-        self.form(body,"Production reviewer type","reviewer_type","User",["User","Team"])
-        self.form(body,"Reviewer names - comma separated","reviewers")
-        self.form(body,"OIDC subject format","oidc_subject_format","",["immutable","legacy"])
+                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
         self.form(body,"Initial rule path - optional","rule_path")
         self.vars["allow_missing_mitre"]=tk.BooleanVar(value=False)
         cb=ttk.Checkbutton(body,text="Allow missing MITRE metadata (approved exception)",variable=self.vars["allow_missing_mitre"])
-        cb.pack(anchor="w",pady=(0,16));self.controls.append((cb,"normal"))
-        row=ttk.Frame(body,style="Card.TFrame");row.pack(fill="x")
+        cb.pack(anchor="w",pady=(0,8));self.controls.append((cb,"normal"))
+        ttk.Label(body,text="An initial rule is committed disabled. Leave blank to create the target with no rules selected.",
+                  style="Muted.TLabel",wraplength=810).pack(anchor="w")
+        self.constantscard,body=self.card(settings,"Managing tenant (set once)",
+            "These are identical for every client. Saved locally in desktop-data and reused on each onboarding.")
+        self.constantscard.pack(fill="x",pady=(0,16))
+        self.form(body,"GitHub organization","github_owner",self.settings.get("github_owner",""))
+        self.form(body,"GitHub repository","github_repo",self.settings.get("github_repo",""))
+        self.form(body,"Managing tenant ID","managing_tenant_id",self.settings.get("managing_tenant_id",""))
+        ttk.Label(body,text="The managing tenant receives the delegated access. It is written into the target file as tenant_id, because the pipeline authenticates there and the client's subscription is visible from it.",
+                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
+        self.form(body,"Deploy group Object ID","deploy_group_object_id",self.settings.get("deploy_group_object_id",""))
+        self.form(body,"Preview group Object ID","read_group_object_id",self.settings.get("read_group_object_id",""))
+        self.form(body,"Engineers group Object ID","engineer_group_object_id",self.settings.get("engineer_group_object_id",""))
+        ttk.Label(body,text="Groups in the managing tenant, not the client's. The delegation grants them built-in roles; Lighthouse cannot delegate custom role definitions.",
+                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
+        self.form(body,"Shared preview environment","preview_environment",self.settings.get("preview_environment",""))
+        self.form(body,"Shared production environment","production_environment",self.settings.get("production_environment",""))
+        ttk.Label(body,text="Both environments are shared by every client and created once by hand, with AZURE_CLIENT_ID and required reviewers. Onboarding verifies them and refuses to create them.",
+                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
+        self.form(body,"Offer name - optional","msp_offer_name",self.settings.get("msp_offer_name",""))
+        self.form(body,"Delegation location - optional","delegation_location",self.settings.get("delegation_location",""))
+        row=ttk.Frame(body,style="Card.TFrame");row.pack(fill="x",pady=(4,0))
+        self.button(row,"Save as defaults",self.save_settings,"Primary.TButton").pack(side="left",padx=(0,10))
         self.button(row,"Sign in to GitHub",self.github_login).pack(side="left",padx=(0,10))
         self.button(row,"Export configuration",self.export_config).pack(side="left")
-        for key in ("existing_preview_app_client_id","existing_deploy_app_client_id"):self.var(key)
         self.configfooter=ttk.Frame(settings)
         self.configfooter.pack(fill="x",pady=(0,16))
         self.button(self.configfooter,"Continue to review  >",lambda:self.tabs.select(2),"Primary.TButton").pack(side="right")
@@ -317,9 +371,9 @@ class App:
 
     def page_changed(self,event=None):
         index=self.tabs.index("current")
-        titles=["Connect your client","Configure workspace setup","Review & apply","Audit evidence"]
+        titles=["Connect your client","Configure client onboarding","Review & apply","Audit evidence"]
         subtitles=["Discover the right workspace without navigating the Azure portal.",
-                   "Set up permissions for existing identities, or onboard a new client.",
+                   "Deploy a Lighthouse delegation and open the client's target-file pull request.",
                    "Confirm the destination, preview the setup, then apply.",
                    "Collect and export Azure / Sentinel evidence for the selected workspace."]
         self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
@@ -330,14 +384,6 @@ class App:
             number.configure(bg=background,fg="#a9c8ff" if selected else "#7893b3")
             name.configure(bg=background,fg="#ffffff" if selected else "#d8e5f5")
             description.configure(bg=background,fg="#d5e5fb" if selected else "#9bb4d4")
-
-    def update_mode(self):
-        if self.vars["mode"].get()=="Permissions only":
-            self.fullcard.pack_forget()
-            self.permissioncard.pack(fill="x",pady=(0,16),before=self.configfooter)
-        else:
-            self.permissioncard.pack_forget()
-            self.fullcard.pack(fill="x",pady=(0,16),before=self.configfooter)
 
     def delete_client(self):
         if self.busy:
@@ -363,8 +409,7 @@ class App:
         self.clients=remaining
         self.auth_hint=None
         self.clear_selection()
-        for key in ("client_name","tenant","client_slug","preview_principal","deploy_principal","app_owners",
-                    "existing_preview_app_client_id","existing_deploy_app_client_id"):
+        for key in ("client_name","tenant","client_slug"):
             self.vars[key].set("")
         self.extras={}
         self.refresh_clients()
@@ -684,43 +729,35 @@ class App:
         require(sub["tenantId"].lower()==self.workspace["tenant_id"].lower(), "Client/tenant selection changed.")
         require(re.fullmatch(r"[a-z][a-z0-9-]{1,47}",v["client_slug"]), "Use a lowercase client slug.")
         require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*",v["label"]), "Use a lowercase workspace label.")
-        target=v["client_slug"]+"-"+v["label"]
-        principals=[v["preview_principal"],v["deploy_principal"]]
-        if v["mode"]=="Permissions only":
-            require(all(principals), "Enter the preview and deployment enterprise application Object IDs in Setup options.")
-            [guid(x,"service principal Object ID") for x in principals]
-            config=dict(self.workspace,target=target)
-        else:
-            config=config_from_workspace(self.workspace,v["client_slug"],v["label"],v,self.extras)
-        return config,v["mode"],principals
+        return config_from_workspace(self.workspace,v["client_slug"],v["label"],v,self.extras)
 
     def onboard(self,apply):
         try:
-            config,mode,principals=self.payload()
-            token=fingerprint(config,mode,principals)
+            config=self.payload()
+            token=fingerprint(config,"lighthouse-delegation",[])
             if apply:
                 require(self.plan and self.plan[0]==token and time.time()-self.plan[1]<900,
                         "Preview this exact configuration first. Plans expire after 15 minutes.")
-            target=config.get("target") or config["client"]+"-"+config["workspace_label"]
-            summary=(mode+"\nTarget: "+target+"\nTenant: "+config["tenant_id"]+
+            target=config["client"]+"-"+config["workspace_label"]
+            summary=("Lighthouse delegation onboarding\nTarget: "+target+
+                     "\nClient tenant: "+config["tenant_id"]+
+                     "\nManaging tenant: "+config["managing_tenant_id"]+
                      "\nSubscription: "+config["subscription_id"]+"\nWorkspace: "+config["workspace_name"]+
                      "\nResource group: "+config["resource_group"])
             self.summary.set(summary)
             if apply and not messagebox.askokcancel("Apply reviewed setup",summary+
-                    "\n\nThis changes permissions"+(" and Azure/GitHub onboarding resources." if mode!="Permissions only" else ".")+
-                    "\nProceed with this destination?",parent=self.root):
+                    "\n\nThis delegates the client subscription to the managing tenant and opens a "
+                    "target-file pull request.\nProceed with this destination?",parent=self.root):
                 return
             self.tabs.select(2)
             self.plan=None
             def task():
-                if mode=="Permissions only":
-                    return permission_run(self.session,config,target,principals,apply)
                 return full_run(self.session,config,apply)
             def done(result):
                 self.log(result)
                 self.status.set(result)
                 if not apply: self.plan=(token,time.time())
-                elif mode!="Permissions only": self.log("Review the PR and environment bypass settings before the first rule deployment.")
+                else: self.log("Merge the reviewed PR, run preview on main, review the what-if, then run an approved deployment.")
             self.work("Applying reviewed setup..." if apply else "Building a read-only setup plan...",task,done)
         except Exception as error: messagebox.showerror("Setup details",str(error))
 
@@ -746,7 +783,7 @@ class App:
                                             filetypes=[("JSON configuration","*.json")])
             if path:
                 Path(path).write_text(json.dumps(config,indent=2),encoding="utf-8")
-                self.status.set("Onboarding configuration exported.")
+                self.status.set("Onboarding configuration exported. It contains client and managing-tenant identifiers; store it accordingly.")
         except Exception as error: messagebox.showerror("Export",str(error))
 
     def import_config(self):
@@ -755,22 +792,21 @@ class App:
         try:
             c=json.loads(Path(path).read_text(encoding="utf-8-sig")); validate_config(c)
             self.clear_selection()
-            mapping={"tenant":"tenant_id","client_slug":"client","label":"workspace_label","github_owner":"github_owner",
-                     "github_repo":"github_repo","oidc_subject_format":"oidc_subject_format","rule_path":"initial_rule_path",
-                     "existing_preview_app_client_id":"existing_preview_app_client_id","existing_deploy_app_client_id":"existing_deploy_app_client_id"}
+            mapping={"tenant":"tenant_id","client_slug":"client","label":"workspace_label",
+                     "github_owner":"github_owner","github_repo":"github_repo",
+                     "managing_tenant_id":"managing_tenant_id",
+                     "deploy_group_object_id":"deploy_group_object_id",
+                     "read_group_object_id":"read_group_object_id",
+                     "engineer_group_object_id":"engineer_group_object_id",
+                     "preview_environment":"preview_environment",
+                     "production_environment":"production_environment",
+                     "msp_offer_name":"msp_offer_name","delegation_location":"delegation_location",
+                     "rule_path":"initial_rule_path"}
             for local,source in mapping.items(): self.vars[local].set(c.get(source,""))
             self.vars["client_name"].set(c["client"])
-            self.vars["app_owners"].set(", ".join(c["app_owner_user_ids"]))
-            reviewers=c["production_reviewers"]
-            require(len({r["type"] for r in reviewers})==1,"This UI supports all User or all Team reviewers in a single config.")
-            self.vars["reviewer_type"].set(reviewers[0]["type"])
-            self.vars["reviewers"].set(", ".join(r["name"] for r in reviewers))
             self.vars["allow_missing_mitre"].set(c.get("allow_missing_mitre",False))
-            self.vars["mode"].set("Full Azure + GitHub onboarding")
-            self.update_mode()
-            self.extras={"human_groups":c.get("human_groups",[])}
+            self.extras={}
             self.status.set("Imported settings. Sign in and rediscover the workspace to verify the destination.")
-            self.log("Imported "+str(len(self.extras["human_groups"]))+" optional human group definitions.")
         except Exception as error: messagebox.showerror("Import",str(error))
 
     def github_login(self):

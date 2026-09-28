@@ -238,9 +238,6 @@ class Onboard:
         state = self.io.az("provider", "show", "--namespace", MANAGED_SERVICES,
                            "--subscription", self.c["subscription_id"])["registrationState"]
         self.provider_registered = state == "Registered"
-        require(self.provider_registered or self.apply,
-                f"{MANAGED_SERVICES} is {state}. Rerun with --apply to register it, or register "
-                "it in the portal under Subscription > Resource providers.")
 
     def check_existing_delegation(self):
         existing = self.io.az("managedservices", "assignment", "list",

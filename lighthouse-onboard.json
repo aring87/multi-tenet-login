@@ -1,0 +1,140 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Delegates a client subscription to the Your Organization tenant for Sentinel detection-as-code management. Deploy at SUBSCRIPTION scope, signed in to the CLIENT tenant. Requires Owner or User Access Administrator (Microsoft.Authorization/roleAssignments/write) on the target subscription.",
+    "notes": [
+      "Lighthouse authorizations accept BUILT-IN roles only. Custom role definitions cannot be delegated.",
+      "Delegation reaches Azure resource scopes only, never Entra directory objects.",
+      "Principals are GROUPS, so pipeline identities can be rotated or added later without redeploying any client.",
+      "Deploying the same offer name to a second client subscription is expected - each subscription gets its own registrationAssignment."
+    ]
+  },
+  "parameters": {
+    "mspOfferName": {
+      "type": "string",
+      "defaultValue": "Your Organization - Sentinel Detection Engineering",
+      "metadata": {
+        "description": "Shown to the client under Service Providers. Keep identical across clients so the definition GUID is stable."
+      }
+    },
+    "mspOfferDescription": {
+      "type": "string",
+      "defaultValue": "Detection-as-code management of Microsoft Sentinel analytics rules.",
+      "metadata": { "description": "Client-facing description of the offer." }
+    },
+    "managedByTenantId": {
+      "type": "string",
+      "defaultValue": "00000000-0000-0000-0000-000000000000",
+      "metadata": { "description": "Your Organization tenant ID. The managing tenant." }
+    },
+    "deployGroupObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of sg-sentinel-pipeline-deploy in the managing tenant. Holds the deploy service principal."
+      }
+    },
+    "readGroupObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of sg-sentinel-pipeline-preview in the managing tenant. Holds the preview service principal."
+      }
+    },
+    "engineerGroupObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of sg-sentinel-detection-engineers. Human read access for investigation."
+      }
+    },
+    "sentinelContributorRoleId": {
+      "type": "string",
+      "defaultValue": "ab8e14d6-4a74-4a29-9ba8-549422addade",
+      "metadata": {
+        "description": "Microsoft Sentinel Contributor. Verify: az role definition list --name 'Microsoft Sentinel Contributor' --query '[0].name' -o tsv"
+      }
+    },
+    "sentinelReaderRoleId": {
+      "type": "string",
+      "defaultValue": "8d289c81-5878-46d4-8554-54e1e3d8b5cb",
+      "metadata": { "description": "Microsoft Sentinel Reader. Verify before use." }
+    },
+    "logAnalyticsReaderRoleId": {
+      "type": "string",
+      "defaultValue": "73c42c96-874c-492b-b04d-ab87d138a893",
+      "metadata": { "description": "Log Analytics Reader. Needed by preview for KQL validation queries." }
+    },
+    "readerRoleId": {
+      "type": "string",
+      "defaultValue": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+      "metadata": { "description": "Reader. Human investigation access." }
+    }
+  },
+  "variables": {
+    "mspRegistrationName": "[guid(parameters('mspOfferName'))]",
+    "mspAssignmentName": "[guid(parameters('mspOfferName'), subscription().subscriptionId)]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedServices/registrationDefinitions",
+      "apiVersion": "2019-06-01",
+      "name": "[variables('mspRegistrationName')]",
+      "properties": {
+        "registrationDefinitionName": "[parameters('mspOfferName')]",
+        "description": "[parameters('mspOfferDescription')]",
+        "managedByTenantId": "[parameters('managedByTenantId')]",
+        "authorizations": [
+          {
+            "principalId": "[parameters('deployGroupObjectId')]",
+            "principalIdDisplayName": "sg-sentinel-pipeline-deploy",
+            "roleDefinitionId": "[parameters('sentinelContributorRoleId')]"
+          },
+          {
+            "principalId": "[parameters('readGroupObjectId')]",
+            "principalIdDisplayName": "sg-sentinel-pipeline-preview",
+            "roleDefinitionId": "[parameters('sentinelReaderRoleId')]"
+          },
+          {
+            "principalId": "[parameters('readGroupObjectId')]",
+            "principalIdDisplayName": "sg-sentinel-pipeline-preview (log analytics)",
+            "roleDefinitionId": "[parameters('logAnalyticsReaderRoleId')]"
+          },
+          {
+            "principalId": "[parameters('engineerGroupObjectId')]",
+            "principalIdDisplayName": "sg-sentinel-detection-engineers",
+            "roleDefinitionId": "[parameters('sentinelReaderRoleId')]"
+          },
+          {
+            "principalId": "[parameters('engineerGroupObjectId')]",
+            "principalIdDisplayName": "sg-sentinel-detection-engineers (reader)",
+            "roleDefinitionId": "[parameters('readerRoleId')]"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.ManagedServices/registrationAssignments",
+      "apiVersion": "2019-06-01",
+      "name": "[variables('mspAssignmentName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
+      ],
+      "properties": {
+        "registrationDefinitionId": "[resourceId('Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
+      }
+    }
+  ],
+  "outputs": {
+    "mspOfferName": {
+      "type": "string",
+      "value": "[concat('Delegated: ', parameters('mspOfferName'))]"
+    },
+    "registrationDefinitionId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.ManagedServices/registrationDefinitions', variables('mspRegistrationName'))]"
+    },
+    "delegatedSubscription": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]"
+    }
+  }
+}

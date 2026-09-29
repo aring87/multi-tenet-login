@@ -18,6 +18,7 @@ target subscription. Read-only by default; pass --apply to make changes.
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -53,9 +54,10 @@ def guid(value, label):
 
 
 DEPLOYMENT_PREFIX = "lighthouse-onboard-"
-TARGET_MAXIMUM = 64 - len(DEPLOYMENT_PREFIX)   # ARM subscription deployment name limit
+DEPLOYMENT_MAXIMUM = 64
+TARGET_MAXIMUM = 64
 # Each half only needs to leave room for a one-character other half plus the hyphen.
-# The combined check below is the real gate, so neither half is capped symmetrically.
+# The combined target limit remains the binding constraint.
 CLIENT_MAXIMUM = TARGET_MAXIMUM - 2
 
 
@@ -76,17 +78,28 @@ def slug(value, label, maximum=48):
 
 
 def validate_target(client, workspace_label):
-    """Share the Azure deployment-name budget across both target components."""
+    """Validate the full target retained in repository paths and manifests."""
     slug(client, "client", CLIENT_MAXIMUM)
     slug(workspace_label, "workspace_label", CLIENT_MAXIMUM)
     combined = client + "-" + workspace_label
     require(len(combined) <= TARGET_MAXIMUM,
             f"Combined target {combined!r} is {len(combined)} characters; the limit is "
-            f"{TARGET_MAXIMUM}. Azure deployment names allow 64 characters and the "
-            f"{DEPLOYMENT_PREFIX!r} prefix uses {len(DEPLOYMENT_PREFIX)}. "
+            f"{TARGET_MAXIMUM}, including the separating hyphen. "
             f"Shorten the client slug or workspace label by at least "
             f"{len(combined) - TARGET_MAXIMUM} character(s).")
     return combined
+
+
+def deployment_name(target):
+    """Preserve existing short names; bound longer names with a stable hash suffix."""
+    slug(target, "target", TARGET_MAXIMUM)
+    full = DEPLOYMENT_PREFIX + target
+    if len(full) <= DEPLOYMENT_MAXIMUM:
+        return full
+    suffix = hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
+    budget = DEPLOYMENT_MAXIMUM - len(DEPLOYMENT_PREFIX) - len(suffix) - 1
+    require(budget > 0, "Deployment prefix leaves no room for a readable target name.")
+    return DEPLOYMENT_PREFIX + target[:budget].rstrip("-") + "-" + suffix
 
 
 def validate_config(c):
@@ -419,7 +432,7 @@ class Onboard:
                               encoding="utf-8")
             common = ("--subscription", self.c["subscription_id"],
                       "--location", self.c["delegation_location"],
-                      "--name", DEPLOYMENT_PREFIX + self.c["target"],
+                      "--name", deployment_name(self.c["target"]),
                       "--template-file", str(self.template),
                       "--parameters", "@" + str(params))
             self.io.az("deployment", "sub", "validate", *common)

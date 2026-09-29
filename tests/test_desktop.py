@@ -39,6 +39,8 @@ class FakeSession:
 
 class DesktopTests(unittest.TestCase):
     def setUp(self):
+        handoff=patch.object(ui,"create_handoff",return_value=None)
+        handoff.start();self.addCleanup(handoff.stop)
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.data=Path(self.temp.name)
@@ -199,6 +201,30 @@ class DesktopTests(unittest.TestCase):
             app.login()
         new.login.assert_called_once_with(TENANT)
         self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"false")
+
+    def test_signin_handoff_stops_after_success_and_failure(self):
+        for failure in (False,True):
+            with self.subTest(failure=failure):
+                root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
+                app=self.make_app(root)
+                session=MagicMock();session.env={}
+                if failure:session.login.side_effect=Stop("Cancelled")
+                handoff=MagicMock()
+                with patch.object(ui,"Session",return_value=session),patch.object(ui,"create_handoff",return_value=handoff),patch.object(app,"work") as work:
+                    app.login()
+                self.assertTrue(app.signin_active)
+                self.assertEqual(str(app.signin_button.cget("state")),"normal")
+                handoff.bring_forward.assert_called_once_with()
+                app.bring_signin_forward();handoff.bring_forward.assert_called_with(manual=True)
+                task=work.call_args.args[1]
+                if failure:
+                    with self.assertRaises(Stop):task()
+                else:task()
+                app.poll()
+                self.assertFalse(app.signin_active)
+                self.assertIsNone(app.signin_timer)
+                self.assertIsNone(app.signin_handoff)
+                self.assertEqual(str(app.signin_button.cget("state")),"disabled")
 
     def test_windows_broker_can_be_selected(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
@@ -456,7 +482,7 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         with patch.object(ui.messagebox,"showerror") as error:
-            for value in ("a"*44,"double--dash"):
+            for value in ("a"*63,"double--dash"):
                 app.vars["client_slug"].set(value);app.save_client()
                 self.assertFalse(app.clientfile.exists())
             self.assertEqual(error.call_count,2)
@@ -469,9 +495,9 @@ class DesktopTests(unittest.TestCase):
         app=self.make_app(root);app.session=FakeSession();app.workspace=dict(WORKSPACE)
         app.auth_hint=TENANT;app.subscriptions=[dict(id=SUB,tenantId=TENANT)]
         app.subbox.configure(values=["Example"]);app.subbox.current(0)
-        app.vars["client_slug"].set("explosive-countermeasures-international")
-        app.vars["label"].set("workspace")
-        with patch.object(ui,"config_from_workspace") as build,self.assertRaisesRegex(Stop,"is 49 characters; the limit is 45"):
+        app.vars["client_slug"].set("a"*32)
+        app.vars["label"].set("b"*32)
+        with patch.object(ui,"config_from_workspace") as build,self.assertRaisesRegex(Stop,"is 65 characters; the limit is 64"):
             app.payload()
         build.assert_not_called()
 

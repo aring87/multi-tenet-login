@@ -79,14 +79,26 @@ CyberQP activation remains in CyberQP. The Contributor assignment is persistent,
 ### Client slug and workspace label length
 
 Onboarding uses `<client-slug>-<workspace-label>` as its target. The combined
-value, including the separating hyphen, must be at most 45 characters. Azure
-subscription deployment names allow 64, and `lighthouse-onboard-` uses 19.
-Each component allows at most 43 characters, leaving room for the other component;
-the combined limit still applies. Names use lowercase letters, digits and single
-hyphens, starting and ending with a letter or digit.
+value, including the separating hyphen, supports up to 64 characters. Each
+component allows up to 62 characters, leaving room for a hyphen and a one-character
+other component. Names use lowercase letters, digits and single hyphens, starting
+and ending with a letter or digit.
 
-For example, `explosive-countermeasures-international-workspace` is 49 characters
-and must be shortened by four. The validation message gives the exact length and
-budget. Existing folders and targets are never renamed automatically. If a target
-already exists in the detection repository, review that path before changing its
-client slug or workspace label.
+Azure deployment names also allow 64 characters. Existing short deployment names
+are preserved. When `lighthouse-onboard-` plus the target exceeds that limit, the
+app uses a readable shortened target plus a stable hash suffix for the Azure
+deployment name only. The complete target stays in repository manifests, client
+paths and local state. For example, the 49-character target
+`explosive-countermeasures-international-workspace` is now accepted unchanged.
+This does not verify any independent naming restrictions in your detection pipeline.
+
+
+### Finding the Microsoft sign-in window
+
+On Windows, the app attempts to bring newly opened Microsoft sign-in windows
+forward. If the window remains hidden, click **Bring sign-in window forward**
+below Sign in & discover. That button is available while authentication is running.
+Windows focus restrictions may still require Alt+Tab. Automatic detection covers
+Microsoft broker hosts and recognized English Microsoft sign-in titles in Edge,
+Chrome, Firefox and Brave; it does not pin your browser permanently above other
+applications. No sign-in credentials or page contents are read by this helper.

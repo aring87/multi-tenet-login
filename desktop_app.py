@@ -14,6 +14,7 @@ from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_theme import configure_theme
 from rules_page import RulesPage
+from signin_window import create_handoff
 from workspace_tools import access_plan, apply_contributor
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
                              config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
@@ -53,6 +54,9 @@ class App:
         self.controls = []
         self.evidence_folder = None
         self.operation_page = 2
+        self.signin_handoff = None
+        self.signin_timer = None
+        self.signin_active = False
         self.build()
         self.refresh_clients()
         self.root.after(100,self.poll)
@@ -256,6 +260,8 @@ class App:
         hint.pack(fill="x",pady=(0,14));self.wrap_to_parent(hint)
         self.form(body,"Sign-in method","login_method","Browser",["Browser","Windows account window"])
         self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(fill="x",pady=(0,14))
+        self.signin_button=ttk.Button(body,text="Bring sign-in window forward",command=self.bring_signin_forward,state="disabled")
+        self.signin_button.pack(fill="x",pady=(0,14))
         self.subbox=self.form(body,"Subscription","subscription",values=[])
         self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
         self.wsbox=self.form(body,"Log Analytics workspace","workspace",values=[])
@@ -454,6 +460,8 @@ class App:
                     self.logbox.configure(state="normal")
                     self.logbox.insert("end",data+"\n"); self.logbox.see("end")
                     self.logbox.configure(state="disabled")
+                elif kind=="signin_finished":
+                    self.finish_signin()
                 elif kind=="done":
                     callback,result,error=data
                     self.set_busy(False)
@@ -687,7 +695,31 @@ class App:
         except Exception as error:
             messagebox.showerror("Open CyberQP",str(error),parent=self.root)
 
+    def bring_signin_forward(self):
+        if not self.signin_active:return
+        try:
+            found=self.signin_handoff and self.signin_handoff.bring_forward(manual=True)
+        except OSError:found=False
+        if not found:
+            self.status.set("Sign-in is still opening or Windows blocked focus. Use Alt+Tab to select the Microsoft sign-in window.")
+
+    def watch_signin(self):
+        self.signin_timer=None
+        if not self.signin_active:return
+        if self.signin_handoff and time.monotonic()<self.signin_deadline:
+            try:self.signin_handoff.bring_forward()
+            except OSError:pass
+            self.signin_timer=self.root.after(750,self.watch_signin)
+
+    def finish_signin(self):
+        self.signin_active=False
+        if self.signin_timer is not None:
+            self.root.after_cancel(self.signin_timer);self.signin_timer=None
+        self.signin_handoff=None
+        self.signin_button.configure(state="disabled")
+
     def login(self):
+        if self.busy:return
         try:
             value=self.vars["tenant"].get().strip()
             hint=validate_tenant_hint(value) if value else ""
@@ -701,10 +733,19 @@ class App:
         self.session=Session(logger=self.log)
         self.session.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] = (
             "true" if self.vars["login_method"].get()=="Windows account window" else "false")
+        self.finish_signin()
+        self.signin_handoff=create_handoff()
+        self.signin_active=True
+        self.signin_deadline=time.monotonic()+90
+        self.signin_button.configure(state="normal" if self.signin_handoff else "disabled")
+        self.watch_signin()
         def task():
-            if old:
-                old.logout()
-            return self.session.login(hint)
+            try:
+                if old:
+                    old.logout()
+                return self.session.login(hint)
+            finally:
+                self.events.put(("signin_finished",None))
         def done(rows):
             rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
             self.subscriptions=rows

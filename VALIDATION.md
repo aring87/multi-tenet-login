@@ -127,3 +127,37 @@ All 146 offline tests passed, including nine added tests covering exact/over-lim
 names, asymmetric component lengths, the reported client slug, invalid characters,
 desktop save/payload errors, refusal before cloud calls, and deployment validate/
 create using the identical bounded name. No live Azure deployment was performed.
+
+
+## 64-character target support (2026-09-29)
+
+The combined target now supports 64 characters including its hyphen separator;
+each component supports 62. Azure deployment names retain the previous prefix
+and full target when they fit. Longer names use a readable truncated target and
+a stable 16-hex-character SHA-256 suffix, keeping the deployment name within 64.
+Repository manifest targets, client paths and state retain the complete identity.
+
+Boundary tests cover 64-character acceptance, 65-character rejection, the full
+reported company slug with primary/workspace labels, unchanged short deployment
+names, and stable distinct suffixes. A full run reached 149 tests with one new
+manifest-test fixture error (missing discovered workspace); the fixture was fixed.
+The initial full-suite rerun was blocked by two automatic permission-review
+timeouts. A subsequent complete run, including the sign-in changes below, passed
+all 155 tests. No live Azure operations were performed.
+
+
+## Sign-in window foreground handoff (2026-09-29)
+
+Added a Windows-only foreground helper for supported Microsoft broker and browser
+sign-in windows. Automatic attempts are limited to newly opened/changed windows
+for 90 seconds; successfully raised windows are not repeatedly focused. The
+Bring sign-in window forward button remains available during authentication.
+Completion and failure cancel the timer and release window metadata. Windows can
+still deny focus, and browser matching depends on recognized English sign-in
+titles. No topmost flag is applied to the browser or other applications.
+
+All 155 offline tests passed. Foreground tests use mocked window APIs and do not
+perform live authentication. Coverage includes existing-window exclusion, changed
+browser titles, restoring minimized windows, focus denial, and success/failure
+cleanup. Live Azure sign-in foreground behavior remains to be verified on the
+user's Windows desktop.

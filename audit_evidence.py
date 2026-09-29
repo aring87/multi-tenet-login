@@ -10,9 +10,8 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit, unquote
 
 from desktop_backend import Stop, require, workspace_record
-from audit_analysis import validate_expectations, analyze, render_dashboard, render_evidence_links
 
-VERSION = "2.0"
+VERSION = "3.0"
 ARM = "https://management.azure.com"
 LOGS = "https://api.loganalytics.io"
 MAX_PAGES = 200
@@ -20,6 +19,29 @@ LOG_LIMIT = 10000
 MAX_LOG_REQUESTS = 127
 MAX_LOG_RECORDS = 100000
 MIN_LOG_WINDOW = timedelta(minutes=1)
+
+CONFIGURATIONS = {
+    "rules": ("Analytics rules", "alertRules", "2025-06-01"),
+    "connectors": ("Data connectors", "dataConnectors", "2025-06-01"),
+    "automation": ("Automation rules", "automationRules", "2025-06-01"),
+    "settings": ("Sentinel settings", "settings", "2025-07-01-preview"),
+}
+
+
+def validate_options(value=None):
+    value = {} if value is None else value
+    require(isinstance(value, dict), "Invalid export selections.")
+    require(not set(value)-{"configurations", "audit", "health", "source_tables", "source_mode", "sample_limit"}, "Unknown export selection.")
+    configs = value.get("configurations", list(CONFIGURATIONS))
+    require(isinstance(configs, list) and all(isinstance(k, str) and k in CONFIGURATIONS for k in configs), "Invalid configuration selection.")
+    tables = value.get("source_tables", [])
+    require(isinstance(tables, list) and len(tables) <= 20 and all(isinstance(t, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", t) for t in tables), "Select up to 20 table names; queries are not accepted.")
+    require(all(type(value.get(k, False)) is bool for k in ("audit", "health")), "Invalid activity selection.")
+    mode, limit = value.get("source_mode", "sample"), value.get("sample_limit", 100)
+    require(mode in ("sample", "period"), "Select sample or period export.")
+    require(type(limit) is int and 1 <= limit <= 1000, "Sample size must be 1–1000 records per table.")
+    return dict(configurations=list(dict.fromkeys(configs)), audit=value.get("audit", False), health=value.get("health", False),
+                source_tables=list(dict.fromkeys(tables)), source_mode=mode, sample_limit=limit)
 
 
 def utcnow():
@@ -200,48 +222,77 @@ class Collector:
         result["finished_at_utc"] = utcnow()
         return result
 
-    def run(self, start, end, expectations=None):
-        expectations = validate_expectations(expectations)
-        first, after = date_range(start, end)
-        period_start = datetime.fromisoformat(first.replace("Z", "+00:00"))
-        period_end = min(datetime.fromisoformat(after.replace("Z", "+00:00")), datetime.now(timezone.utc))
+    def verify_workspace(self):
         self.session.verify(self.workspace)
-        cloud = self.session.az("cloud", "show")
-        require(cloud.get("name") == "AzureCloud", "Evidence collection supports Azure public cloud only.")
+        require(self.session.az("cloud", "show").get("name") == "AzureCloud", "Evidence collection supports Azure public cloud only.")
         current = self.get(self.base+"?api-version=2025-07-01")
         verified = workspace_record(dict(id=current.get("id"), customerId=current.get("properties", {}).get("customerId")),
                                     self.workspace["subscription_id"], self.workspace["tenant_id"])
-        require(verified == self.workspace or all(verified[k].lower() == self.workspace[k].lower() for k in verified),
+        require(all(verified[k].lower() == self.workspace[k].lower() for k in verified),
                 "Workspace identity changed since discovery. Discover it again.")
-        self.results.append(dict(key="workspace", title="Workspace settings", status="collected",
-            collected_at_utc=utcnow(), source=self.base+"?api-version=2025-07-01", records=[current],
-            note="Current configuration snapshot, including workspace retention; not historical configuration."))
-        items = [
-            ("tables", "Table settings and retention", "/tables?api-version=2025-07-01",
-             "Current table settings. Inherited retention must be interpreted with workspace settings."),
-            ("access", "Azure role assignments", "/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&%24filter=atScope%28%29",
-             "Assignments at or above this workspace. Principal/role IDs are retained. Does not expand group membership, PIM eligibility, deny assignments or effective user access."),
-            ("rules", "Sentinel analytics rules", "/providers/Microsoft.SecurityInsights/alertRules?api-version=2025-06-01",
-             "Current rule configuration, including enabled state where provided; not proof of historical execution."),
-            ("connectors", "Sentinel data connectors", "/providers/Microsoft.SecurityInsights/dataConnectors?api-version=2025-06-01",
-             "Configured connector resources. Presence does not establish successful ingestion or full source coverage."),
-            ("diagnostics", "Workspace diagnostic settings", "/providers/Microsoft.Insights/diagnosticSettings?api-version=2021-05-01-preview",
-             "Current diagnostic destinations and enabled categories."),
-        ]
-        for key, title, suffix, note in items:
-            self.collect(key, title, self.base+suffix, note)
-        incident_filter = f"properties/createdTimeUtc ge {first} and properties/createdTimeUtc lt {after}"
-        self.collect("incidents", "Incidents created in the selected period", self.base+
-            "/providers/Microsoft.SecurityInsights/incidents?api-version=2025-06-01&%24filter="+quote(incident_filter, safe=""),
-            "Current incident records filtered by creation date (UTC); excludes incidents created earlier, even if active in the period. Does not collect comments or reconstruct status history.")
-        for key, title, table in [("health", "Sentinel health events", "SentinelHealth"),
-                                   ("audit", "Sentinel audit events", "SentinelAudit")]:
-            self.collect_log(key, title, table, period_start, period_end)
-        self.collect_log("usage", "Daily Usage records (not source events)", "Usage", period_start, period_end, summary=True)
-        for index, table in enumerate(expectations["expected_tables"]):
-            self.collect_log(f"expected_{index}", "Expected log table: "+table, table, period_start, period_end, summary=True)
+
+    def query(self, key, title, query, note):
+        url = LOGS+"/v1/workspaces/"+self.workspace["workspace_id"]+"/query?query="+quote(query, safe="")
+        return self.collect(key, title, url, note, query=query)
+
+    def sample(self, key, table, first, after, limit):
+        query = (f"{table} | where TimeGenerated >= datetime({first.isoformat()}) and TimeGenerated < datetime({after.isoformat()})"
+                 f" | top {limit} by TimeGenerated desc")
+        result = self.query(key, table+" — recent sample", query, f"Up to {limit} most recent records in the selected period; not a complete period export or a random sample.")
+        result.update(table=table, record_kind="sample", sample_limit=limit,
+                      period_start_utc=first.isoformat(), period_end_utc_exclusive=after.isoformat())
+        if result["status"] == "collected": result["status"] = "sampled"
+        return result
+
+    def run(self, start, end, options=None):
+        options = validate_options(options)
+        require(options["configurations"] or options["audit"] or options["health"] or options["source_tables"], "Select configuration or logs to export.")
+        has_logs = options["audit"] or options["health"] or options["source_tables"]
+        if has_logs:
+            first, after = date_range(start, end)
+            period_start = datetime.fromisoformat(first.replace("Z", "+00:00"))
+            period_end = min(datetime.fromisoformat(after.replace("Z", "+00:00")), datetime.now(timezone.utc))
+        self.verify_workspace()
+        for key in options["configurations"]:
+            title, resource, version = CONFIGURATIONS[key]
+            note = "Current configuration snapshot; not historical configuration."
+            if key == "connectors": note += " Connector resources do not prove ingestion or cover every source visible in the portal."
+            if key == "settings": note += " Available product settings only (preview API); not every portal setting or monitoring diagnostic setting is exposed here."
+            self.collect(key, title, self.base+"/providers/Microsoft.SecurityInsights/"+resource+"?api-version="+version, note)
+        for key, table in (("audit", "SentinelAudit"), ("health", "SentinelHealth")):
+            if options[key]: self.collect_log(key, table, table, period_start, period_end)
+        for index, table in enumerate(options["source_tables"]):
+            key = f"source_{index}"
+            if options["source_mode"] == "sample":
+                self.sample(key, table, period_start, period_end, options["sample_limit"])
+            else:
+                self.collect_log(key, table, table, period_start, period_end)
         self.session.verify(self.workspace)
         return self.results
+
+
+def list_log_tables(session, workspace):
+    collector = Collector(session, workspace)
+    collector.verify_workspace()
+    result = collector.collect("tables", "Available log tables", collector.base+"/tables?api-version=2025-07-01",
+                               "Table inventory only; this does not establish that records exist.")
+    session.verify(workspace)
+    return result
+
+
+def preview_log_tables(session, workspace, start, end, tables):
+    options = validate_options(dict(source_tables=tables))
+    first, after = date_range(start, end)
+    after = min(datetime.fromisoformat(after.replace("Z", "+00:00")), datetime.now(timezone.utc)).isoformat()
+    collector = Collector(session, workspace)
+    collector.verify_workspace()
+    for index, table in enumerate(options["source_tables"]):
+        result = collector.query(f"preview_{index}", table,
+            f"{table} | where TimeGenerated >= datetime({first}) and TimeGenerated < datetime({after}) | summarize Records=count(), LatestEvent=max(TimeGenerated)",
+            "Count and latest event within the selected period and account visibility; no source event payloads exported.")
+        result["table"] = table
+    session.verify(workspace)
+    return collector.results
 
 
 def flatten(value, prefix=""):
@@ -260,31 +311,21 @@ def csv_value(value):
     return "'"+text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
 
 
-def collect_evidence(session, workspace, start, end, destination, expectations=None):
-    date_range(start, end)
-    expectations = validate_expectations(expectations)
+def collect_evidence(session, workspace, start, end, destination, options=None):
+    options = validate_options(options)
     started = utcnow()
-    collector = Collector(session, workspace)
-    results = collector.run(start, end, expectations)
-    assessment = analyze(results, start, end, expectations)
-    folder = Path(destination) / ("evidence-"+workspace["workspace_id"]+"-"+
-                                datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"-"+uuid.uuid4().hex[:8])
+    results = Collector(session, workspace).run(start, end, options)
+    has_logs = bool(options["audit"] or options["health"] or options["source_tables"])
+    # GUIDs form the directories; display names never become path components.
+    tenant, workspace_id = str(uuid.UUID(workspace["tenant_id"])), str(uuid.UUID(workspace["workspace_id"]))
+    folder = Path(destination) / "sentinel-exports" / tenant / workspace_id / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"-"+uuid.uuid4().hex[:8])
     folder.mkdir(parents=True, exist_ok=False)
     manifest = dict(schema_version=VERSION, started_at_utc=started, finished_at_utc=utcnow(),
-                    workspace=dict(workspace), period=dict(start_date_utc=start, end_date_utc_inclusive=end),
-                    scope="Azure/Sentinel technical evidence only; no compliance determination or framework control mapping.",
-                    expectations=expectations, analysis_summary=assessment["summary"], results=[], files={})
+                    workspace=dict(workspace), period=dict(start_date_utc=start, end_date_utc_inclusive=end) if has_logs else None,
+                    scope="Selected Sentinel configuration and logs within this account's visibility.",
+                    selections=options, results=[], files={})
     def write_json(path, value):
         path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
-    write_json(folder/"coverage.json", assessment["coverage"])
-    write_json(folder/"findings.json", assessment["findings"])
-    write_json(folder/"requirements.json", expectations)
-    with (folder/"findings.csv").open("w", newline="", encoding="utf-8-sig") as output:
-        writer=csv.writer(output)
-        writer.writerow(["ID", "Classification", "Finding", "Observation", "Next step", "Evidence"])
-        for finding in assessment["findings"]:
-            writer.writerow([csv_value(finding[k]) for k in ("id", "classification", "title", "observation", "next_step")]+[json.dumps(finding["evidence"])])
-    (folder/"evidence.html").write_text(render_evidence_links(results, assessment["findings"]), encoding="utf-8")
     for result in results:
         write_json(folder/(result["key"]+".json"), result)
         rows = [flatten(row) for row in result["records"]]
@@ -295,18 +336,55 @@ def collect_evidence(session, workspace, start, end, destination, expectations=N
                 writer.writerow([csv_value(k) for k in keys])
                 writer.writerows([[csv_value(row.get(k)) for k in keys] for row in rows])
         manifest["results"].append({k: v for k, v in result.items() if k != "records"} | {"record_count": len(rows)})
-    esc = lambda x: html.escape(str(x), quote=True)
-    sections = "".join(f"<tr><td>{esc(r['title'])}</td><td>{esc(r['status'].replace('_',' '))}</td>"
-                       f"<td>{len(r['records'])}</td><td>{esc(r['note'])}<p>{esc(r.get('error',''))}</p>"
-                       f"<a href='{r['key']}.json'>JSON evidence</a></td></tr>" for r in results)
-    report = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Azure / Sentinel Audit Evidence</title><style>body{font:16px Segoe UI,sans-serif;color:#233248;background:#f3f5f9;margin:32px;line-height:1.5}main{max-width:1200px;margin:auto}h1{color:#14263e}table{border-collapse:collapse;background:white;width:100%}td,th{padding:14px;text-align:left;vertical-align:top;border-bottom:1px solid #d7dee8}th{background:#e4eaf3}code{overflow-wrap:anywhere}a{color:#245de9}</style><main><h1>Azure / Sentinel Audit Evidence</h1>"""
-    report += f"<p><b>Workspace:</b> {esc(workspace['workspace_name'])}<br><b>Tenant:</b> {esc(workspace['tenant_id'])}<br><b>Resource:</b> <code>{esc(workspace['resource_id'])}</code><br><b>Period:</b> {esc(start)} through {esc(end)} (UTC, inclusive)<br><b>Collected:</b> {esc(manifest['finished_at_utc'])}</p>"
-    report += "<p>Read-only technical evidence. Configuration is a current snapshot; logs and incident creation dates use the selected period. This package does not establish SOC 2, ISO 27001 or CMMC compliance.</p><p>Collected means the request succeeded within the signed-in account's visibility, not that a control passed. No records, unavailable, access denied, error and partial results require review. Retention, enabled monitoring and access can limit evidence. Client-sensitive data may be present; store and share through approved channels.</p>"
-    report += render_dashboard(assessment, expectations)
-    report += "<h2>Collection inventory</h2><table><tr><th>Evidence</th><th>Collection status</th><th>Records</th><th>Scope and limitations</th></tr>"+sections+"</table><p>manifest.json records scope, timestamps, queries, requests and SHA-256 file hashes. Hashes detect later changes; they are not signatures or independent attestations. CSV cells are protected against spreadsheet formula execution; JSON retains original values.</p></main></html>"
-    (folder/"report.html").write_text(report, encoding="utf-8")
+    (folder/"report.html").write_text(render_report(workspace, manifest, results), encoding="utf-8")
     for path in sorted(folder.iterdir()):
         manifest["files"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     write_json(folder/"manifest.json", manifest)
     return dict(folder=str(folder), manifest=manifest)
+
+
+def render_report(workspace, manifest, results):
+    esc = lambda x: html.escape(str(x), quote=True)
+    report = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Sentinel Configuration &amp; Logs</title><style>body{font:16px Segoe UI,sans-serif;color:#233248;background:#f2f5f8;margin:32px;line-height:1.5}main{max-width:1100px;margin:auto}h1{color:#172b43;font-size:30px;letter-spacing:-.6px}h2{font-size:21px}h3{font-size:16px}section{background:#fff;border:1px solid #dce4ec;padding:24px;margin:24px 0;border-radius:8px}table{border-collapse:collapse;background:white;width:100%}td,th{padding:12px;text-align:left;vertical-align:top;border-bottom:1px solid #d7dee8}th{background:#eaf0f5;font-size:13px}code,td{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2f7;padding:16px}details{background:white;padding:12px;margin:8px 0}summary{cursor:pointer}a{color:#0f766e;text-underline-offset:3px}.status{font-weight:600;color:#354b62}@media print{body{margin:0}details{break-inside:avoid}}</style><main><h1>Sentinel Configuration &amp; Logs</h1>"""
+    report += f"<p><b>Workspace:</b> {esc(workspace['workspace_name'])}<br><b>Tenant:</b> {esc(workspace['tenant_id'])}<br><b>Resource:</b> <code>{esc(workspace['resource_id'])}</code><br><b>Collected:</b> {esc(manifest['finished_at_utc'])}</p>"
+    period = manifest["period"]
+    if period: report += f"<p><b>Log period:</b> {esc(period['start_date_utc'])} through {esc(period['end_date_utc_inclusive'])} (UTC, inclusive; today ends at collection time).</p>"
+    report += "<p>Configuration is a snapshot taken now. Only selected categories are included. Samples are not complete period exports. Unavailable, denied and partial collections are shown explicitly; no records does not prove that monitoring is disabled.</p>"
+    report += "<h2>Collection status</h2><table><tr><th>Selected category</th><th>Status</th><th>Records</th><th>Export</th></tr>"
+    for result in results:
+        key = esc(result["key"])
+        report += f"<tr><td><a href='#{key}'>{esc(result['title'])}</a></td><td>{esc(result['status'].replace('_',' '))}</td><td>{len(result['records'])}</td><td><a href='{key}.json'>JSON</a>"
+        if result["records"]: report += f" · <a href='{key}.csv'>CSV</a>"
+        report += "</td></tr>"
+    report += "</table>"
+    for result in results:
+        key = result["key"]
+        report += f"<section id='{esc(key)}'><h2>{esc(result['title'])}</h2><p class='status'>{esc(result['status'].replace('_',' '))} · {len(result['records'])} records</p><p>{esc(result['note'])}</p>"
+        if result.get("error"): report += f"<p>{esc(result['error'])}</p>"
+        if key in CONFIGURATIONS:
+            for row in result["records"]:
+                props = row.get("properties") or {}
+                name = props.get("displayName") or row.get("name") or row.get("id") or "Configuration"
+                enabled = props.get("enabled", props.get("isEnabled", (props.get("triggeringLogic") or {}).get("isEnabled")))
+                state = "Enabled" if enabled is True else "Disabled" if enabled is False else "State not returned"
+                report += f"<details><summary>{esc(name)} · {esc(row.get('kind', ''))} · {state}</summary><table>"
+                labels = {"severity":"Severity", "queryFrequency":"Run every", "queryPeriod":"Lookback", "triggerOperator":"Threshold operator", "triggerThreshold":"Threshold", "suppressionEnabled":"Suppression enabled", "suppressionDuration":"Suppression duration", "order":"Execution order"}
+                for field, label in labels.items():
+                    if field in props: report += f"<tr><th>{label}</th><td>{esc(props[field])}</td></tr>"
+                if key in ("connectors", "settings"):
+                    for field, value in props.items():
+                        label = re.sub(r"(?<!^)(?=[A-Z])", " ", field).capitalize()
+                        display = json.dumps(value, indent=2, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+                        report += f"<tr><th>{esc(label)}</th><td><pre>{esc(display)}</pre></td></tr>"
+                report += "</table>"
+                if "query" in props: report += f"<h3>Rule query</h3><pre>{esc(props['query'])}</pre>"
+                for field, label in (("incidentConfiguration","Incident and grouping settings"),("triggeringLogic","Triggers and conditions"),("actions","Actions and playbook references")):
+                    if field in props: report += f"<h3>{label}</h3><pre>{esc(json.dumps(props[field],indent=2,ensure_ascii=False))}</pre>"
+                report += f"<details><summary>All returned configuration fields</summary><pre>{esc(json.dumps(row,indent=2,ensure_ascii=False))}</pre></details></details>"
+        else:
+            report += f"<p>Open <a href='{esc(key)}.json'>JSON with queries and collection details</a>"
+            if result["records"]: report += f" or <a href='{esc(key)}.csv'>CSV records</a>"
+            report += ". Log payloads are kept out of this summary.</p>"
+        report += "</section>"
+    return report+"<p>manifest.json records the selections, identity, requests and SHA-256 file hashes. API snapshots do not reproduce every portal screen. Collection success is not a compliance determination.</p></main></html>"

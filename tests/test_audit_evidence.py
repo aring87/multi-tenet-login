@@ -37,7 +37,7 @@ class FakeSession:
             return dict(name=self.cloud)
         assert args[:3] == ("rest", "--method", "get"), args
         url = args[args.index("--url")+1]
-        if "?api-version=2025-07-01" in url and "/tables" not in url:
+        if url.split("?")[0] == audit.ARM + WORKSPACE["resource_id"]:
             return copy.deepcopy(self.workspace)
         if self.fail and self.fail in url:
             raise Stop("AuthorizationFailed: 403")
@@ -65,16 +65,16 @@ class AuditTests(unittest.TestCase):
                            ("2020-01-01", "2024-01-01"), ("2099-01-01", "2099-01-02")]:
             with self.assertRaises(Stop): audit.date_range(start, end)
 
-    def test_read_only_calls_and_incident_period(self):
-        results = self.collector.run("2024-01-01", "2024-01-31")
-        self.assertEqual(len(results), 10)
+    def test_default_is_configuration_only_and_read_only(self):
+        results = self.collector.run("ignored", "ignored")
+        self.assertEqual([r["key"] for r in results], ["rules", "connectors", "automation", "settings"])
         self.assertEqual(self.session.verifications, 2)
         for call in self.session.calls:
-            if call[0] == "rest": self.assertEqual(call[2], "get")
-        incident = next(r for r in results if r["key"] == "incidents")
-        clause = parse_qs(urlsplit(incident["source"]).query)["$filter"][0]
-        self.assertIn("createdTimeUtc ge 2024-01-01T00:00:00Z", clause)
-        self.assertIn("createdTimeUtc lt 2024-02-01T00:00:00Z", clause)
+            if call[0] == "rest":
+                self.assertEqual(call[2], "get")
+                self.assertNotIn("/query?", str(call))
+                for unwanted in ("roleAssignments", "/tables?", "diagnosticSettings", "/incidents?"):
+                    self.assertNotIn(unwanted, str(call))
 
     def test_wrong_session_stops_before_requests(self):
         self.session.fail = "verify"
@@ -153,7 +153,7 @@ class AuditTests(unittest.TestCase):
         self.session.fail = "/alertRules"
         results = self.collector.run("2024-01-01", "2024-01-02")
         self.assertEqual(next(r for r in results if r["key"]=="rules")["status"], "access_denied")
-        self.assertEqual(results[-1]["key"], "usage")
+        self.assertEqual(results[-1]["key"], "settings")
 
     def test_export_hashes_scope_and_unique_packages(self):
         first = audit.collect_evidence(self.session,WORKSPACE,"2024-01-01","2024-01-02",self.folder)
@@ -164,7 +164,9 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(manifest["workspace"],WORKSPACE)
         for name,digest in manifest["files"].items():
             self.assertEqual(hashlib.sha256((package/name).read_bytes()).hexdigest(),digest)
-        self.assertTrue((package/"workspace.csv").exists())
+        self.assertTrue((package/"automation.json").exists())
+        self.assertFalse((package/"workspace.json").exists())
+        self.assertIsNone(manifest["period"])
         self.assertIn("no records",(package/"report.html").read_text())
 
     def test_csv_formula_protection(self):

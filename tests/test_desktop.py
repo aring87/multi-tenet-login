@@ -329,45 +329,33 @@ class DesktopTests(unittest.TestCase):
         message.assert_called_once()
         choose.assert_not_called()
 
-    def test_audit_requirements_are_local_and_workspace_specific(self):
+    def test_audit_selection_clears_with_workspace(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
         app=self.make_app(root);app.workspace=dict(WORKSPACE)
-        app.vars["audit_retention"].set("90")
-        app.vars["audit_tables"].set("Heartbeat, SecurityEvent")
-        app.vars["audit_rules"].set("Critical rule; rule-id")
-        app.save_audit_requirements()
-        original=app.audit_requirements_path()
-        self.assertTrue(original.exists())
-        app.workspace=dict(WORKSPACE,workspace_id=P1)
-        app.load_audit_requirements()
-        self.assertEqual(app.vars["audit_retention"].get(),"")
-        self.assertEqual(app.vars["audit_tables"].get(),"")
-        app.workspace=dict(WORKSPACE)
-        app.load_audit_requirements()
-        self.assertEqual(app.audit_requirements()["minimum_retention_days"],90)
-        self.assertEqual(app.audit_requirements()["expected_tables"],["Heartbeat","SecurityEvent"])
+        app.audit_source_tables=["SecurityEvent"]
+        app.audit_flags["audit"].set(True)
+        app.evidence_folder=self.data
         app.clear_selection()
-        self.assertEqual(app.vars["audit_rules"].get(),"")
+        self.assertEqual(app.audit_source_tables,[])
+        self.assertFalse(app.audit_flags["audit"].get())
+        self.assertIsNone(app.evidence_folder)
 
-    def test_audit_invalid_requirement_does_not_open_destination_dialog(self):
+    def test_audit_invalid_selection_does_not_open_destination_dialog(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
         app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
-        app.vars["audit_tables"].set("Heartbeat | take 1")
+        app.audit_source_tables=["Heartbeat | take 1"]
         with patch.object(ui.messagebox,"showerror") as message,patch.object(ui.filedialog,"askdirectory") as choose:
             app.collect_audit()
         message.assert_called_once();choose.assert_not_called()
 
-    def test_audit_requirements_editor_collapses_without_losing_values(self):
+    def test_audit_defaults_to_configuration_without_logs(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
         app=self.make_app(root)
-        self.assertFalse(app.audit_requirements_frame.winfo_manager())
-        app.toggle_audit_requirements()
-        self.assertTrue(app.audit_requirements_frame.winfo_manager())
-        app.vars["audit_retention"].set("90")
-        app.toggle_audit_requirements()
-        self.assertFalse(app.audit_requirements_frame.winfo_manager())
-        self.assertEqual(app.audit_requirements()["minimum_retention_days"],90)
-        self.assertIn("90 days",app.audit_requirement_summary.get())
+        options=app.audit_options()
+        self.assertEqual(options["configurations"],list(ui.CONFIGURATIONS))
+        self.assertEqual(options["source_tables"],[])
+        self.assertFalse(options["audit"] or options["health"])
+        self.assertEqual(options["source_mode"],"sample")
 
     def test_audit_action_uses_captured_workspace_and_reports_results(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
@@ -384,6 +372,43 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("access denied",app.audit_summary.get())
         self.assertEqual(app.tabs.index("current"),3)
         self.assertIsNone(app.plan)
+
+    def test_audit_picker_previews_selected_tables_and_does_not_treat_denial_as_zero(self):
+        import time
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.workspace=dict(WORKSPACE)
+        app.vars["audit_start"].set("2024-01-01");app.vars["audit_end"].set("2024-01-02")
+        result=dict(status="collected",records=[dict(name="SigninLogs",properties=dict(plan="Analytics")),dict(name="SentinelAudit")])
+        app.show_source_picker(result,FakeSession(),dict(WORKSPACE))
+        def descendants(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from descendants(child)
+        widgets=list(descendants(root))
+        tree=next(w for w in widgets if isinstance(w,ui.ttk.Treeview) and w.winfo_toplevel() is not root)
+        self.assertEqual(tree.get_children(),("SigninLogs",))
+        self.assertFalse(tree.selection())
+        tree.selection_set("SigninLogs")
+        preview=next(w for w in widgets if isinstance(w,ui.ttk.Button) and w.cget("text")=="Preview selected counts")
+        use=next(w for w in widgets if isinstance(w,ui.ttk.Button) and w.cget("text")=="Use selected tables")
+        with patch.object(ui,"preview_log_tables",return_value=[dict(table="SigninLogs",records=[],status="access_denied")]) as query:
+            preview.invoke()
+            deadline=time.monotonic()+3
+            while tree.set("SigninLogs","status")=="Not previewed" and time.monotonic()<deadline:
+                root.update();time.sleep(.01)
+        self.assertEqual(tree.set("SigninLogs","count"),"Unknown")
+        self.assertEqual(tree.set("SigninLogs","status"),"access denied")
+        self.assertEqual(query.call_args.args[2:],("2024-01-01","2024-01-02",["SigninLogs"]))
+        use.invoke()
+        self.assertEqual(app.audit_options()["source_tables"],["SigninLogs"])
+
+    def test_audit_configuration_export_ignores_log_dates(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
+        app.vars["audit_start"].set("invalid")
+        with patch.object(ui.filedialog,"askdirectory",return_value=str(self.data)),patch.object(app,"work") as launch:
+            app.collect_audit()
+        launch.assert_called_once()
 
     def test_gui_blocks_apply_without_plan(self):
         root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)

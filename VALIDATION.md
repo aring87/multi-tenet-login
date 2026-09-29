@@ -40,3 +40,62 @@ the multi-root test suite; assertions pass.
 The user reported a successful live collection with version 1. Version 2's new
 splitting/coverage/findings behavior has not yet been validated on a live tenant.
 No client data was used for the synthetic report or included in this change.
+## Sentinel configuration and optional logs (2026-09-28)
+
+Version 3 replaces the broad audit workflow with four selectable configuration
+categories, optional Sentinel activity logs, and selected source-table exports.
+The source-table picker previews counts/latest timestamps; samples and incomplete
+period exports are labeled explicitly. The report contains configuration details
+and export links without the legacy findings/coverage dashboard.
+
+Validation: 56 audit/backend tests and 7 audit UI tests passed using synthetic
+responses. Checks include configuration-only requests, optional activity,
+selected source queries, bounded sample labels, partial/denied responses, input
+validation, tenant/workspace export paths, raw-record preservation, HTML/CSV
+escaping, hashes, selection resets, and the source-table picker preview.
+Tkinter multi-root teardown warnings remain; these assertions passed.
+
+The full suite run before the final two UI tests ran 121 tests and reported 21
+errors, all also present in an untouched HEAD snapshot (112 tests, 24 errors).
+The remaining errors concern older onboarding/mode assumptions, exception types,
+and Azure CLI discovery in the test environment. They are not new audit failures;
+the full repository suite is not green.
+
+No live tenant collection was performed. Follow the v3 acceptance steps in
+AUDIT-EVIDENCE.md, including checking preview API product settings and table-plan
+limitations, before relying on client exports.
+
+## Desktop design refinement (2026-09-28)
+
+Added a shared navy/teal theme, consistent typography and focus styling, responsive
+card subtitles, a persistent workspace/tenant context line, grouped onboarding
+forms, collapsible optional tools/log controls, a visible audit selection summary,
+and a progress indicator shown only while work is running. The report styling and
+desktop guide now match the interface. No deployment or permission logic changed.
+
+Visually inspected the native desktop preview with empty local data, including
+the compact audit and review layouts at 1120x740. Four new design tests verify
+horizontal control bounds on all pages, disclosure state preservation, context
+reset, and busy/read-only control states. These tests pass, along with seven audit
+UI checks and 56 audit/backend checks (67 focused checks total).
+
+The final full regression run executed 127 tests and retained the same 21 errors
+already verified in the unchanged baseline. No new full-suite error was added.
+Windows Tkinter multi-root teardown warnings remain. Live authentication and cloud
+operations were not exercised during the cosmetic update.
+
+## Analytics rules and reviewed Contributor assignment (2026-09-29)
+
+Added automatic workspace rule inventory, enabled/disabled filters, search and
+raw configuration details. Workspace changes clear the inventory and stale
+responses are discarded. Missing state flags and incomplete collections remain
+explicit. Added an access review that checks effective subscription permissions,
+skips unnecessary grants, and allows an authorized signed-in user to assign
+Contributor to itself after reviewing the exact identity and subscription.
+Assignments persist until removed; this is not CyberQP timed activation.
+
+Validation: 8 access/rule backend tests, 6 desktop design/state tests, 7 audit UI
+tests and 56 audit backend tests passed (77 targeted tests). The audit picker test
+now locates the dialog tree explicitly because the application has another tree.
+Tkinter multi-root teardown warnings remain. Live Azure operations were not run;
+previously documented full-suite baseline failures have not been resolved.

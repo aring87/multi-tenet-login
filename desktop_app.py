@@ -262,7 +262,6 @@ class App:
         self.wsbox.bind("<<ComboboxSelected>>",self.workspace_changed)
         tools=self.disclosure(body,"Access & discovery tools")
         self.form(tools,"CyberQP region · optional","cyberqp_region","US",list(CYBERQP_PORTALS))
-        self.button(tools,"Open CyberQP",self.open_cyberqp).pack(fill="x",pady=(0,6))
         hint=ttk.Label(tools,text="Activate JIT access in your browser, then return to sign in here.",style="Muted.TLabel",wraplength=300,justify="left")
         hint.pack(fill="x",pady=(0,12));self.wrap_to_parent(hint)
         for label,command in (("Check setup access / Contributor",self.setup_access),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
@@ -277,6 +276,7 @@ class App:
         self.button(body,"Import configuration",self.import_config).pack(fill="x",pady=(0,8))
         manage=self.disclosure(body,"Manage saved profile")
         self.button(manage,"Delete saved client",self.delete_client,"Danger.TButton").pack(fill="x")
+        self.button(body,"Open CyberQP",self.open_cyberqp).pack(fill="x",pady=(0,8))
         detailcard,body=self.card(connect,"Selected workspace","Confirm the destination before exporting evidence or configuring onboarding.")
         detailcard.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(0,16))
         self.identity=tk.StringVar(value="No workspace selected. Use Workspaces to sign in and select a destination.")

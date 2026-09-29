@@ -250,7 +250,7 @@ class App:
         self.rules_page=RulesPage(self,rules)
         connect.columnconfigure(0,weight=1,uniform="discovery");connect.columnconfigure(1,weight=1,uniform="discovery")
         discovery,body=self.card(connect,"Connect to Azure","Sign in, then select the subscription and workspace you want to work with.")
-        discovery.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
+        discovery.grid(row=0,column=1,sticky="nsew",pady=(0,16))
         self.form(body,"Tenant ID or domain · optional","tenant")
         hint=ttk.Label(body,text="Leave blank to discover the directories available to your account.",style="Muted.TLabel",wraplength=300,justify="left")
         hint.pack(fill="x",pady=(0,14));self.wrap_to_parent(hint)
@@ -268,7 +268,7 @@ class App:
         for label,command in (("Check setup access / Contributor",self.setup_access),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
             self.button(tools,label,command).pack(fill="x",pady=(0,6))
         clientcard,body=self.card(connect,"Client profile","Optional. Save a familiar name and tenant for your next visit.")
-        clientcard.grid(row=0,column=1,sticky="nsew",pady=(0,16))
+        clientcard.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
         self.clientbox=self.form(body,"Saved client","client_name",values=[])
         self.clientbox.bind("<<ComboboxSelected>>",self.client_changed)
         self.button(body,"+ Add client",self.add_client).pack(fill="x",pady=(0,14))

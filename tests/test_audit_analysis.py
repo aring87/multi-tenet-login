@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import audit_analysis as analysis
+from full_onboarding import Stop as LegacyAnalysisStop
 import audit_evidence as audit
 from desktop_backend import Stop
 from test_audit_evidence import FakeSession
@@ -98,15 +99,15 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(result["status"],"no_records")
         self.assertEqual(len(result["requests"]),3)
 
-    def test_expected_table_queries_are_summaries(self):
-        results=self.collector.run("2024-01-01","2024-01-02",dict(expected_tables=["Heartbeat"]))
+    def test_selected_period_tables_export_events(self):
+        results=self.collector.run("2024-01-01","2024-01-02",dict(source_tables=["Heartbeat"],source_mode="period"))
         result=results[-1]
         self.assertEqual(result["table"],"Heartbeat")
-        self.assertIn("summarize Records=count()",result["requests"][0]["query"])
-        self.assertIn("by Day=startofday(TimeGenerated)",result["requests"][0]["query"])
+        self.assertNotIn("summarize",result["requests"][0]["query"])
+        self.assertIn("order by TimeGenerated asc",result["requests"][0]["query"])
 
-    def test_invalid_expectations_stop_before_network(self):
-        with self.assertRaises(Stop):self.collector.run("2024-01-01","2024-01-02",dict(expected_tables=["Heartbeat | take 1"]))
+    def test_invalid_source_table_stops_before_network(self):
+        with self.assertRaises(Stop):self.collector.run("2024-01-01","2024-01-02",dict(source_tables=["Heartbeat | take 1"]))
         self.assertFalse(self.session.calls)
 
 
@@ -195,24 +196,20 @@ class AnalysisTests(unittest.TestCase):
 
     def test_requirement_bounds_and_injection(self):
         for value in [dict(minimum_retention_days=True),dict(minimum_retention_days=0),dict(expected_tables=["x; print secret"]),dict(expected_tables=["x"]*21),dict(critical_rules=[""])]:
-            with self.assertRaises(Stop):analysis.validate_expectations(value)
+            with self.assertRaises(LegacyAnalysisStop):analysis.validate_expectations(value)
 
-    def test_export_findings_coverage_hashes_and_evidence_links(self):
-        session=FakeSession()
-        results=[evidence("workspace",[dict(properties=dict(retentionInDays=30))]),evidence("rules",[dict(properties=dict(enabled=False,displayName="<script>bad</script>"))])]
+    def test_new_export_omits_legacy_analysis_and_escapes_configuration(self):
+        results=[evidence("rules",[dict(properties=dict(enabled=False,displayName="<script>bad</script>"))])]
         with tempfile.TemporaryDirectory() as folder,patch.object(audit.Collector,"run",return_value=results):
-            output=audit.collect_evidence(session,WORKSPACE,"2024-01-01","2024-01-02",folder,dict(minimum_retention_days=90))
+            output=audit.collect_evidence(FakeSession(),WORKSPACE,"2024-01-01","2024-01-02",folder)
             path=Path(output["folder"])
             for name in ("findings.json","findings.csv","coverage.json","requirements.json","evidence.html"):
-                self.assertTrue((path/name).exists())
-                self.assertIn(name,output["manifest"]["files"])
+                self.assertFalse((path/name).exists())
             report=(path/"report.html").read_text(encoding="utf-8")
-            supporting=(path/"evidence.html").read_text(encoding="utf-8")
-            for anchor in re.findall(r"evidence.html#([^']+)",report):
-                self.assertIn("id='"+anchor+"'",supporting)
-            self.assertNotIn("<script>bad</script>",supporting)
-            self.assertIn("&lt;script&gt;bad&lt;/script&gt;",supporting)
-            self.assertIn("id='finding-filter'",report)
+            self.assertNotIn("<script>bad</script>",report)
+            self.assertIn("&lt;script&gt;bad&lt;/script&gt;",report)
+            self.assertNotIn("finding-filter",report)
+            self.assertIn("Disabled",report)
 
 
 if __name__=="__main__":unittest.main()

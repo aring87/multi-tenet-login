@@ -12,12 +12,15 @@ import traceback
 import webbrowser
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
+from desktop_theme import configure_theme
+from rules_page import RulesPage
+from workspace_tools import access_plan, apply_contributor
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
                              config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
 from lighthouse_onboarding import validate_config
 from datetime import datetime, timedelta, timezone
-from audit_evidence import collect_evidence, date_range
-from audit_analysis import validate_expectations
+from audit_evidence import (collect_evidence, date_range, validate_options, CONFIGURATIONS,
+                            list_log_tables, preview_log_tables)
 
 # Constants that are identical for every client under the delegated model. They are
 # entered once and persisted locally, rather than retyped per onboarding.
@@ -28,7 +31,7 @@ SETTINGS_KEYS = ("github_owner", "github_repo", "managing_tenant_id", "deploy_gr
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Azure Workspace Discovery")
+        root.title("Sentinel Workspace | Client Operations")
         root.geometry("1280x880")
         root.minsize(1120,740)
         root.configure(bg="#edf2f7")
@@ -117,7 +120,8 @@ class App:
     def form(self, parent, label, name, default="", values=None):
         box=ttk.Frame(parent,style="Card.TFrame")
         box.pack(fill="x",pady=(0,14))
-        ttk.Label(box,text=label,style="Field.TLabel").pack(anchor="w",pady=(0,6))
+        caption=ttk.Label(box,text=label,style="Field.TLabel",wraplength=600)
+        caption.pack(anchor="w",pady=(0,6));self.wrap_to_parent(caption)
         v=self.var(name,default)
         if values is None:
             w=ttk.Entry(box,textvariable=v)
@@ -127,97 +131,113 @@ class App:
         self.controls.append((w,"readonly" if values is not None else "normal"))
         return w
 
+    def wrap_to_parent(self,label,margin=0):
+        label.master.bind("<Configure>",lambda event,w=label,m=margin:w.configure(wraplength=max(180,event.width-m)),add="+")
+
     def card(self, parent, title, subtitle=""):
         outer=ttk.Frame(parent,style="Card.TFrame",padding=22)
         ttk.Label(outer,text=title,style="CardTitle.TLabel").pack(anchor="w")
         if subtitle:
-            ttk.Label(outer,text=subtitle,style="Muted.TLabel",wraplength=330).pack(anchor="w",pady=(5,18))
-        else:
-            ttk.Frame(outer,style="Card.TFrame",height=16).pack()
-        body=ttk.Frame(outer,style="Card.TFrame")
-        body.pack(fill="both",expand=True)
+            label=ttk.Label(outer,text=subtitle,style="Muted.TLabel",justify="left",wraplength=600)
+            label.pack(fill="x",pady=(6,18));self.wrap_to_parent(label,44)
+        else:ttk.Frame(outer,style="Card.TFrame",height=16).pack()
+        body=ttk.Frame(outer,style="Card.TFrame");body.pack(fill="both",expand=True)
         return outer,body
 
+    def disclosure(self,parent,title,expanded=False):
+        outer=ttk.Frame(parent,style="Card.TFrame");outer.pack(fill="x",pady=(4,12))
+        body=ttk.Frame(outer,style="Card.TFrame",padding=(0,12,0,0))
+        def toggle():
+            if body.winfo_manager():body.pack_forget();button.configure(text="+  "+title)
+            else:body.pack(fill="x");button.configure(text="−  "+title)
+        button=self.button(outer,("−  " if expanded else "+  ")+title,toggle,"Disclosure.TButton")
+        button.pack(fill="x")
+        if expanded:body.pack(fill="x")
+        return body
+
+    def form_pair(self,parent,fields):
+        row=ttk.Frame(parent,style="Card.TFrame");row.pack(fill="x")
+        for index,field in enumerate(fields):
+            column=ttk.Frame(row,style="Card.TFrame");column.pack(side="left",fill="both",expand=True,padx=(0,16) if index==0 else 0)
+            self.form(column,*field)
+        return row
+
+    def section(self,parent,title,description=""):
+        frame=ttk.Frame(parent,style="Card.TFrame");frame.pack(fill="x",pady=(6,12))
+        ttk.Label(frame,text=title,style="Section.TLabel").pack(anchor="w",pady=(0,10))
+        if description:
+            label=ttk.Label(frame,text=description,style="Muted.TLabel",wraplength=600,justify="left")
+            label.pack(fill="x",pady=(0,12));self.wrap_to_parent(label)
+        return frame
+
+    def update_workspace_context(self):
+        if self.workspace:
+            self.workspace_context.set(self.workspace["workspace_name"]+"  /  Tenant "+self.workspace["tenant_id"])
+        else:self.workspace_context.set("No workspace selected  /  Connect an Azure account to begin")
+
     def build(self):
-        self.root.configure(bg="#f3f5f9")
-        style=ttk.Style()
-        style.theme_use("clam")
-        style.configure(".",font=("Segoe UI",10),foreground="#233248")
-        style.configure("TFrame",background="#f3f5f9")
-        style.configure("Card.TFrame",background="#ffffff")
-        style.configure("Card.TLabelframe",background="#ffffff",bordercolor="#d7dee8")
-        style.configure("Card.TLabelframe.Label",background="#ffffff",foreground="#35455d",font=("Segoe UI",10,"bold"))
-        style.configure("TLabel",background="#f3f5f9")
-        style.configure("CardTitle.TLabel",font=("Segoe UI",13,"bold"),background="white",foreground="#13243b")
-        style.configure("Field.TLabel",font=("Segoe UI",10,"bold"),background="white",foreground="#35455d")
-        style.configure("Muted.TLabel",background="white",foreground="#66758a",font=("Segoe UI",10))
-        style.configure("TEntry",fieldbackground="white",bordercolor="#d7dee8",lightcolor="#d7dee8",
-                        darkcolor="#d7dee8",padding=9)
-        style.configure("TCombobox",fieldbackground="white",background="white",bordercolor="#d7dee8",
-                        lightcolor="#d7dee8",darkcolor="#d7dee8",padding=8,arrowsize=14)
-        style.map("TCombobox",fieldbackground=[("readonly","white")],selectbackground=[("readonly","#e9f0ff")],
-                  selectforeground=[("readonly","#233248")])
-        style.configure("Secondary.TButton",padding=(13,9),background="#f1f4f8",foreground="#33465f",
-                        borderwidth=0,font=("Segoe UI",10,"bold"))
-        style.map("Secondary.TButton",background=[("active","#e4eaf3"),("disabled","#f0f2f5")],
-                  foreground=[("disabled","#9ca7b7")])
-        style.configure("Primary.TButton",padding=(16,10),background="#245de9",foreground="white",
-                        borderwidth=0,font=("Segoe UI",10,"bold"))
-        style.map("Primary.TButton",background=[("active","#174acb"),("disabled","#c4d0ee")],
-                  foreground=[("disabled","#f5f7fc")])
-        style.configure("Danger.TButton",padding=(12,9),background="#fff0f0",foreground="#b83741",borderwidth=0)
-        style.map("Danger.TButton",background=[("active","#ffe0e2")])
-        style.configure("TCheckbutton",background="white")
-        style.configure("Hidden.TNotebook",background="#f3f5f9",borderwidth=0,tabmargins=0)
-        style.layout("Hidden.TNotebook.Tab",[])
-        style.configure("Horizontal.TProgressbar",background="#245de9",troughcolor="#e8edf5",borderwidth=0)
-        sidebar=tk.Frame(self.root,bg="#12213a",width=276)
+        configure_theme(self.root)
+        sidebar=tk.Frame(self.root,bg="#142638",width=248)
         sidebar.pack(side="left",fill="y");sidebar.pack_propagate(False)
-        tk.Label(sidebar,text="SENTINEL",bg="#12213a",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(30,4))
-        tk.Label(sidebar,text="WORKSPACE DISCOVERY",bg="#12213a",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
-        self.nav=[]
-        for i,(title,desc) in enumerate([("Discover","Sign in & copy details"),("Configure","Delegation & target file"),("Review","Preview & apply"),("Audit Evidence","Read-only Azure & Sentinel")]):
-            row=tk.Frame(sidebar,bg="#12213a",cursor="hand2",takefocus=1)
+        tk.Label(sidebar,text="SENTINEL",bg="#142638",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(30,4))
+        tk.Label(sidebar,text="CLIENT OPERATIONS",bg="#142638",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
+        # Display order is independent of the notebook indices used by actions.
+        navigation=[(0,"Workspaces","Connect & discover"),(4,"Analytics rules","Enabled & disabled"),
+                    (1,"Onboarding","Configure client access"),(2,"Review & apply","Preview deployment"),
+                    (3,"Sentinel audit","Configuration & logs")]
+        self.nav=[None]*len(navigation)
+        for position,(i,title,desc) in enumerate(navigation):
+            row=tk.Frame(sidebar,bg="#142638",cursor="hand2",takefocus=1,
+                         highlightthickness=1,highlightbackground="#142638",highlightcolor="#86c8bd")
             row.pack(fill="x",padx=12,pady=4)
-            number=tk.Label(row,text=f"0{i+1}",bg="#12213a",fg="#7893b3",
+            number=tk.Label(row,text=f"0{position+1}",bg="#142638",fg="#7893b3",
                             font=("Segoe UI",9,"bold"),cursor="hand2")
             number.grid(row=0,column=0,rowspan=2,sticky="n",padx=(12,12),pady=(13,0))
-            name=tk.Label(row,text=title,bg="#12213a",fg="#d8e5f5",
+            name=tk.Label(row,text=title,bg="#142638",fg="#d8e5f5",
                           font=("Segoe UI",11,"bold"),anchor="w",cursor="hand2")
             name.grid(row=0,column=1,sticky="ew",padx=(0,8),pady=(10,0))
-            description=tk.Label(row,text=desc,bg="#12213a",fg="#9bb4d4",
-                                 font=("Segoe UI",9),anchor="w",justify="left",wraplength=190,cursor="hand2")
+            description=tk.Label(row,text=desc,bg="#142638",fg="#9bb4d4",
+                                 font=("Segoe UI",9),anchor="w",justify="left",wraplength=168,cursor="hand2")
             description.grid(row=1,column=1,sticky="ew",padx=(0,8),pady=(2,11))
             row.columnconfigure(1,weight=1)
             for part in (row,number,name,description):
                 part.bind("<Button-1>",lambda event,n=i:self.tabs.select(n))
             row.bind("<Return>",lambda event,n=i:self.tabs.select(n))
             row.bind("<space>",lambda event,n=i:self.tabs.select(n))
-            self.nav.append((row,number,name,description))
-        bottom=tk.Frame(sidebar,bg="#12213a");bottom.pack(side="bottom",fill="x",padx=22,pady=22)
-        tk.Label(bottom,text="LOCAL WORKSPACE",bg="#12213a",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w")
-        tk.Label(bottom,text="Your approved Azure access",bg="#12213a",fg="#c2d2e5",font=("Segoe UI",9),wraplength=220,justify="left").pack(anchor="w",pady=(6,16))
+            self.nav[i]=(row,number,name,description)
+        bottom=tk.Frame(sidebar,bg="#142638");bottom.pack(side="bottom",fill="x",padx=22,pady=22)
+        tk.Label(bottom,text="LOCAL WORKSPACE",bg="#142638",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w")
+        tk.Label(bottom,text="Azure access • Local exports",bg="#142638",fg="#c2d2e5",font=("Segoe UI",9),wraplength=200,justify="left").pack(anchor="w",pady=(6,16))
         tk.Button(bottom,text="Help & prerequisites",command=lambda:os.startfile(str(BASE/"DESKTOP-START-HERE.md")),
-                  bg="#12213a",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w")
+                  bg="#142638",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w")
         tk.Button(bottom,text="Open app data",command=lambda:os.startfile(str(DATA)),
-                  bg="#12213a",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w",pady=(8,0))
+                  bg="#142638",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w",pady=(8,0))
         main=ttk.Frame(self.root);main.pack(side="left",fill="both",expand=True)
         head=ttk.Frame(main,padding=(30,26,30,18));head.pack(fill="x")
         self.page_title=tk.StringVar(value="Connect your client")
         self.page_subtitle=tk.StringVar(value="Discover the right workspace without navigating the Azure portal.")
-        ttk.Label(head,textvariable=self.page_title,font=("Segoe UI",23,"bold"),foreground="#14263e").pack(anchor="w")
-        ttk.Label(head,textvariable=self.page_subtitle,foreground="#6a7890").pack(anchor="w",pady=(7,0))
+        ttk.Label(head,textvariable=self.page_title,font=("Segoe UI",22,"bold"),foreground="#14263e").pack(anchor="w")
+        subtitle=ttk.Label(head,textvariable=self.page_subtitle,style="Context.TLabel")
+        subtitle.pack(anchor="w",pady=(6,0))
+        self.wrap_to_parent(subtitle,60)
+        self.workspace_context=tk.StringVar(value="No workspace selected  /  Connect an Azure account to begin")
+        context=ttk.Label(head,textvariable=self.workspace_context,style="Context.TLabel")
+        context.pack(anchor="w",pady=(14,0))
+        self.wrap_to_parent(context,60)
         self.status=tk.StringVar(value="Ready. Use an authorized Azure account to connect a client.")
         statusframe=ttk.Frame(main,padding=(30,10));statusframe.pack(side="bottom",fill="x")
-        ttk.Label(statusframe,textvariable=self.status,foreground="#61728a",wraplength=920).pack(anchor="w")
-        self.progress=ttk.Progressbar(statusframe,mode="indeterminate",maximum=100)
-        self.progress.pack(fill="x",pady=(8,0))
+        self.activity_badge=ttk.Label(statusframe,text="READY",style="Badge.TLabel",padding=(9,4))
+        self.activity_badge.pack(side="left",anchor="n",padx=(0,12))
+        statusbody=ttk.Frame(statusframe);statusbody.pack(fill="both",expand=True)
+        statuslabel=ttk.Label(statusbody,textvariable=self.status,style="Context.TLabel")
+        statuslabel.pack(anchor="w");self.wrap_to_parent(statuslabel)
+        self.progress=ttk.Progressbar(statusbody,mode="indeterminate",maximum=100)
         self.tabs=ttk.Notebook(main,style="Hidden.TNotebook");self.tabs.pack(fill="both",expand=True,padx=26,pady=(0,12))
         self.page_contents=[]
         self.page_canvases=[]
-        for name in ("Connect","Configure","Review","Audit Evidence"):
+        for name in ("Connect","Configure","Review","Sentinel Audit","Analytics Rules"):
             page=ttk.Frame(self.tabs);self.tabs.add(page,text=name)
-            canvas=tk.Canvas(page,bg="#f3f5f9",highlightthickness=0,bd=0)
+            canvas=tk.Canvas(page,bg="#f2f5f8",highlightthickness=0,bd=0)
             scroll=ttk.Scrollbar(page,orient="vertical",command=canvas.yview)
             scroll.pack(side="right",fill="y");canvas.pack(side="left",fill="both",expand=True)
             canvas.configure(yscrollcommand=scroll.set)
@@ -226,99 +246,90 @@ class App:
             content.bind("<Configure>",lambda e,c=canvas:c.configure(scrollregion=c.bbox("all")))
             canvas.bind("<Configure>",lambda e,c=canvas,w=window:c.itemconfigure(w,width=e.width))
             self.page_contents.append(content)
-        connect,settings,review,audit=self.page_contents
+        connect,settings,review,audit,rules=self.page_contents
+        self.rules_page=RulesPage(self,rules)
         connect.columnconfigure(0,weight=1,uniform="discovery");connect.columnconfigure(1,weight=1,uniform="discovery")
-        clientcard,body=self.card(connect,"Client profile (optional)","Sign in without creating a profile. Save a client later for quicker access.")
-        clientcard.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
-        self.clientbox=self.form(body,"Saved client","client_name",values=[])
-        self.clientbox.bind("<<ComboboxSelected>>",self.client_changed)
-        actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x",pady=(0,18))
-        self.button(actions,"+ Add client",self.add_client).pack(side="left",padx=(0,8))
-        self.button(actions,"Delete client",self.delete_client,"Danger.TButton").pack(side="left")
-        self.form(body,"Tenant ID or domain (optional)","tenant")
-        self.form(body,"Client slug","client_slug")
-        ttk.Label(body,text="Leave the tenant field blank to sign in without an ID. A saved tenant restricts sign-in to that directory. Clear it when switching to a new client.",
-                  style="Muted.TLabel",wraplength=300).pack(anchor="w",pady=(0,20))
-        self.button(body,"Save client",self.save_client).pack(fill="x",pady=(0,10))
-        self.button(body,"Import configuration",self.import_config).pack(fill="x")
-        details_body=body
-        discovery,body=self.card(connect,"Azure workspace","Connect with the client's authorized Azure account.")
-        discovery.grid(row=0,column=1,sticky="nsew",pady=(0,16))
-        self.form(body,"CyberQP region - optional","cyberqp_region","US",list(CYBERQP_PORTALS))
-        self.button(body,"Sign in to CyberQP",self.open_cyberqp).pack(anchor="w",pady=(0,10))
-        ttk.Label(body,text="Opens your browser. Activate JIT access there, then return here.",
-                  style="Muted.TLabel",wraplength=330).pack(anchor="w",pady=(0,16))
-        self.button(body,"Open Azure portal",self.open_azure_portal).pack(anchor="w",pady=(0,10))
-        ttk.Label(body,text="Portal access is separate. Connect the app below to discover workspaces.",
-                  style="Muted.TLabel",wraplength=330).pack(anchor="w",pady=(0,16))
-        self.form(body,"App sign-in method","login_method","Browser",["Browser","Windows account window"])
-        self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(anchor="w",pady=(0,18))
+        discovery,body=self.card(connect,"Connect to Azure","Sign in, then select the subscription and workspace you want to work with.")
+        discovery.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
+        self.form(body,"Tenant ID or domain · optional","tenant")
+        hint=ttk.Label(body,text="Leave blank to discover the directories available to your account.",style="Muted.TLabel",wraplength=300,justify="left")
+        hint.pack(fill="x",pady=(0,14));self.wrap_to_parent(hint)
+        self.form(body,"Sign-in method","login_method","Browser",["Browser","Windows account window"])
+        self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(fill="x",pady=(0,14))
         self.subbox=self.form(body,"Subscription","subscription",values=[])
         self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
-        self.button(body,"Refresh subscriptions",self.refresh_subscriptions).pack(anchor="w",pady=(0,8))
-        self.button(body,"Check missing subscription",self.check_subscription).pack(anchor="w",pady=(0,12))
-        self.button(body,"Refresh workspaces",self.discover).pack(anchor="w",pady=(0,18))
         self.wsbox=self.form(body,"Log Analytics workspace","workspace",values=[])
         self.wsbox.bind("<<ComboboxSelected>>",self.workspace_changed)
-        self.identity=tk.StringVar(value="Workspace details will appear here after you sign in and discover.")
-        body=details_body
-        ttk.Label(body,text="Workspace details",style="Field.TLabel").pack(anchor="w",pady=(2,6))
-        self.details=tk.Text(body,width=1,height=10,wrap="word",font=("Consolas",10),
-                             bg="#f6f8fc",fg="#233248",relief="flat",padx=12,pady=12)
-        self.details.pack(fill="x",pady=(0,12))
-        self.identity.trace_add("write",lambda *args:self.render_details())
+        tools=self.disclosure(body,"Access & discovery tools")
+        self.form(tools,"CyberQP region · optional","cyberqp_region","US",list(CYBERQP_PORTALS))
+        self.button(tools,"Open CyberQP",self.open_cyberqp).pack(fill="x",pady=(0,6))
+        hint=ttk.Label(tools,text="Activate JIT access in your browser, then return to sign in here.",style="Muted.TLabel",wraplength=300,justify="left")
+        hint.pack(fill="x",pady=(0,12));self.wrap_to_parent(hint)
+        for label,command in (("Check setup access / Contributor",self.setup_access),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
+            self.button(tools,label,command).pack(fill="x",pady=(0,6))
+        clientcard,body=self.card(connect,"Client profile","Optional. Save a familiar name and tenant for your next visit.")
+        clientcard.grid(row=0,column=1,sticky="nsew",pady=(0,16))
+        self.clientbox=self.form(body,"Saved client","client_name",values=[])
+        self.clientbox.bind("<<ComboboxSelected>>",self.client_changed)
+        self.button(body,"+ Add client",self.add_client).pack(fill="x",pady=(0,14))
+        self.form(body,"Client slug","client_slug")
+        self.button(body,"Save client profile",self.save_client).pack(fill="x",pady=(0,8))
+        self.button(body,"Import configuration",self.import_config).pack(fill="x",pady=(0,8))
+        manage=self.disclosure(body,"Manage saved profile")
+        self.button(manage,"Delete saved client",self.delete_client,"Danger.TButton").pack(fill="x")
+        detailcard,body=self.card(connect,"Selected workspace","Confirm the destination before exporting evidence or configuring onboarding.")
+        detailcard.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(0,16))
+        self.identity=tk.StringVar(value="No workspace selected. Use Workspaces to sign in and select a destination.")
+        self.details=tk.Text(body,width=1,height=7,wrap="word",font=("Consolas",10),
+                             bg="#f4f7fa",fg="#233248",relief="flat",padx=14,pady=12)
+        self.details.pack(fill="x",pady=(0,14))
+        self.identity.trace_add("write",lambda *args:(self.render_details(),self.update_workspace_context()))
         self.render_details()
-        self.button(body,"Copy workspace details",self.copy_workspace).pack(anchor="w")
-        self.button(connect,"Advanced: delegation & onboarding  >",lambda:self.tabs.select(1),"Primary.TButton").grid(
-            row=1,column=1,sticky="e",pady=(0,16))
-        top,body=self.card(settings,"This client",
-            "Onboarding deploys one Azure Lighthouse delegation in the client's tenant and opens a target-file pull request. "
-            "No app registrations, federated credentials, GitHub environments or custom roles are created per client.")
+        actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
+        self.button(actions,"Copy details",self.copy_workspace).pack(side="left")
+        self.button(actions,"Open Sentinel audit",lambda:self.tabs.select(3),"Primary.TButton").pack(side="right")
+        self.button(connect,"Configure client onboarding →",lambda:self.tabs.select(1)).grid(row=2,column=1,sticky="e",pady=(0,16))
+        top,body=self.card(settings,"Client configuration",
+            "Create an Azure Lighthouse delegation and prepare the client target-file pull request.")
         top.pack(fill="x",pady=(0,16))
         self.form(body,"Workspace identity label","label","primary")
         ttk.Label(body,text="The primary label uses workspace.yml. Additional labels keep separate workspace files and targets.",
-                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
+                  style="Muted.TLabel",wraplength=650).pack(anchor="w",pady=(0,14))
         self.form(body,"Initial rule path - optional","rule_path")
         self.vars["allow_missing_mitre"]=tk.BooleanVar(value=False)
         cb=ttk.Checkbutton(body,text="Allow missing MITRE metadata (approved exception)",variable=self.vars["allow_missing_mitre"])
         cb.pack(anchor="w",pady=(0,8));self.controls.append((cb,"normal"))
         ttk.Label(body,text="An initial rule is committed disabled. Leave blank to create the target with no rules selected.",
-                  style="Muted.TLabel",wraplength=810).pack(anchor="w")
-        self.constantscard,body=self.card(settings,"Managing tenant (set once)",
-            "These are identical for every client. Saved locally in desktop-data and reused on each onboarding.")
+                  style="Muted.TLabel",wraplength=650).pack(anchor="w")
+        self.constantscard,body=self.card(settings,"Managing tenant defaults",
+            "Set these once and reuse them for each client. Values are saved locally.")
         self.constantscard.pack(fill="x",pady=(0,16))
-        self.form(body,"GitHub organization","github_owner",self.settings.get("github_owner",""))
-        self.form(body,"GitHub repository","github_repo",self.settings.get("github_repo",""))
-        self.form(body,"Managing tenant ID","managing_tenant_id",self.settings.get("managing_tenant_id",""))
-        ttk.Label(body,text="The managing tenant receives the delegated access. It is written into the target file as tenant_id, because the pipeline authenticates there and the client's subscription is visible from it.",
-                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
-        self.form(body,"Deploy group Object ID","deploy_group_object_id",self.settings.get("deploy_group_object_id",""))
-        self.form(body,"Preview group Object ID","read_group_object_id",self.settings.get("read_group_object_id",""))
-        self.form(body,"Engineers group Object ID","engineer_group_object_id",self.settings.get("engineer_group_object_id",""))
-        ttk.Label(body,text="Groups in the managing tenant, not the client's. The delegation grants them built-in roles; Lighthouse cannot delegate custom role definitions.",
-                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
-        self.form(body,"Shared preview environment","preview_environment",self.settings.get("preview_environment",""))
-        self.form(body,"Shared production environment","production_environment",self.settings.get("production_environment",""))
-        ttk.Label(body,text="Both environments are shared by every client and created once by hand, with AZURE_CLIENT_ID and required reviewers. Onboarding verifies them and refuses to create them.",
-                  style="Muted.TLabel",wraplength=810).pack(anchor="w",pady=(0,14))
-        self.form(body,"Offer name - optional","msp_offer_name",self.settings.get("msp_offer_name",""))
-        self.form(body,"Delegation location - optional","delegation_location",self.settings.get("delegation_location",""))
+        group=self.section(body,"REPOSITORY","The private repository that receives the client's target-file pull request.")
+        self.form_pair(group,[("GitHub organization","github_owner",self.settings.get("github_owner","")),("Repository","github_repo",self.settings.get("github_repo",""))])
+        self.button(group,"Sign in to GitHub",self.github_login).pack(anchor="w")
+        group=self.section(body,"DELEGATED ACCESS","Use the managing tenant and its groups. Azure Lighthouse grants the groups built-in roles in the client's subscription.")
+        self.form(group,"Managing tenant ID","managing_tenant_id",self.settings.get("managing_tenant_id",""))
+        self.form(group,"Deploy group Object ID","deploy_group_object_id",self.settings.get("deploy_group_object_id",""))
+        self.form_pair(group,[("Preview group Object ID","read_group_object_id",self.settings.get("read_group_object_id","")),("Engineers group Object ID","engineer_group_object_id",self.settings.get("engineer_group_object_id",""))])
+        group=self.section(body,"SHARED ENVIRONMENTS","Use existing GitHub environments with AZURE_CLIENT_ID and required reviewers. Onboarding verifies these environments.")
+        self.form_pair(group,[("Preview environment","preview_environment",self.settings.get("preview_environment","")),("Production environment","production_environment",self.settings.get("production_environment",""))])
+        optional=self.disclosure(body,"Optional delegation details",bool(self.settings.get("msp_offer_name") or self.settings.get("delegation_location")))
+        self.form_pair(optional,[("Offer name","msp_offer_name",self.settings.get("msp_offer_name","")),("Delegation location","delegation_location",self.settings.get("delegation_location",""))])
         row=ttk.Frame(body,style="Card.TFrame");row.pack(fill="x",pady=(4,0))
-        self.button(row,"Save as defaults",self.save_settings,"Primary.TButton").pack(side="left",padx=(0,10))
-        self.button(row,"Sign in to GitHub",self.github_login).pack(side="left",padx=(0,10))
+        self.button(row,"Save defaults",self.save_settings,"Primary.TButton").pack(side="left",padx=(0,10))
         self.button(row,"Export configuration",self.export_config).pack(side="left")
         self.configfooter=ttk.Frame(settings)
         self.configfooter.pack(fill="x",pady=(0,16))
-        self.button(self.configfooter,"Continue to review  >",lambda:self.tabs.select(2),"Primary.TButton").pack(side="right")
-        reviewcard,body=self.card(review,"Deployment review","Preview the selected configuration before applying changes.")
+        self.button(self.configfooter,"Continue to review →",lambda:self.tabs.select(2),"Primary.TButton").pack(side="right")
+        reviewcard,body=self.card(review,"Review the destination","Run a preview, review its results, then apply the same configuration.")
         reviewcard.pack(fill="x",pady=(0,16))
         self.summary=tk.StringVar(value="Select a workspace and configure the setup to create a preview.")
-        ttk.Label(body,textvariable=self.summary,style="Muted.TLabel",wraplength=820,justify="left").pack(anchor="w",pady=(0,20))
+        ttk.Label(body,textvariable=self.summary,style="Muted.TLabel",wraplength=640,justify="left").pack(anchor="w",pady=(0,20))
         actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
         self.button(actions,"Preview setup",lambda:self.onboard(False),"Primary.TButton").pack(side="left",padx=(0,10))
         self.button(actions,"Apply reviewed setup",lambda:self.onboard(True)).pack(side="left",padx=(0,10))
         self.button(actions,"Sign out",self.logout).pack(side="right")
-        logcard,body=self.card(review,"Activity","Checks, deployment results and next steps appear here.")
+        logcard,body=self.card(review,"Operation activity","Preview checks, deployment results, and next steps appear here.")
         logcard.pack(fill="both",expand=True,pady=(0,16))
         logframe=ttk.Frame(body,style="Card.TFrame");logframe.pack(fill="both",expand=True)
         self.logbox=tk.Text(logframe,wrap="word",font=("Consolas",10),bg="#f6f8fc",fg="#354863",
@@ -326,60 +337,74 @@ class App:
         logscroll=ttk.Scrollbar(logframe,orient="vertical",command=self.logbox.yview)
         logscroll.pack(side="right",fill="y");self.logbox.pack(fill="both",expand=True)
         self.logbox.configure(yscrollcommand=logscroll.set)
-        auditcard,body=self.card(audit,"Collect Azure / Sentinel evidence",
-            "Read-only collection using your signed-in Azure access. Choose a workspace in Discover first.")
+        auditcard,body=self.card(audit,"Build your evidence export",
+            "Start with current configuration. Add only the logs your reviewer needs.")
         auditcard.pack(fill="x",pady=(0,16))
-        ttk.Label(body,textvariable=self.identity,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,18))
+        ttk.Label(body,textvariable=self.identity,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,12))
+        self.audit_flags={}
+        def checkbox(parent,key,label,default=False):
+            var=tk.BooleanVar(value=default);self.audit_flags[key]=var
+            cb=ttk.Checkbutton(parent,text=label,variable=var)
+            cb.pack(anchor="w",pady=3);self.controls.append((cb,"normal"))
+        configs=ttk.LabelFrame(body,text="Current configuration",style="Card.TLabelframe",padding=16)
+        configs.pack(fill="x",pady=(0,12))
+        choices=ttk.Frame(configs,style="Card.TFrame");choices.pack(fill="x")
+        choices.columnconfigure((0,1),weight=1,uniform="categories")
+        for index,(key,(title,_,_)) in enumerate(CONFIGURATIONS.items()):
+            cell=ttk.Frame(choices,style="Card.TFrame");cell.grid(row=index//2,column=index%2,sticky="ew")
+            checkbox(cell,key,title,True)
+        ttk.Label(configs,text="Snapshot taken now; available API settings may not cover every portal screen.",style="Muted.TLabel",wraplength=650).pack(anchor="w",pady=(8,0))
+        logs=self.disclosure(body,"Add logs · optional")
+        checkbox(logs,"audit","Sentinel configuration-change logs (SentinelAudit)")
+        checkbox(logs,"health","Sentinel operational health logs (SentinelHealth)")
         today=datetime.now(timezone.utc).date()
-        dates=ttk.Frame(body,style="Card.TFrame");dates.pack(fill="x")
+        dates=ttk.Frame(logs,style="Card.TFrame");dates.pack(fill="x",pady=(10,0))
         left=ttk.Frame(dates,style="Card.TFrame");left.pack(side="left",fill="x",expand=True,padx=(0,16))
         right=ttk.Frame(dates,style="Card.TFrame");right.pack(side="left",fill="x",expand=True)
-        self.form(left,"Start date (UTC, YYYY-MM-DD)","audit_start",(today-timedelta(days=29)).isoformat())
-        self.form(right,"End date (UTC, inclusive)","audit_end",today.isoformat())
-        ttk.Label(body,text="Collects current workspace settings and period evidence. The report shows daily coverage, incomplete requests and observations backed by evidence. No compliance score is assigned.",style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,18))
-        self.audit_requirements_toggle=self.button(body,"Edit client requirements (optional)",self.toggle_audit_requirements)
-        self.audit_requirements_toggle.pack(anchor="w",pady=(0,10))
-        self.audit_requirement_summary=tk.StringVar()
-        ttk.Label(body,textvariable=self.audit_requirement_summary,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,14))
-        requirements=ttk.LabelFrame(body,text="Client requirements",style="Card.TLabelframe",padding=14)
-        self.audit_requirements_frame=requirements
-        self.form(requirements,"Minimum searchable retention (days; blank skips comparison)","audit_retention")
-        self.form(requirements,"Expected log tables (comma separated; up to 20)","audit_tables")
-        self.form(requirements,"Critical rules required enabled (IDs or exact names; separate with ;)","audit_rules")
-        ttk.Label(requirements,text="Use the client's approved requirements. Retention compares the workspace default and listed tables only, not archive retention. Expected tables receive direct daily-count queries. Critical rule names must be unique.",style="Muted.TLabel",wraplength=610,justify="left").pack(anchor="w",pady=(0,12))
-        self.button(requirements,"Save requirements for this workspace",self.save_audit_requirements).pack(anchor="w")
-        self.audit_collect_button=self.button(body,"Collect evidence & save package",self.collect_audit,"Primary.TButton")
-        self.audit_collect_button.pack(anchor="w")
-        for key in ("audit_retention","audit_tables","audit_rules"):
-            self.vars[key].trace_add("write",lambda *args:self.update_audit_requirements_summary())
-        self.update_audit_requirements_summary()
-        resultcard,body=self.card(audit,"Evidence results","Packages contain a readable report, JSON/CSV evidence and a file-hash manifest.")
+        self.form(left,"Log start date (UTC, YYYY-MM-DD)","audit_start",(today-timedelta(days=6)).isoformat())
+        self.form(right,"Log end date (UTC, inclusive)","audit_end",today.isoformat())
+        self.button(logs,"Choose security source logs…",self.choose_source_logs).pack(anchor="w")
+        self.audit_source_tables=[]
+        self.audit_source_summary=tk.StringVar(value="No source tables selected.")
+        ttk.Label(logs,textvariable=self.audit_source_summary,style="Muted.TLabel",wraplength=650).pack(anchor="w",pady=8)
+        self.form_pair(logs,[("Source export mode","audit_source_mode","sample",["sample","period"]),("Sample size per table (1–1000)","audit_sample_limit","100")])
+        ttk.Label(logs,text="Sample: most recent records in the dates above. Period: collect selected dates, capped at 100,000 records per table; limits and failures are reported. Dates are ignored for configuration-only exports.",style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,8))
+        self.audit_scope_summary=tk.StringVar()
+        scope=ttk.Label(body,textvariable=self.audit_scope_summary,style="Muted.TLabel",wraplength=600)
+        scope.pack(fill="x",pady=(0,12));self.wrap_to_parent(scope)
+        for var in self.audit_flags.values():var.trace_add("write",lambda *args:self.update_audit_scope_summary())
+        self.audit_source_summary.trace_add("write",lambda *args:self.update_audit_scope_summary())
+        self.update_audit_scope_summary()
+        self.button(body,"Export evidence",self.collect_audit,"Primary.TButton").pack(anchor="w")
+        resultcard,body=self.card(audit,"Export results","Readable configuration report, raw JSON, selected log CSVs, and collection status.")
         resultcard.pack(fill="x",pady=(0,16))
-        self.audit_summary=tk.StringVar(value="No evidence collected yet. Choose an approved local folder when collecting.")
+        self.audit_summary=tk.StringVar(value="No export collected yet.")
         ttk.Label(body,textvariable=self.audit_summary,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,16))
         actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
-        self.button(actions,"Open coverage & findings",lambda:self.open_evidence(True)).pack(side="left",padx=(0,10))
-        self.button(actions,"Open package folder",self.open_evidence).pack(side="left")
+        self.button(actions,"Open report",lambda:self.open_evidence(True)).pack(side="left",padx=(0,10))
+        self.button(actions,"Open export folder",self.open_evidence).pack(side="left")
         self.tabs.bind("<<NotebookTabChanged>>",self.page_changed)
         self.page_changed()
         self.root.bind("<MouseWheel>",self.scroll_page)
 
     def scroll_page(self,event):
-        if event.widget.winfo_class() in ("Text","TCombobox"):
+        if event.widget.winfo_toplevel()!=self.root or event.widget.winfo_class() in ("Text","TCombobox","Treeview"):
             return
-        self.page_canvases[self.tabs.index("current")].yview_scroll(int(-event.delta/120),"units")
+        canvas=self.page_canvases[self.tabs.index("current")]
+        if canvas.yview()!=(0.0,1.0):canvas.yview_scroll(int(-event.delta/120),"units")
 
     def page_changed(self,event=None):
         index=self.tabs.index("current")
-        titles=["Connect your client","Configure client onboarding","Review & apply","Audit evidence"]
+        titles=["Your client workspaces","Client onboarding","Review & apply","Sentinel audit","Analytics rules"]
         subtitles=["Discover the right workspace without navigating the Azure portal.",
                    "Deploy a Lighthouse delegation and open the client's target-file pull request.",
                    "Confirm the destination, preview the setup, then apply.",
-                   "Collect and export Azure / Sentinel evidence for the selected workspace."]
+                   "Export selected Sentinel configuration and logs for this workspace.",
+                   "Browse enabled and disabled analytics rules for the selected workspace."]
         self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
         for i,(row,number,name,description) in enumerate(self.nav):
             selected=i==index
-            background="#244566" if selected else "#12213a"
+            background="#254655" if selected else "#142638"
             row.configure(bg=background)
             number.configure(bg=background,fg="#a9c8ff" if selected else "#7893b3")
             name.configure(bg=background,fg="#ffffff" if selected else "#d8e5f5")
@@ -447,7 +472,11 @@ class App:
 
     def set_busy(self,busy):
         self.busy=busy
-        self.progress.start(12) if busy else self.progress.stop()
+        self.activity_badge.configure(text="WORKING" if busy else "READY")
+        if busy:
+            self.progress.pack(fill="x",pady=(8,0));self.progress.start(12)
+        else:
+            self.progress.stop();self.progress.pack_forget()
         for widget,state in self.controls:
             widget.configure(state="disabled" if busy else state)
 
@@ -466,8 +495,8 @@ class App:
         try:
             require(self.session and self.workspace,"Sign in and select a discovered workspace first.")
             start,end=self.vars["audit_start"].get().strip(),self.vars["audit_end"].get().strip()
-            date_range(start,end)
-            expectations=self.audit_requirements()
+            options=self.audit_options()
+            if options["audit"] or options["health"] or options["source_tables"]: date_range(start,end)
         except Stop as error:
             messagebox.showerror("Audit evidence",str(error),parent=self.root);return
         destination=filedialog.askdirectory(title="Choose an approved local folder for client evidence",parent=self.root)
@@ -478,69 +507,105 @@ class App:
         def done(result):
             self.evidence_folder=Path(result["folder"])
             rows=result["manifest"]["results"]
-            assessment=result["manifest"].get("analysis_summary",{})
             self.audit_summary.set("Workspace: "+workspace["workspace_name"]+"\n"+
-                f"Observed issues: {assessment.get('observed_issues',0)} | Needs review: {assessment.get('needs_review',0)} | Insufficient evidence: {assessment.get('insufficient_evidence',0)}\n\n"+
                 "\n".join(r["title"]+": "+r["status"].replace("_"," ")+f" ({r['record_count']} records)" for r in rows)+
                 "\n\nSaved to: "+result["folder"])
             self.status.set("Evidence package saved. Review collection statuses and limitations in the report.")
             self.tabs.select(3)
-        self.work("Collecting read-only Azure / Sentinel evidence...",
-                  lambda:collect_evidence(session,workspace,start,end,destination,expectations),done,page=3)
+        self.work("Exporting selected Sentinel configuration and logs...",
+                  lambda:collect_evidence(session,workspace,start,end,destination,options),done,page=3)
 
-    def audit_requirements(self):
-        value=self.vars["audit_retention"].get().strip()
-        require(not value or value.isascii() and value.isdigit(),"Enter a whole number of retention days, or leave it blank.")
-        return validate_expectations(dict(minimum_retention_days=int(value) if value else None,
-            expected_tables=[x.strip() for x in self.vars["audit_tables"].get().split(",") if x.strip()],
-            critical_rules=[x.strip() for x in self.vars["audit_rules"].get().split(";") if x.strip()]))
+    def update_audit_scope_summary(self):
+        count=sum(self.audit_flags[key].get() for key in CONFIGURATIONS)
+        activity=sum(self.audit_flags[key].get() for key in ("audit","health"))
+        self.audit_scope_summary.set(f"Selected: {count} configuration categories · {activity} Sentinel activity logs · {len(self.audit_source_tables)} source tables")
 
-    def toggle_audit_requirements(self):
-        if self.audit_requirements_frame.winfo_manager():
-            self.audit_requirements_frame.pack_forget()
-            self.audit_requirements_toggle.configure(text="Edit client requirements (optional)")
-        else:
-            self.audit_requirements_frame.pack(fill="x",pady=(0,18),before=self.audit_collect_button)
-            self.audit_requirements_toggle.configure(text="Hide client requirements")
+    def audit_options(self):
+        sample=self.vars["audit_sample_limit"].get().strip()
+        require(sample.isascii() and sample.isdigit(),"Enter a sample size from 1 to 1000.")
+        options=validate_options(dict(configurations=[k for k in CONFIGURATIONS if self.audit_flags[k].get()],
+            audit=self.audit_flags["audit"].get(),health=self.audit_flags["health"].get(),
+            source_tables=list(self.audit_source_tables),source_mode=self.vars["audit_source_mode"].get(),sample_limit=int(sample)))
+        require(options["configurations"] or options["audit"] or options["health"] or options["source_tables"],"Select configuration or logs to export.")
+        return options
 
-    def update_audit_requirements_summary(self):
-        days=self.vars["audit_retention"].get().strip()
-        tables=len([x for x in self.vars["audit_tables"].get().split(",") if x.strip()])
-        rules=len([x for x in self.vars["audit_rules"].get().split(";") if x.strip()])
-        self.audit_requirement_summary.set(
-            f"Requirements for this run: searchable retention {days or 'not specified'}{' days' if days else ''}; {tables} expected tables; {rules} critical rules."
-            if days or tables or rules else "No client requirements entered. Collection and general observations still run.")
+    def reset_audit_selection(self):
+        self.audit_source_tables=[]
+        self.audit_source_summary.set("No source tables selected.")
+        for key in ("audit","health"): self.audit_flags[key].set(False)
+        self.evidence_folder=None
+        self.audit_summary.set("No export collected for this workspace yet.")
 
-    def audit_requirements_path(self):
-        require(self.workspace,"Select a discovered workspace first.")
-        return DATA/"audit-requirements"/guid(self.workspace["tenant_id"],"tenant")/(guid(self.workspace["workspace_id"],"workspace")+".json")
-
-    def save_audit_requirements(self):
+    def choose_source_logs(self):
         if self.busy:return
-        try:
-            value=self.audit_requirements()
-            path=self.audit_requirements_path()
-            path.parent.mkdir(parents=True,exist_ok=True)
-            temporary=path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(value,indent=2),encoding="utf-8")
-            temporary.replace(path)
-            self.status.set("Audit requirements saved locally for "+self.workspace["workspace_name"]+".")
-        except (Stop,OSError) as error:
-            messagebox.showerror("Audit requirements",str(error),parent=self.root)
+        if not self.session or not self.workspace:
+            messagebox.showerror("Source logs","Sign in and select a workspace first.",parent=self.root);return
+        workspace=dict(self.workspace);session=self.session
+        self.work("Loading source table inventory…",lambda:list_log_tables(session,workspace),
+                  lambda result:self.show_source_picker(result,session,workspace),page=3)
 
-    def load_audit_requirements(self):
-        for key in ("audit_retention","audit_tables","audit_rules"):
-            if key in self.vars:self.vars[key].set("")
-        if not self.workspace:return
-        try:
-            path=self.audit_requirements_path()
-            if not path.exists():return
-            value=validate_expectations(json.loads(path.read_text(encoding="utf-8")))
-            self.vars["audit_retention"].set(str(value["minimum_retention_days"]) if value["minimum_retention_days"] is not None else "")
-            self.vars["audit_tables"].set(", ".join(value["expected_tables"]))
-            self.vars["audit_rules"].set("; ".join(value["critical_rules"]))
-        except (Stop,OSError,ValueError) as error:
-            messagebox.showerror("Audit requirements","Saved requirements could not be loaded: "+str(error),parent=self.root)
+    def show_source_picker(self,result,session,workspace):
+        if self.workspace != workspace:return
+        dialog=tk.Toplevel(self.root);dialog.title("Choose security source logs");dialog.geometry("980x620");dialog.minsize(900,520);dialog.transient(self.root)
+        dialog.grab_set()
+        frame=ttk.Frame(dialog,padding=16);frame.pack(fill="both",expand=True)
+        ttk.Label(frame,text="Security source logs",font=("Segoe UI",18,"bold"),wraplength=840).pack(anchor="w")
+        ttk.Label(frame,text="Select up to 20 tables with Ctrl/Shift. Inventory: "+result["status"].replace("_"," ")+". "+result.get("error", ""),wraplength=840).pack(anchor="w",pady=8)
+        treeframe=ttk.Frame(frame);treeframe.pack(fill="both",expand=True)
+        tree=ttk.Treeview(treeframe,columns=("plan","count","latest","status"),selectmode="extended",height=12)
+        tree.heading("#0",text="Table");tree.column("#0",width=210)
+        for key,label,width in (("plan","Plan",80),("count","Period records",100),("latest","Latest event (UTC)",190),("status","Preview status",160)):
+            tree.heading(key,text=label);tree.column(key,width=width)
+        scrollbar=ttk.Scrollbar(treeframe,orient="vertical",command=tree.yview);scrollbar.pack(side="right",fill="y")
+        tree.configure(yscrollcommand=scrollbar.set);tree.pack(fill="both",expand=True)
+        for row in sorted(result["records"],key=lambda r:r.get("name","")):
+            name=row.get("name","")
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}",name) or name in ("SentinelAudit","SentinelHealth") or tree.exists(name):continue
+            tree.insert("", "end",iid=name,text=name,values=((row.get("properties") or {}).get("plan","Unknown"),"—","—","Not previewed"))
+            if name in self.audit_source_tables:tree.selection_add(name)
+        note=tk.StringVar(value="Counts and latest timestamps use the log dates in the audit tab. No event payloads are fetched by preview. Basic/Auxiliary tables may be unavailable through this query API.")
+        ttk.Label(frame,textvariable=note,wraplength=840).pack(anchor="w",pady=10)
+        buttons=ttk.Frame(frame);buttons.pack(fill="x")
+        previewing=[False]
+        def close():
+            if not previewing[0]:dialog.destroy()
+        dialog.protocol("WM_DELETE_WINDOW",close)
+        def selected():
+            tables=list(tree.selection())
+            validate_options(dict(source_tables=tables))
+            return tables
+        def preview():
+            try:
+                tables=selected();require(tables,"Select tables to preview.")
+                start,end=self.vars["audit_start"].get().strip(),self.vars["audit_end"].get().strip();date_range(start,end)
+            except Stop as error:messagebox.showerror("Source logs",str(error),parent=dialog);return
+            previewing[0]=True;preview_button.state(["disabled"]);use_button.state(["disabled"])
+            note.set("Counting selected tables for "+start+" through "+end+" UTC…")
+            outcome=queue.Queue()
+            def run():
+                try:outcome.put((preview_log_tables(session,workspace,start,end,tables),None))
+                except Exception as error:outcome.put((None,str(error)))
+            def poll():
+                try:rows,error=outcome.get_nowait()
+                except queue.Empty:dialog.after(100,poll);return
+                previewing[0]=False;preview_button.state(["!disabled"]);use_button.state(["!disabled"])
+                if error:note.set("Preview failed: "+error);return
+                note.set("Preview: "+start+" through "+end+" UTC. Counts reflect current account visibility; unavailable or partial results are not zero.")
+                for row in rows:
+                    record=row["records"][0] if row["records"] else {}
+                    complete=row["status"] in ("collected","no_records")
+                    tree.set(row["table"],"count",record.get("Records","—") if complete else "Unknown")
+                    tree.set(row["table"],"latest",record.get("LatestEvent") or "—")
+                    tree.set(row["table"],"status",row["status"].replace("_"," "))
+            threading.Thread(target=run,daemon=True).start();dialog.after(100,poll)
+        def use():
+            try:tables=selected()
+            except Stop as error:messagebox.showerror("Source logs",str(error),parent=dialog);return
+            self.audit_source_tables=tables
+            self.audit_source_summary.set("Selected source tables: "+", ".join(tables) if tables else "No source tables selected.")
+            dialog.destroy()
+        preview_button=ttk.Button(buttons,text="Preview selected counts",command=preview,style="Secondary.TButton");preview_button.pack(side="left")
+        use_button=ttk.Button(buttons,text="Use selected tables",command=use,style="Primary.TButton");use_button.pack(side="right")
 
     def open_evidence(self,report=False):
         if not self.evidence_folder:
@@ -564,8 +629,9 @@ class App:
                 break
 
     def clear_selection(self):
+        self.rules_page.reset()
         self.subscriptions=[]; self.workspaces=[]; self.workspace=None; self.plan=None
-        self.load_audit_requirements()
+        self.reset_audit_selection()
         self.subbox.configure(values=[]); self.wsbox.configure(values=[])
         self.vars["subscription"].set(""); self.vars["workspace"].set("")
         self.identity.set("No authenticated workspace selected.")
@@ -681,6 +747,7 @@ class App:
 
     def subscription_changed(self,event=None):
         self.workspace=None; self.plan=None; self.workspaces=[]
+        self.rules_page.reset()
         self.wsbox.configure(values=[]); self.vars["workspace"].set("")
         index=self.subbox.current()
         if index<0: return
@@ -697,6 +764,7 @@ class App:
             messagebox.showerror("Sign in first","Sign in and select a subscription."); return
         sub=self.subscriptions[index]
         self.workspace=None; self.plan=None; self.workspaces=[]
+        self.rules_page.reset()
         self.wsbox.configure(values=[]); self.vars["workspace"].set("")
         def done(rows):
             self.workspaces=rows
@@ -714,12 +782,37 @@ class App:
         index=self.wsbox.current()
         if index<0: return
         self.workspace=dict(self.workspaces[index]); self.plan=None
-        self.load_audit_requirements()
+        self.reset_audit_selection()
+        self.rules_page.reset()
+        selected=dict(self.workspace)
+        self.root.after_idle(lambda:self.rules_page.load() if self.workspace==selected and not self.busy else None)
         account=self.session.account or {}
         self.identity.set("Signed in: "+account.get("user",{}).get("name","unknown")+"\n"+
             "\n".join(label+": "+self.workspace[key] for key,label in
                       (("tenant_id","Tenant ID"),("subscription_id","Subscription ID"),("resource_group","Resource group"),
                        ("workspace_name","Workspace name"),("workspace_id","Workspace ID"))))
+
+    def setup_access(self):
+        if self.busy:return
+        index=self.subbox.current()
+        if not self.session or index<0:
+            messagebox.showinfo("Select subscription","Sign in and select the client subscription first.",parent=self.root);return
+        session=self.session
+        sub=self.subscriptions[index]
+        target=dict(tenant_id=sub["tenantId"],subscription_id=sub["id"])
+        def reviewed(plan):
+            if self.session is not session:return
+            if not plan["needs_role"]:
+                messagebox.showinfo("Setup access", "Your current session already permits Microsoft.ManagedServices registration. No additional Contributor role is needed. Preview setup will check the remaining onboarding permissions.",parent=self.root);return
+            text=("Assign active Contributor to the signed-in user?\n\nAccount: " + plan["account"] +
+                  "\nUser object ID: " + plan["principal"] + "\nClient tenant: " + target["tenant_id"] +
+                  "\nScope: " + plan["scope"] +
+                  "\n\nThis permits management of resources throughout this subscription. It remains assigned until removed; CyberQP session expiry does not remove this Azure assignment. Azure policies and role conditions still apply.")
+            if not messagebox.askokcancel("Review Contributor assignment",text,parent=self.root):return
+            self.plan=None
+            self.work("Assigning reviewed Contributor access...",lambda:apply_contributor(session,plan),
+                      lambda result:(self.log(result),self.status.set(result)),page=0)
+        self.work("Checking current subscription access...",lambda:access_plan(session,target),reviewed,page=0)
 
     def payload(self):
         v=self.values()

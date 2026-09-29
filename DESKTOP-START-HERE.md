@@ -74,3 +74,19 @@ Select a client subscription and workspace. **Analytics rules** automatically re
 Under **Workspaces > Access & discovery tools > Check setup access / Contributor**, the app checks the signed-in user's subscription permissions. If provider registration is already permitted, no role is added. Otherwise, an account with role-assignment rights can review and create an active Contributor assignment for itself on that selected client subscription. Azure enforces conditions and policies. Contributor does not grant permission to assign roles or replace Lighthouse onboarding permissions.
 
 CyberQP activation remains in CyberQP. The Contributor assignment is persistent, not a CyberQP-managed timed activation; remove it through Azure IAM when no longer needed. Allow Azure permission propagation before retrying Preview setup. The app does not grant access automatically during sign-in.
+
+
+### Client slug and workspace label length
+
+Onboarding uses `<client-slug>-<workspace-label>` as its target. The combined
+value, including the separating hyphen, must be at most 45 characters. Azure
+subscription deployment names allow 64, and `lighthouse-onboard-` uses 19.
+Each component allows at most 43 characters, leaving room for the other component;
+the combined limit still applies. Names use lowercase letters, digits and single
+hyphens, starting and ending with a letter or digit.
+
+For example, `explosive-countermeasures-international-workspace` is 49 characters
+and must be shortened by four. The validation message gives the exact length and
+budget. Existing folders and targets are never renamed automatically. If a target
+already exists in the detection repository, review that path before changing its
+client slug or workspace label.

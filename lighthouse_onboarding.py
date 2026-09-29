@@ -52,10 +52,41 @@ def guid(value, label):
     return result
 
 
+DEPLOYMENT_PREFIX = "lighthouse-onboard-"
+TARGET_MAXIMUM = 64 - len(DEPLOYMENT_PREFIX)   # ARM subscription deployment name limit
+# Each half only needs to leave room for a one-character other half plus the hyphen.
+# The combined check below is the real gate, so neither half is capped symmetrically.
+CLIENT_MAXIMUM = TARGET_MAXIMUM - 2
+
+
 def slug(value, label, maximum=48):
-    require(isinstance(value, str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value)
-            and 1 <= len(value) <= maximum, f"{label} must be a lowercase hyphenated name.")
+    """Validate a lowercase hyphenated name.
+
+    Character-class and length failures are reported separately. A combined value
+    can be individually valid on both sides and still be too long, and a single
+    generic message makes that look like a character problem instead.
+    """
+    require(isinstance(value, str), f"{label} must be a lowercase hyphenated name.")
+    require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value),
+            f"{label} must be a lowercase hyphenated name using letters, digits and single "
+            f"hyphens, starting and ending with a letter or digit. Got {value!r}.")
+    require(len(value) <= maximum,
+            f"{label} must be {maximum} characters or fewer. {value!r} is {len(value)}.")
     return value
+
+
+def validate_target(client, workspace_label):
+    """Share the Azure deployment-name budget across both target components."""
+    slug(client, "client", CLIENT_MAXIMUM)
+    slug(workspace_label, "workspace_label", CLIENT_MAXIMUM)
+    combined = client + "-" + workspace_label
+    require(len(combined) <= TARGET_MAXIMUM,
+            f"Combined target {combined!r} is {len(combined)} characters; the limit is "
+            f"{TARGET_MAXIMUM}. Azure deployment names allow 64 characters and the "
+            f"{DEPLOYMENT_PREFIX!r} prefix uses {len(DEPLOYMENT_PREFIX)}. "
+            f"Shorten the client slug or workspace label by at least "
+            f"{len(combined) - TARGET_MAXIMUM} character(s).")
+    return combined
 
 
 def validate_config(c):
@@ -80,9 +111,7 @@ def validate_config(c):
                  c["engineer_group_object_id"]}) == 3,
             "The deploy, read and engineer groups must be three distinct groups.")
 
-    slug(c["client"], "client")
-    slug(c["workspace_label"], "workspace_label")
-    c["target"] = slug(c["client"] + "-" + c["workspace_label"], "combined target")
+    c["target"] = validate_target(c["client"], c["workspace_label"])
 
     for key in ("resource_group", "workspace_name"):
         require(isinstance(c[key], str) and c[key] and
@@ -390,7 +419,7 @@ class Onboard:
                               encoding="utf-8")
             common = ("--subscription", self.c["subscription_id"],
                       "--location", self.c["delegation_location"],
-                      "--name", "lighthouse-onboard-" + self.c["target"],
+                      "--name", DEPLOYMENT_PREFIX + self.c["target"],
                       "--template-file", str(self.template),
                       "--parameters", "@" + str(params))
             self.io.az("deployment", "sub", "validate", *common)

@@ -17,7 +17,7 @@ from rules_page import RulesPage
 from workspace_tools import access_plan, apply_contributor
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
                              config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
-from lighthouse_onboarding import validate_config
+from lighthouse_onboarding import validate_config, validate_target, slug, CLIENT_MAXIMUM
 from datetime import datetime, timedelta, timezone
 from audit_evidence import (collect_evidence, date_range, validate_options, CONFIGURATIONS,
                             list_log_tables, preview_log_tables)
@@ -655,8 +655,11 @@ class App:
             messagebox.showerror("Tenant details",str(error),parent=self.root)
             return
         self.vars["tenant"].set(v["tenant"])
-        if not re.fullmatch(r"[a-z][a-z0-9-]{1,47}",v["client_slug"]) or not v["client_name"] :
-            messagebox.showerror("Client details","Supply a display name and lowercase client slug. Tenant is optional."); return
+        try:
+            require(v["client_name"], "Supply a client display name. Tenant is optional.")
+            slug(v["client_slug"], "Client slug", CLIENT_MAXIMUM)
+        except Stop as error:
+            messagebox.showerror("Client details",str(error),parent=self.root); return
         entry=dict(name=v["client_name"],slug=v["client_slug"],tenant=v["tenant"])
         self.clients=[c for c in self.clients if c["name"]!=entry["name"]]+[entry]
         self.clientfile.write_text(json.dumps(self.clients,indent=2),encoding="utf-8")
@@ -820,8 +823,7 @@ class App:
         require(v["tenant"] == self.auth_hint, "Tenant field changed since sign-in. Sign in to the selected tenant again.")
         sub=self.subscriptions[self.subbox.current()]
         require(sub["tenantId"].lower()==self.workspace["tenant_id"].lower(), "Client/tenant selection changed.")
-        require(re.fullmatch(r"[a-z][a-z0-9-]{1,47}",v["client_slug"]), "Use a lowercase client slug.")
-        require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*",v["label"]), "Use a lowercase workspace label.")
+        validate_target(v["client_slug"],v["label"])
         return config_from_workspace(self.workspace,v["client_slug"],v["label"],v,self.extras)
 
     def onboard(self,apply):

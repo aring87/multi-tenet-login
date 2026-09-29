@@ -452,6 +452,29 @@ class DesktopTests(unittest.TestCase):
             app.collect_audit()
         launch.assert_called_once()
 
+    def test_profile_slug_uses_shared_validation_before_saving(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
+        app=self.make_app(root)
+        with patch.object(ui.messagebox,"showerror") as error:
+            for value in ("a"*44,"double--dash"):
+                app.vars["client_slug"].set(value);app.save_client()
+                self.assertFalse(app.clientfile.exists())
+            self.assertEqual(error.call_count,2)
+        app.vars["client_slug"].set("explosive-countermeasures-international")
+        app.save_client()
+        self.assertEqual(json.loads(app.clientfile.read_text())[0]["slug"],"explosive-countermeasures-international")
+
+    def test_payload_reports_combined_target_overflow(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
+        app=self.make_app(root);app.session=FakeSession();app.workspace=dict(WORKSPACE)
+        app.auth_hint=TENANT;app.subscriptions=[dict(id=SUB,tenantId=TENANT)]
+        app.subbox.configure(values=["Example"]);app.subbox.current(0)
+        app.vars["client_slug"].set("explosive-countermeasures-international")
+        app.vars["label"].set("workspace")
+        with patch.object(ui,"config_from_workspace") as build,self.assertRaisesRegex(Stop,"is 49 characters; the limit is 45"):
+            app.payload()
+        build.assert_not_called()
+
     def test_gui_blocks_apply_without_plan(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)

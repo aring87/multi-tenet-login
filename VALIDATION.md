@@ -114,3 +114,16 @@ The complete offline command passed: python -m unittest discover -s tests -p
 "test_*.py" (137 tests). No tests were skipped and the workflow still runs the full
 suite. This supersedes the prior baseline-failure notes above. Live Azure access,
 role assignment and client deployments have not been exercised by these tests.
+
+
+## Lighthouse target length validation (2026-09-29)
+
+Separated invalid-character and length diagnostics, derived the 45-character target
+budget from the shared 19-character deployment prefix, and reused the same target
+validator in desktop payloads and CLI configuration validation. Profile saving
+uses the same component validator. No automatic folder or target renaming occurs.
+
+All 146 offline tests passed, including nine added tests covering exact/over-limit
+names, asymmetric component lengths, the reported client slug, invalid characters,
+desktop save/payload errors, refusal before cloud calls, and deployment validate/
+create using the identical bounded name. No live Azure deployment was performed.

@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import tkinter as tk
 import unittest
 from pathlib import Path
@@ -11,7 +12,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import desktop_backend as backend
 import desktop_app as ui
-from full_onboarding import Stop
+from lighthouse_onboarding import Stop
 
 TENANT="11111111-1111-4111-8111-111111111111"
 SUB="22222222-2222-4222-8222-222222222222"
@@ -44,6 +45,12 @@ class DesktopTests(unittest.TestCase):
         for module in (backend,ui):
             p=patch.object(module,"DATA",self.data)
             p.start();self.addCleanup(p.stop)
+    def close_root(self,root):
+        for timer in root.tk.call("after","info"):
+            root.after_cancel(timer)
+        root.update_idletasks()
+        root.destroy()
+
     def make_app(self,root):
         app=ui.App(root)
         app.clients=[{"name":"Example client","slug":"example-client","tenant":TENANT}]
@@ -99,7 +106,7 @@ class DesktopTests(unittest.TestCase):
             az.assert_called_once_with("login","--allow-no-subscriptions","--tenant",TENANT)
 
     def test_signin_auto_discovers_and_subscription_switch_clears_details(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root)
         session=MagicMock();session.env={};session.account={}
         session.login.return_value=[dict(id=SUB,tenantId=TENANT,name="Example",isDefault=True)]
@@ -121,13 +128,13 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("No accessible workspaces",app.identity.get())
 
     def test_client_can_be_saved_before_tenant_is_known(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.vars["tenant"].set("")
         app.save_client()
         self.assertEqual(json.loads(app.clientfile.read_text())[0]["tenant"],"")
 
     def test_public_app_starts_with_empty_inventory(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root)
         self.assertEqual(app.clients,[])
         self.assertEqual(app.vars["github_owner"].get(),"")
@@ -145,7 +152,7 @@ class DesktopTests(unittest.TestCase):
                 backend.validate_tenant_hint(value)
 
     def test_invalid_tenant_stops_before_session_or_login(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root);app.vars["tenant"].set("azure.portal.com")
         with patch.object(ui.messagebox,"showerror") as error,patch.object(ui,"Session") as session:
             app.login()
@@ -153,14 +160,14 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("Directory (tenant) ID",error.call_args.args[1])
 
     def test_invalid_tenant_not_saved(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.vars["tenant"].set("portal.azure.com")
         with patch.object(ui.messagebox,"showerror"):
             app.save_client()
         self.assertFalse(app.clientfile.exists())
 
     def test_cyberqp_opens_selected_region_without_authentication(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root)
         with patch.object(ui.webbrowser,"open",return_value=True) as browser,patch.object(ui,"Session") as session:
             for region,url in backend.CYBERQP_PORTALS.items():
@@ -183,7 +190,7 @@ class DesktopTests(unittest.TestCase):
             with self.assertRaisesRegex(Stop,"Access denied"):session.logout()
 
     def test_retry_continues_after_empty_previous_session(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         old=backend.Session(self.data/"old");old.az_exe="fake"
         app.session=old
@@ -194,7 +201,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"false")
 
     def test_windows_broker_can_be_selected(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.vars["login_method"].set("Windows account window")
         new=MagicMock();new.env={}
         with patch.object(ui,"Session",return_value=new),patch.object(app,"work"):
@@ -202,7 +209,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"true")
 
     def test_portal_button_opens_portal_without_app_authentication(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root)
         with patch.object(ui.webbrowser,"open",return_value=True) as browser,patch.object(ui,"Session") as session:
             app.open_azure_portal()
@@ -221,28 +228,58 @@ class DesktopTests(unittest.TestCase):
         with patch("shutil.which",return_value="fake"):
             a=backend.Session(self.data/"one"); b=backend.Session(self.data/"two")
         self.assertNotEqual(a.env["AZURE_CONFIG_DIR"],b.env["AZURE_CONFIG_DIR"])
-    def test_permission_plan_never_creates(self):
-        session=FakeSession()
-        backend.permission_run(session,WORKSPACE,"acme-primary",[P1,P2],False)
-        self.assertFalse(any(c[:3]==("deployment","group","create") for c in session.calls))
-    def test_permission_apply_validates_before_create(self):
-        session=FakeSession()
-        backend.permission_run(session,WORKSPACE,"acme-primary",[P1,P2],True)
-        operations=[c[2] for c in session.calls if c[:2]==("deployment","group")]
-        self.assertEqual(operations,["validate","what-if","create"])
-    def test_validation_failure_stops_apply(self):
-        session=FakeSession();session.fail_validate=True
-        with self.assertRaises(Stop):backend.permission_run(session,WORKSPACE,"acme-primary",[P1,P2],True)
-        self.assertFalse(any(c[:3]==("deployment","group","create") for c in session.calls))
-    def test_identical_principals_stop_before_cloud(self):
-        session=FakeSession()
-        with self.assertRaises(Stop):backend.permission_run(session,WORKSPACE,"acme-primary",[P1,P1],True)
-        self.assertEqual(session.calls,[])
-    def test_plan_fingerprint_covers_destination_and_mode(self):
-        a=backend.fingerprint(WORKSPACE,"Permissions only",[P1,P2])
-        b=backend.fingerprint(dict(WORKSPACE,tenant_id=SUB),"Permissions only",[P1,P2])
-        c=backend.fingerprint(WORKSPACE,"Full Azure + GitHub onboarding",[P1,P2])
-        self.assertEqual(len({a,b,c}),3)
+    def lighthouse_config(self):
+        config=json.loads((backend.BASE/"lighthouse-onboarding.example.json").read_text(encoding="utf-8"))
+        config.update({k:WORKSPACE[k] for k in ("tenant_id","subscription_id","resource_group","workspace_name")})
+        return config
+
+    def test_retired_permission_mode_blocks_plan_and_apply_before_cloud(self):
+        for apply in (False,True):
+            with self.subTest(apply=apply):
+                session=FakeSession()
+                with self.assertRaisesRegex(Stop,"Permissions-only mode is retired"):
+                    backend.permission_run(session,WORKSPACE,"acme-primary",[P1,P2],apply)
+                self.assertEqual(session.calls,[])
+
+    def test_lighthouse_preview_uses_read_only_adapter_and_delegation_template(self):
+        session=FakeSession();session.az_exe="fake-az";session.gh_exe="fake-gh"
+        with patch.object(backend,"Onboard") as onboard:
+            result=backend.full_run(session,self.lighthouse_config(),False)
+        args=onboard.call_args.args
+        self.assertFalse(args[1].apply)
+        self.assertEqual(args[3],backend.BASE/"lighthouse-onboard.json")
+        onboard.return_value.run.assert_called_once_with()
+        self.assertIn("no cloud resources changed",result)
+        self.assertFalse(list(self.data.rglob("*.lock")))
+
+    def test_lighthouse_invalid_config_blocks_onboarding(self):
+        config=self.lighthouse_config();config["tenant_id"]="invalid"
+        session=MagicMock()
+        with patch.object(backend,"Onboard") as onboard,self.assertRaises(Stop):
+            backend.full_run(session,config,True)
+        session.verify.assert_not_called();onboard.assert_not_called()
+
+    def test_lighthouse_apply_releases_lock_after_failure(self):
+        session=FakeSession();session.az_exe="fake-az";session.gh_exe="fake-gh"
+        config=self.lighthouse_config()
+        lock=self.data/"runs"/"example-client-primary"/"onboarding.lock"
+        def fail():
+            self.assertTrue(lock.exists())
+            raise Stop("Deployment failed")
+        with patch.object(backend,"Onboard") as onboard:
+            onboard.return_value.run.side_effect=fail
+            with self.assertRaisesRegex(Stop,"Deployment failed"):
+                backend.full_run(session,config,True)
+            self.assertTrue(onboard.call_args.args[1].apply)
+        self.assertFalse(lock.exists())
+
+    def test_plan_fingerprint_covers_destination_and_delegation_groups(self):
+        config=self.lighthouse_config()
+        changed_tenant=dict(config,tenant_id=SUB)
+        changed_group=dict(config,deploy_group_object_id=P1)
+        fingerprints={backend.fingerprint(c,"lighthouse-delegation",[])
+                      for c in (config,changed_tenant,changed_group)}
+        self.assertEqual(len(fingerprints),3)
     def test_full_cli_write_guard(self):
         class Fake:
             az_exe="az";gh_exe="gh"
@@ -256,7 +293,7 @@ class DesktopTests(unittest.TestCase):
         with patch("subprocess.run",side_effect=subprocess.TimeoutExpired("fake",1)):
             with self.assertRaisesRegex(Stop,"may still be running"):session.execute("fake",[])
     def test_delete_client_cancel_preserves_inventory(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         before=copy.deepcopy(app.clients)
         with patch.object(ui.messagebox,"askyesno",return_value=False):
@@ -265,7 +302,7 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(app.clientfile.exists())
 
     def test_delete_last_client_persists_empty_list_and_clears_plan(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         app.plan=("old",123)
         app.workspace=dict(WORKSPACE)
@@ -286,7 +323,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.read_clients(),[])
 
     def test_delete_client_selects_remaining_client(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         app.clients.append({"name":"Second client","slug":"second-client","tenant":TENANT})
         with patch.object(ui.messagebox,"askyesno",return_value=True):
@@ -295,34 +332,39 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.vars["tenant"].get(),TENANT)
 
     def test_delete_blocked_during_running_operation(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.busy=True
         with patch.object(ui.messagebox,"askyesno") as prompt:
             app.delete_client();prompt.assert_not_called()
         self.assertEqual(len(app.clients),1)
 
-    def test_setup_mode_shows_relevant_panel(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+    def test_lighthouse_settings_and_navigation_are_available(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
-        self.assertTrue(app.permissioncard.winfo_manager())
-        self.assertFalse(app.fullcard.winfo_manager())
-        app.vars["mode"].set("Full Azure + GitHub onboarding")
-        app.update_mode()
-        self.assertTrue(app.fullcard.winfo_manager())
-        self.assertFalse(app.permissioncard.winfo_manager())
-
+        self.assertNotIn("mode",app.vars)
+        for key in ("managing_tenant_id","deploy_group_object_id","read_group_object_id",
+                    "engineer_group_object_id","preview_environment","production_environment"):
+            self.assertIn(key,app.vars)
+        rows=sorted(app.nav,key=lambda row:int(row[1].cget("text")))
+        self.assertEqual([row[2].cget("text") for row in rows],
+                         ["Workspaces","Analytics rules","Onboarding","Review & apply","Sentinel audit"])
+        root.deiconify();root.update()
+        for row in rows:
+            row[0].event_generate("<Button-1>")
+            root.update()
+            self.assertEqual(row[2].cget("fg"),"#ffffff")
 
     def test_gui_starts_without_authentication(self):
         root=tk.Tk();root.withdraw()
-        self.addCleanup(root.destroy)
+        self.addCleanup(self.close_root,root)
         with patch.object(backend.Session,"login",side_effect=AssertionError("No automatic login")):
             app=self.make_app(root);root.update()
         self.assertEqual(app.vars["client_name"].get(),"Example client")
-        self.assertEqual(app.vars["mode"].get(),"Permissions only")
+        self.assertIsNone(app.workspace)
         self.assertIsNone(app.session)
-        self.assertEqual(len(app.tabs.tabs()),4)
+        self.assertEqual(len(app.tabs.tabs()),5)
     def test_audit_requires_discovered_workspace(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         with patch.object(ui.messagebox,"showerror") as message,patch.object(ui.filedialog,"askdirectory") as choose:
             app.collect_audit()
@@ -330,7 +372,7 @@ class DesktopTests(unittest.TestCase):
         choose.assert_not_called()
 
     def test_audit_selection_clears_with_workspace(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.workspace=dict(WORKSPACE)
         app.audit_source_tables=["SecurityEvent"]
         app.audit_flags["audit"].set(True)
@@ -341,7 +383,7 @@ class DesktopTests(unittest.TestCase):
         self.assertIsNone(app.evidence_folder)
 
     def test_audit_invalid_selection_does_not_open_destination_dialog(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
         app.audit_source_tables=["Heartbeat | take 1"]
         with patch.object(ui.messagebox,"showerror") as message,patch.object(ui.filedialog,"askdirectory") as choose:
@@ -349,7 +391,7 @@ class DesktopTests(unittest.TestCase):
         message.assert_called_once();choose.assert_not_called()
 
     def test_audit_defaults_to_configuration_without_logs(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         options=app.audit_options()
         self.assertEqual(options["configurations"],list(ui.CONFIGURATIONS))
@@ -358,7 +400,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(options["source_mode"],"sample")
 
     def test_audit_action_uses_captured_workspace_and_reports_results(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
         app.vars["audit_start"].set("2024-01-01");app.vars["audit_end"].set("2024-01-02")
         result=dict(folder=str(self.data/"evidence-example"),manifest=dict(results=[dict(title="Rules",status="access_denied",record_count=0)]))
@@ -375,7 +417,7 @@ class DesktopTests(unittest.TestCase):
 
     def test_audit_picker_previews_selected_tables_and_does_not_treat_denial_as_zero(self):
         import time
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.workspace=dict(WORKSPACE)
         app.vars["audit_start"].set("2024-01-01");app.vars["audit_end"].set("2024-01-02")
         result=dict(status="collected",records=[dict(name="SigninLogs",properties=dict(plan="Analytics")),dict(name="SentinelAudit")])
@@ -403,7 +445,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.audit_options()["source_tables"],["SigninLogs"])
 
     def test_audit_configuration_export_ignores_log_dates(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
         app.vars["audit_start"].set("invalid")
         with patch.object(ui.filedialog,"askdirectory",return_value=str(self.data)),patch.object(app,"work") as launch:
@@ -411,21 +453,24 @@ class DesktopTests(unittest.TestCase):
         launch.assert_called_once()
 
     def test_gui_blocks_apply_without_plan(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
-        app.payload=lambda:(dict(WORKSPACE,target="acme-primary"),"Permissions only",[P1,P2])
+        app.payload=self.lighthouse_config
         with patch.object(ui.messagebox,"showerror") as message, patch.object(app,"work") as launch:
             app.onboard(True)
             launch.assert_not_called()
             self.assertIn("Preview",message.call_args.args[1])
     def test_gui_blocks_expired_or_changed_plan(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(root.destroy)
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
-        payload=(dict(WORKSPACE,target="acme-primary"),"Permissions only",[P1,P2])
+        payload=self.lighthouse_config()
         app.payload=lambda:payload
-        app.plan=(backend.fingerprint(*payload),0)
-        with patch.object(ui.messagebox,"showerror"),patch.object(app,"work") as launch:
-            app.onboard(True);launch.assert_not_called()
+        token=backend.fingerprint(payload,"lighthouse-delegation",[])
+        for plan in ((token,0),("different configuration",time.time())):
+            with self.subTest(plan=plan),patch.object(ui.messagebox,"showerror") as message,patch.object(app,"work") as launch:
+                app.plan=plan
+                app.onboard(True);launch.assert_not_called()
+                self.assertIn("Preview",message.call_args.args[1])
 
 if __name__=="__main__":unittest.main(verbosity=2)
 

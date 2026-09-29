@@ -99,3 +99,18 @@ tests and 56 audit backend tests passed (77 targeted tests). The audit picker te
 now locates the dialog tree explicitly because the application has another tree.
 Tkinter multi-root teardown warnings remain. Live Azure operations were not run;
 previously documented full-suite baseline failures have not been resolved.
+
+## Full-suite Lighthouse test migration (2026-09-29)
+
+Resolved the 21 previously documented errors in the desktop test suite. Tests now
+use the active Lighthouse exception class and configuration payloads. Retired
+permissions-only behavior is checked for an explicit refusal before cloud calls;
+replacement coverage checks Lighthouse preview wiring, configuration validation,
+apply-lock cleanup, and destination/group-sensitive review fingerprints. Desktop
+checks use the five current pages and verify sidebar navigation. Pending Tkinter
+callbacks are cancelled before test windows are destroyed.
+
+The complete offline command passed: python -m unittest discover -s tests -p
+"test_*.py" (137 tests). No tests were skipped and the workflow still runs the full
+suite. This supersedes the prior baseline-failure notes above. Live Azure access,
+role assignment and client deployments have not been exercised by these tests.

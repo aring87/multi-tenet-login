@@ -181,12 +181,16 @@ class App:
         sidebar.pack(side="left",fill="y");sidebar.pack_propagate(False)
         tk.Label(sidebar,text="SENTINEL",bg="#142638",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(30,4))
         tk.Label(sidebar,text="CLIENT OPERATIONS",bg="#142638",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
-        self.nav=[]
-        for i,(title,desc) in enumerate([("Workspaces","Connect & discover"),("Onboarding","Configure client access"),("Review & apply","Preview deployment"),("Sentinel audit","Configuration & logs"),("Analytics rules","Enabled & disabled")]):
+        # Display order is independent of the notebook indices used by actions.
+        navigation=[(0,"Workspaces","Connect & discover"),(4,"Analytics rules","Enabled & disabled"),
+                    (1,"Onboarding","Configure client access"),(2,"Review & apply","Preview deployment"),
+                    (3,"Sentinel audit","Configuration & logs")]
+        self.nav=[None]*len(navigation)
+        for position,(i,title,desc) in enumerate(navigation):
             row=tk.Frame(sidebar,bg="#142638",cursor="hand2",takefocus=1,
                          highlightthickness=1,highlightbackground="#142638",highlightcolor="#86c8bd")
             row.pack(fill="x",padx=12,pady=4)
-            number=tk.Label(row,text=f"0{i+1}",bg="#142638",fg="#7893b3",
+            number=tk.Label(row,text=f"0{position+1}",bg="#142638",fg="#7893b3",
                             font=("Segoe UI",9,"bold"),cursor="hand2")
             number.grid(row=0,column=0,rowspan=2,sticky="n",padx=(12,12),pady=(13,0))
             name=tk.Label(row,text=title,bg="#142638",fg="#d8e5f5",
@@ -200,7 +204,7 @@ class App:
                 part.bind("<Button-1>",lambda event,n=i:self.tabs.select(n))
             row.bind("<Return>",lambda event,n=i:self.tabs.select(n))
             row.bind("<space>",lambda event,n=i:self.tabs.select(n))
-            self.nav.append((row,number,name,description))
+            self.nav[i]=(row,number,name,description)
         bottom=tk.Frame(sidebar,bg="#142638");bottom.pack(side="bottom",fill="x",padx=22,pady=22)
         tk.Label(bottom,text="LOCAL WORKSPACE",bg="#142638",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w")
         tk.Label(bottom,text="Azure access • Local exports",bg="#142638",fg="#c2d2e5",font=("Segoe UI",9),wraplength=200,justify="left").pack(anchor="w",pady=(6,16))

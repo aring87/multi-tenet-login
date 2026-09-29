@@ -624,9 +624,12 @@ class App:
         return {k:v.get().strip() if isinstance(v.get(),str) else v.get() for k,v in self.vars.items()}
 
     def refresh_clients(self):
+        selected=self.vars["client_name"].get()
+        self.clients.sort(key=lambda c:(c["name"].casefold(),c["name"]))
         self.clientbox.configure(values=[c["name"] for c in self.clients])
         if self.clients:
-            self.vars["client_name"].set(self.clients[0]["name"])
+            names=[c["name"] for c in self.clients]
+            self.vars["client_name"].set(selected if selected in names else names[0])
             self.client_changed()
 
     def client_changed(self,event=None):
@@ -670,6 +673,7 @@ class App:
             messagebox.showerror("Client details",str(error),parent=self.root); return
         entry=dict(name=v["client_name"],slug=v["client_slug"],tenant=v["tenant"])
         self.clients=[c for c in self.clients if c["name"]!=entry["name"]]+[entry]
+        self.clients.sort(key=lambda c:(c["name"].casefold(),c["name"]))
         self.clientfile.write_text(json.dumps(self.clients,indent=2),encoding="utf-8")
         self.clientbox.configure(values=[c["name"] for c in self.clients])
         self.status.set("Client mapping saved. Credentials are not part of the client inventory.")

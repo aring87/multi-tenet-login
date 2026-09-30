@@ -197,25 +197,22 @@ class App:
                     (1,"Onboarding","Configure client access"),(2,"Review & apply","Preview deployment"),
                     (3,"Sentinel audit","Configuration & logs")]
         self.nav=[None]*len(navigation)
-        for position,(i,title,desc) in enumerate(navigation):
+        for i,title,desc in navigation:
             row=tk.Frame(sidebar,bg="#142638",cursor="hand2",takefocus=1,
                          highlightthickness=1,highlightbackground="#142638",highlightcolor="#86c8bd")
             row.pack(fill="x",padx=12,pady=4)
-            number=tk.Label(row,text=f"0{position+1}",bg="#142638",fg="#7893b3",
-                            font=("Segoe UI",9,"bold"),cursor="hand2")
-            number.grid(row=0,column=0,rowspan=2,sticky="n",padx=(12,12),pady=(13,0))
             name=tk.Label(row,text=title,bg="#142638",fg="#d8e5f5",
                           font=("Segoe UI",11,"bold"),anchor="w",cursor="hand2")
-            name.grid(row=0,column=1,sticky="ew",padx=(0,8),pady=(10,0))
+            name.grid(row=0,column=0,sticky="ew",padx=(12,8),pady=(10,0))
             description=tk.Label(row,text=desc,bg="#142638",fg="#9bb4d4",
                                  font=("Segoe UI",9),anchor="w",justify="left",wraplength=168,cursor="hand2")
-            description.grid(row=1,column=1,sticky="ew",padx=(0,8),pady=(2,11))
-            row.columnconfigure(1,weight=1)
-            for part in (row,number,name,description):
+            description.grid(row=1,column=0,sticky="ew",padx=(12,8),pady=(2,11))
+            row.columnconfigure(0,weight=1)
+            for part in (row,name,description):
                 part.bind("<Button-1>",lambda event,n=i:self.tabs.select(n))
             row.bind("<Return>",lambda event,n=i:self.tabs.select(n))
             row.bind("<space>",lambda event,n=i:self.tabs.select(n))
-            self.nav[i]=(row,number,name,description)
+            self.nav[i]=(row,name,description)
         bottom=tk.Frame(sidebar,bg="#142638");bottom.pack(side="bottom",fill="x",padx=22,pady=22)
         tk.Label(bottom,text="LOCAL WORKSPACE",bg="#142638",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w")
         tk.Label(bottom,text="Azure access • Local exports",bg="#142638",fg="#c2d2e5",font=("Segoe UI",9),wraplength=200,justify="left").pack(anchor="w",pady=(6,16))
@@ -420,11 +417,10 @@ class App:
                    "Create, validate and export a rule draft for repository review."]
         self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
         self.update_workspace_context()
-        for i,(row,number,name,description) in enumerate(self.nav):
+        for i,(row,name,description) in enumerate(self.nav):
             selected=i==index
             background="#254655" if selected else "#142638"
             row.configure(bg=background)
-            number.configure(bg=background,fg="#a9c8ff" if selected else "#7893b3")
             name.configure(bg=background,fg="#ffffff" if selected else "#d8e5f5")
             description.configure(bg=background,fg="#d5e5fb" if selected else "#9bb4d4")
 

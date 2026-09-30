@@ -74,7 +74,7 @@ class DesignTests(unittest.TestCase):
         self.assertFalse(app.rules_page.rows)
 
     def test_all_pages_fit_horizontally_at_minimum_size(self):
-        for index in range(5):
+        for index in range(len(self.app.page_contents)):
             self.app.tabs.select(index);self.root.update()
             canvas=self.app.page_canvases[index]
             self.assertLessEqual(self.app.page_contents[index].winfo_width(),canvas.winfo_width())

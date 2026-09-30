@@ -21,3 +21,6 @@ lighthouse-onboarding.*.json
 !lighthouse-onboarding.example.json
 
 lighthouse-onboard.isi.json
+
+# Local incomplete rule drafts (may contain private detection queries)
+*.rule-draft.json

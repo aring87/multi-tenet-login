@@ -1,6 +1,6 @@
-# Repository catalog pilot
+# Repository UI pilot
 
-This is the first read-only increment of the repository UI design. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. No commits, pull requests, workflow dispatches or Azure changes are made by the catalog.
+This development branch includes the read-only catalog and local rule authoring. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. No commits, pull requests, workflow dispatches or Azure changes are made by the catalog.
 
 ## Start the development copy
 
@@ -30,7 +30,7 @@ The catalog reads YAML workspace manifests recursively, including secondary work
 
 Snapshots stay in memory and are refreshed manually. No automatic fetch or local repository updates occur. Remote loads make one blob request per relevant file; large inventories should use local mode until caching is added. Trees truncated by GitHub fail visibly rather than producing a complete-looking inventory. Limits: 2 MB per file, 32 MB combined, 2,000 catalog files. Alias-based YAML is reported as unsupported.
 
-The actual private detection repository must be checked before claiming schema compatibility. Its existing automatic GitHub dropdown update should remain intact. Confirm the current rule format, assignment semantics and authentication flow against that repository before adding writes.
+The builder schema was reviewed against the supplied source snapshot; live private-repository compatibility still requires a pilot. The existing automatic GitHub dropdown update remains in onboarding. Client assignment, authentication and workflow execution must be checked against the private repository before adding those actions to the new UI.
 
 Validation commands:
 
@@ -39,3 +39,24 @@ py -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 All new test data is synthetic. GitHub API reads are mocked in offline tests. No live-client deployment test is part of this increment.
+
+## Create or edit a rule
+
+1. Open **Rule builder**, or select a rule in the catalog and choose **Edit selected rule as draft**.
+2. Fill in Basics, Query & schedule, and MITRE. A new rule has a fresh ID and starts disabled.
+   Editing keeps the existing ID. New draft is the way to start a distinct detection.
+3. For existing rules, optional entity mappings, custom details, suppression, grouping and
+   template metadata remain under Advanced. Unknown properties remain visible and block export
+   until the schema supports them or you explicitly correct them.
+4. **Save draft** keeps incomplete work in a local `.rule-draft.json` file. The default folder
+   is ignored `desktop-data/drafts/`. **Open draft** restores it, including its original ID.
+5. **Validate & review** checks the reviewed repository schema and displays the YAML.
+   Changes clear that preview. A missing-MITRE migration exception must also be allowed by
+   each destination's workspace manifest; this editor does not change those settings.
+6. **Export YAML** validates again and saves the file you select. Add it under `rules/sentinel/`
+   in the private detection repository through your existing review process. Exporting does
+   not assign clients, open a PR, preview against Azure, or deploy anything.
+
+The validator is a bundled, reviewed copy of your uploaded rules.py; see [schema provenance](RULE-SCHEMA.md).
+KQL still needs a workspace query check. Keep local drafts and private queries out of this
+public application repository. Workflow execution and guided PR submission are future increments.

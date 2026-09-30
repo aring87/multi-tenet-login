@@ -52,11 +52,22 @@ class CatalogPage:
         self.details.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y"); self.details.pack(fill="both", expand=True)
         app.button(body, "Show catalog issues", self.issues).pack(anchor="w", pady=(10, 0))
+        app.button(body, "Edit selected rule as draft", self.edit_selected).pack(anchor="w", pady=(8, 0))
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.mode.trace_add("write", self.mode_changed)
         self.source.trace_add("write", self.invalidate)
         for var in (self.search, self.view, self.filter):
             var.trace_add("write", lambda *args: self.render())
+
+    def edit_selected(self):
+        if self.app.busy: return
+        selected = self.tree.selection()
+        if self.view.get() != "Rules" or not selected or not self.snapshot:
+            self.note.set("Choose Rules and select a rule to edit a local draft.")
+            return
+        row = self.visible[int(selected[0])]
+        if self.app.rule_builder.edit_rule(row["raw"]):
+            self.app.tabs.select(6)
 
     def mode_changed(self, *args):
         self.source_label.set("Detection repository folder" if self.mode.get() == "Local folder" else "GitHub repository — owner/name")

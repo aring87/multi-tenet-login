@@ -373,7 +373,7 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(key,app.vars)
         rows=sorted(app.nav,key=lambda row:int(row[1].cget("text")))
         self.assertEqual([row[2].cget("text") for row in rows],
-                         ["Workspaces","Analytics rules","Repository catalog","Onboarding","Review & apply","Sentinel audit"])
+                         ["Workspaces","Analytics rules","Repository catalog","Rule builder","Onboarding","Review & apply","Sentinel audit"])
         root.deiconify();root.update()
         for row in rows:
             row[0].event_generate("<Button-1>")
@@ -388,7 +388,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.vars["client_name"].get(),"Example client")
         self.assertIsNone(app.workspace)
         self.assertIsNone(app.session)
-        self.assertEqual(len(app.tabs.tabs()),6)
+        self.assertEqual(len(app.tabs.tabs()),7)
     def test_audit_requires_discovered_workspace(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)

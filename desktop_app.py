@@ -15,6 +15,7 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_theme import configure_theme
 from rules_page import RulesPage
 from catalog_page import CatalogPage
+from rule_builder_page import RuleBuilderPage
 from signin_window import create_handoff
 from workspace_tools import access_plan, apply_contributor
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
@@ -176,7 +177,7 @@ class App:
         return frame
 
     def update_workspace_context(self):
-        if hasattr(self, "tabs") and self.tabs.index("current") == 5:
+        if hasattr(self, "tabs") and self.tabs.index("current") in (5, 6):
             self.workspace_context.set("Repository configuration / Azure sign-in is not required")
             return
         if self.workspace:
@@ -192,6 +193,7 @@ class App:
         # Display order is independent of the notebook indices used by actions.
         navigation=[(0,"Workspaces","Connect & discover"),(4,"Analytics rules","Enabled & disabled"),
                     (5,"Repository catalog","Clients & rule library"),
+                    (6,"Rule builder","Create & edit drafts"),
                     (1,"Onboarding","Configure client access"),(2,"Review & apply","Preview deployment"),
                     (3,"Sentinel audit","Configuration & logs")]
         self.nav=[None]*len(navigation)
@@ -244,7 +246,7 @@ class App:
         self.tabs=ttk.Notebook(main,style="Hidden.TNotebook");self.tabs.pack(fill="both",expand=True,padx=26,pady=(0,12))
         self.page_contents=[]
         self.page_canvases=[]
-        for name in ("Connect","Configure","Review","Sentinel Audit","Analytics Rules","Repository Catalog"):
+        for name in ("Connect","Configure","Review","Sentinel Audit","Analytics Rules","Repository Catalog","Rule Builder"):
             page=ttk.Frame(self.tabs);self.tabs.add(page,text=name)
             canvas=tk.Canvas(page,bg="#f2f5f8",highlightthickness=0,bd=0)
             scroll=ttk.Scrollbar(page,orient="vertical",command=canvas.yview)
@@ -255,7 +257,8 @@ class App:
             content.bind("<Configure>",lambda e,c=canvas:c.configure(scrollregion=c.bbox("all")))
             canvas.bind("<Configure>",lambda e,c=canvas,w=window:c.itemconfigure(w,width=e.width))
             self.page_contents.append(content)
-        connect,settings,review,audit,rules,catalog=self.page_contents
+        connect,settings,review,audit,rules,catalog,builder=self.page_contents
+        self.rule_builder=RuleBuilderPage(self,builder,DATA)
         self.catalog_page=CatalogPage(self,catalog)
         self.rules_page=RulesPage(self,rules)
         connect.columnconfigure(0,weight=1,uniform="discovery");connect.columnconfigure(1,weight=1,uniform="discovery")
@@ -407,13 +410,14 @@ class App:
 
     def page_changed(self,event=None):
         index=self.tabs.index("current")
-        titles=["Your client workspaces","Client onboarding","Review & apply","Sentinel audit","Analytics rules","Repository catalog"]
+        titles=["Your client workspaces","Client onboarding","Review & apply","Sentinel audit","Analytics rules","Repository catalog","Rule builder"]
         subtitles=["Discover the right workspace without navigating the Azure portal.",
                    "Deploy a Lighthouse delegation and open the client's target-file pull request.",
                    "Confirm the destination, preview the setup, then apply.",
                    "Export selected Sentinel configuration and logs for this workspace.",
                    "Browse enabled and disabled analytics rules for the selected workspace.",
-                   "Read configured clients, rules and assignments from your detection repository."]
+                   "Read configured clients, rules and assignments from your detection repository.",
+                   "Create, validate and export a rule draft for repository review."]
         self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
         self.update_workspace_context()
         for i,(row,number,name,description) in enumerate(self.nav):
@@ -986,6 +990,8 @@ class App:
     def close(self):
         if self.busy:
             messagebox.showinfo("Operation running","Wait for the operation to finish before closing. Cloud changes may still be in progress.")
+            return
+        if not self.rule_builder.can_discard():
             return
         if self.session:
             session=self.session

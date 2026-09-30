@@ -248,7 +248,8 @@ class CLI:
         if executable.lower().endswith((".cmd", ".bat")):
             require(all(not re.search(r'[&|<>^%!\r\n"]', str(x)) for x in args),
                     "Unsupported shell characters in an Azure CLI argument/path; use a simple folder path.")
-        env = dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*")
+        env = dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*",
+                   AZURE_CORE_ONLY_SHOW_ERRORS="false")
         p = subprocess.run([executable, *map(str, args)], input=data, text=True,
                            capture_output=True, encoding="utf-8", env=env, shell=False)
         if p.returncode:
@@ -263,7 +264,8 @@ class CLI:
             raise Stop("A CLI response was not JSON; review CLI configuration/version.")
 
     def az(self, *args, write=False):
-        return self.run(self.azure, [*args, "--only-show-errors", "--output", "json"], write=write)
+        # MFA recovery instructions can be warnings, so keep them in captured stderr.
+        return self.run(self.azure, [*args, "--output", "json"], write=write)
 
     def gh(self, method, path, body=None, missing=False):
         args = ["api", "--hostname", "github.com", "--method", method,

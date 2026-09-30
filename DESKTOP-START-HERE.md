@@ -116,8 +116,19 @@ entry screen or bypass tenant policies.
 After signing in, verify the account, subscription and workspace. Run Preview again
 before Apply. The failed operation is never replayed automatically, and any previous
 preview is invalidated. Earlier steps in a failed Apply may already have completed.
-If the same challenge persists after scoped sign-in, the app stops prompting and
-shows the original diagnostic for the client's Entra sign-in/Conditional Access review.
+The app captures Azure warnings because CLI can emit its claims-challenge command
+as a warning. A scoped sign-in and a subsequent sign-in carrying the resource's
+actual challenge are separate, bounded recovery attempts. Repeated challenge
+payloads cannot cause an endless prompt loop. A Windows sign-in component failure
+offers browser recovery; the sign-in method changes only if you accept.
+
+If authentication still fails, update Azure CLI (2.76.0 or later is required),
+restart the app and check the client's Entra sign-in logs using the correlation ID
+and UTC timestamp shown in the error. Inspect Authentication Details and Conditional
+Access results for Azure CLI / Windows Azure Service Management API. A successful
+preview does not prove the actual Lighthouse deployment will satisfy MFA. Your
+administrator may need to enforce MFA at sign-in or resolve the account's MFA or
+cross-tenant policy requirements; do not disable those requirements to complete setup.
 
 An empty subscription list does not prove the account has no Azure permissions.
 The app retains CLI sign-in warnings, including failures for particular tenants.
@@ -128,3 +139,5 @@ A terminal az login uses a separate cache and does not refresh this app's sessio
 
 References: [Azure CLI interactive sign-in](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli-interactively),
 [login scopes and claims challenges](https://learn.microsoft.com/en-us/cli/azure/reference-index#az-login).
+
+MFA challenge troubleshooting: [Microsoft guidance](https://learn.microsoft.com/en-us/cli/azure/use-azure-cli-successfully-troubleshooting#troubleshooting-multifactor-authentication-mfa).

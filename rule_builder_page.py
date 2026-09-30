@@ -7,6 +7,7 @@ import rule_drafts as drafts
 import rule_schema
 from rule_review_dialog import ReviewDialog
 from repository_reviews import load_request
+from review_history import ReviewHistoryDialog
 
 
 class RuleBuilderPage:
@@ -18,7 +19,7 @@ class RuleBuilderPage:
         self.vars, self.texts = {}, {}
         self.saved = None
         outer, body = app.card(parent, "Create a detection rule",
-            "Build a local draft, check its format, then export YAML for repository review. New rules start disabled.")
+            "Build a local draft, validate it, then submit it to GitHub for review. New rules start disabled.")
         outer.pack(fill="both", expand=True, pady=(0, 16))
         bar = ttk.Frame(body, style="Card.TFrame"); bar.pack(fill="x")
         for title, command in (("New draft", self.new), ("Open YAML", self.open_yaml),
@@ -71,7 +72,7 @@ class RuleBuilderPage:
         app.button(actions, "Validate & review", self.validate, "Primary.TButton").pack(side="left")
         app.button(actions, "Export YAML", self.export).pack(side="left", padx=8)
         app.button(actions, "Review for GitHub", self.review).pack(side="left")
-        app.button(body, "Recover / open a saved review request", self.recover_review).pack(anchor="w", pady=(10, 0))
+        app.button(body, "Saved review requests", self.review_history).pack(anchor="w", pady=(10, 0))
         self.vars["kind"].trace_add("write", self.kind_changed)
         self.load_form(drafts.new_form())
 
@@ -229,6 +230,10 @@ class RuleBuilderPage:
     def review(self):
         if not self.app.busy and self.validate() is not None:
             ReviewDialog(self)
+
+    def review_history(self):
+        if not self.app.busy:
+            ReviewHistoryDialog(self)
 
     def recover_review(self):
         if self.app.busy: return

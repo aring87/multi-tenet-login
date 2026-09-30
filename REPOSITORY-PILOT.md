@@ -22,7 +22,7 @@ Use Python 3.10+ with Tkinter. Keep the working onboarding copy at its known wor
 4. Switch between Clients and Rules, search, filter configured state and select a row to see assignments and raw configuration.
 5. Check **Show catalog issues** if any file is unavailable or malformed. A loaded catalog is not a pipeline validation result and does not establish deployment state.
 
-For this pilot GitHub mode uses the existing GitHub CLI login (`gh auth login --hostname github.com`); local mode requires no GitHub or Azure sign-in. The planned GitHub App device login, request history and installable distribution are subsequent work, not implemented here. No new personal access token is required by this feature.
+For this pilot GitHub mode uses the existing GitHub CLI login (`gh auth login --hostname github.com`); local mode requires no GitHub or Azure sign-in. The planned GitHub App device login, live review/check status and installable distribution are subsequent work, not implemented here. No new personal access token is required by this feature.
 
 The catalog reads YAML workspace manifests recursively, including secondary workspace filenames, and YAML rules under `rules/sentinel/`. It supports the supplied version 1 manifest shape, reports duplicate target IDs, missing assigned rules and unreadable files, and rejects unsafe YAML and linked directories/files. It is a display adapter, not a replacement for the repository's authoritative validators. An unspecified rule enabled value remains unspecified; it is never inferred from lifecycle status.
 
@@ -78,7 +78,7 @@ public application repository. Guided draft PR submission is available below; cl
    or dispatches an Azure deployment. Creating a branch or PR can trigger workflows already
    configured in your repository. Use **Open pull request** for its checks and review.
 6. If a response times out, retry in the same dialog. After an app restart, use
-   **Recover / open a saved review request** and select the matching file from
+   **Saved review requests** to search and reopen a request. For files copied from another computer, use **Open request file** and select the matching file from
    `desktop-data/review-requests/`. Requests include private YAML and are ignored by Git.
    Keep these app-created files unchanged. Completed requests open their existing PR;
    changed review branches are refused rather than overwritten.
@@ -97,3 +97,19 @@ have been uploaded or live tenant deployments performed during development.
 API references: [Git trees](https://docs.github.com/en/rest/git/trees),
 [Git references](https://docs.github.com/en/rest/git/refs),
 [pull requests](https://docs.github.com/en/rest/pulls/pulls).
+
+## Find a saved review
+
+In **Rule builder**, select **Saved review requests**. The list reads this computer's
+`desktop-data/review-requests/` folder, newest first. Search by rule name, repository,
+rule file path or request ID, then choose **Open saved review** to inspect the original
+diff and recover an interrupted submission or open its PR. Your current draft stays intact.
+
+**PR link saved** means a URL was recorded locally; it does not indicate current GitHub
+checks, review or merge status. **Submission unconfirmed** means the request may need
+recovery; it does not mean GitHub received nothing. Opening a saved review never submits
+it automatically. Use its explicit recovery button if needed.
+
+Unreadable files are reported and left unchanged. The list shows up to 200 recent files;
+use **Open request file** for older files. A new laptop has an empty list unless you copy
+its private review request files into that laptop's ignored app data folder.

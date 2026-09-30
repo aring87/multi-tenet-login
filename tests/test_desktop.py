@@ -371,14 +371,15 @@ class DesktopTests(unittest.TestCase):
         for key in ("managing_tenant_id","deploy_group_object_id","read_group_object_id",
                     "engineer_group_object_id","preview_environment","production_environment"):
             self.assertIn(key,app.vars)
-        rows=sorted(app.nav,key=lambda row:int(row[1].cget("text")))
-        self.assertEqual([row[2].cget("text") for row in rows],
-                         ["Workspaces","Analytics rules","Onboarding","Review & apply","Sentinel audit"])
+        sidebar=app.nav[0][0].master
+        rows=sorted(app.nav,key=lambda row:sidebar.pack_slaves().index(row[0]))
+        self.assertEqual([row[1].cget("text") for row in rows],
+                         ["Workspaces","Analytics rules","Repository catalog","Rule builder","Onboarding","Review & apply","Sentinel audit"])
         root.deiconify();root.update()
         for row in rows:
             row[0].event_generate("<Button-1>")
             root.update()
-            self.assertEqual(row[2].cget("fg"),"#ffffff")
+            self.assertEqual(row[1].cget("fg"),"#ffffff")
 
     def test_gui_starts_without_authentication(self):
         root=tk.Tk();root.withdraw()
@@ -388,7 +389,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.vars["client_name"].get(),"Example client")
         self.assertIsNone(app.workspace)
         self.assertIsNone(app.session)
-        self.assertEqual(len(app.tabs.tabs()),5)
+        self.assertEqual(len(app.tabs.tabs()),7)
     def test_audit_requires_discovered_workspace(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)

@@ -1,3 +1,7 @@
+## Repository UI development pilot
+
+The read-only Repository catalog and guided Rule builder are available in this development branch. See [pilot setup and limits](REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
+
 # Sentinel Workspace
 
 ## Discover workspace details without a tenant ID
@@ -43,7 +47,7 @@ Discovery and permissions-only mode do not require GitHub or CyberQP. Full onboa
 6. Activate JIT access through your organization's normal process, then select **Sign in with Microsoft**.
 7. Workspaces load automatically after sign-in or changing the subscription. Use **Refresh workspaces** to reload them.
 
-No third-party Python packages are required. The desktop uses the installed Azure CLI for Microsoft authentication.
+This development app requires PyYAML. Run `py -m pip install -r requirements.txt` before launching it. The desktop uses the installed Azure CLI for Microsoft authentication.
 
 ## Two setup modes
 

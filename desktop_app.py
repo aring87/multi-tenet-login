@@ -14,6 +14,8 @@ from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_theme import configure_theme
 from rules_page import RulesPage
+from catalog_page import CatalogPage
+from rule_builder_page import RuleBuilderPage
 from signin_window import create_handoff
 from workspace_tools import access_plan, apply_contributor
 from desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
@@ -32,7 +34,7 @@ SETTINGS_KEYS = ("github_owner", "github_repo", "managing_tenant_id", "deploy_gr
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Sentinel Workspace | Client Operations")
+        root.title("Sentinel Workspace | Repository UI development")
         root.geometry("1280x880")
         root.minsize(1120,740)
         root.configure(bg="#edf2f7")
@@ -175,6 +177,9 @@ class App:
         return frame
 
     def update_workspace_context(self):
+        if hasattr(self, "tabs") and self.tabs.index("current") in (5, 6):
+            self.workspace_context.set("Repository configuration / Azure sign-in is not required")
+            return
         if self.workspace:
             self.workspace_context.set(self.workspace["workspace_name"]+"  /  Tenant "+self.workspace["tenant_id"])
         else:self.workspace_context.set("No workspace selected  /  Connect an Azure account to begin")
@@ -187,28 +192,27 @@ class App:
         tk.Label(sidebar,text="CLIENT OPERATIONS",bg="#142638",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
         # Display order is independent of the notebook indices used by actions.
         navigation=[(0,"Workspaces","Connect & discover"),(4,"Analytics rules","Enabled & disabled"),
+                    (5,"Repository catalog","Clients & rule library"),
+                    (6,"Rule builder","Create & edit drafts"),
                     (1,"Onboarding","Configure client access"),(2,"Review & apply","Preview deployment"),
                     (3,"Sentinel audit","Configuration & logs")]
         self.nav=[None]*len(navigation)
-        for position,(i,title,desc) in enumerate(navigation):
+        for i,title,desc in navigation:
             row=tk.Frame(sidebar,bg="#142638",cursor="hand2",takefocus=1,
                          highlightthickness=1,highlightbackground="#142638",highlightcolor="#86c8bd")
             row.pack(fill="x",padx=12,pady=4)
-            number=tk.Label(row,text=f"0{position+1}",bg="#142638",fg="#7893b3",
-                            font=("Segoe UI",9,"bold"),cursor="hand2")
-            number.grid(row=0,column=0,rowspan=2,sticky="n",padx=(12,12),pady=(13,0))
             name=tk.Label(row,text=title,bg="#142638",fg="#d8e5f5",
                           font=("Segoe UI",11,"bold"),anchor="w",cursor="hand2")
-            name.grid(row=0,column=1,sticky="ew",padx=(0,8),pady=(10,0))
+            name.grid(row=0,column=0,sticky="ew",padx=(12,8),pady=(10,0))
             description=tk.Label(row,text=desc,bg="#142638",fg="#9bb4d4",
                                  font=("Segoe UI",9),anchor="w",justify="left",wraplength=168,cursor="hand2")
-            description.grid(row=1,column=1,sticky="ew",padx=(0,8),pady=(2,11))
-            row.columnconfigure(1,weight=1)
-            for part in (row,number,name,description):
+            description.grid(row=1,column=0,sticky="ew",padx=(12,8),pady=(2,11))
+            row.columnconfigure(0,weight=1)
+            for part in (row,name,description):
                 part.bind("<Button-1>",lambda event,n=i:self.tabs.select(n))
             row.bind("<Return>",lambda event,n=i:self.tabs.select(n))
             row.bind("<space>",lambda event,n=i:self.tabs.select(n))
-            self.nav[i]=(row,number,name,description)
+            self.nav[i]=(row,name,description)
         bottom=tk.Frame(sidebar,bg="#142638");bottom.pack(side="bottom",fill="x",padx=22,pady=22)
         tk.Label(bottom,text="LOCAL WORKSPACE",bg="#142638",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w")
         tk.Label(bottom,text="Azure access • Local exports",bg="#142638",fg="#c2d2e5",font=("Segoe UI",9),wraplength=200,justify="left").pack(anchor="w",pady=(6,16))
@@ -239,7 +243,7 @@ class App:
         self.tabs=ttk.Notebook(main,style="Hidden.TNotebook");self.tabs.pack(fill="both",expand=True,padx=26,pady=(0,12))
         self.page_contents=[]
         self.page_canvases=[]
-        for name in ("Connect","Configure","Review","Sentinel Audit","Analytics Rules"):
+        for name in ("Connect","Configure","Review","Sentinel Audit","Analytics Rules","Repository Catalog","Rule Builder"):
             page=ttk.Frame(self.tabs);self.tabs.add(page,text=name)
             canvas=tk.Canvas(page,bg="#f2f5f8",highlightthickness=0,bd=0)
             scroll=ttk.Scrollbar(page,orient="vertical",command=canvas.yview)
@@ -250,7 +254,9 @@ class App:
             content.bind("<Configure>",lambda e,c=canvas:c.configure(scrollregion=c.bbox("all")))
             canvas.bind("<Configure>",lambda e,c=canvas,w=window:c.itemconfigure(w,width=e.width))
             self.page_contents.append(content)
-        connect,settings,review,audit,rules=self.page_contents
+        connect,settings,review,audit,rules,catalog,builder=self.page_contents
+        self.rule_builder=RuleBuilderPage(self,builder,DATA)
+        self.catalog_page=CatalogPage(self,catalog)
         self.rules_page=RulesPage(self,rules)
         connect.columnconfigure(0,weight=1,uniform="discovery");connect.columnconfigure(1,weight=1,uniform="discovery")
         discovery,body=self.card(connect,"Connect to Azure","Sign in, then select the subscription and workspace you want to work with.")
@@ -401,18 +407,20 @@ class App:
 
     def page_changed(self,event=None):
         index=self.tabs.index("current")
-        titles=["Your client workspaces","Client onboarding","Review & apply","Sentinel audit","Analytics rules"]
+        titles=["Your client workspaces","Client onboarding","Review & apply","Sentinel audit","Analytics rules","Repository catalog","Rule builder"]
         subtitles=["Discover the right workspace without navigating the Azure portal.",
                    "Deploy a Lighthouse delegation and open the client's target-file pull request.",
                    "Confirm the destination, preview the setup, then apply.",
                    "Export selected Sentinel configuration and logs for this workspace.",
-                   "Browse enabled and disabled analytics rules for the selected workspace."]
+                   "Browse enabled and disabled analytics rules for the selected workspace.",
+                   "Read configured clients, rules and assignments from your detection repository.",
+                   "Create, validate and export a rule draft for repository review."]
         self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
-        for i,(row,number,name,description) in enumerate(self.nav):
+        self.update_workspace_context()
+        for i,(row,name,description) in enumerate(self.nav):
             selected=i==index
             background="#254655" if selected else "#142638"
             row.configure(bg=background)
-            number.configure(bg=background,fg="#a9c8ff" if selected else "#7893b3")
             name.configure(bg=background,fg="#ffffff" if selected else "#d8e5f5")
             description.configure(bg=background,fg="#d5e5fb" if selected else "#9bb4d4")
 
@@ -978,6 +986,8 @@ class App:
     def close(self):
         if self.busy:
             messagebox.showinfo("Operation running","Wait for the operation to finish before closing. Cloud changes may still be in progress.")
+            return
+        if not self.rule_builder.can_discard():
             return
         if self.session:
             session=self.session

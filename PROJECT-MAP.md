@@ -6,6 +6,7 @@ application modules, so they remain together to preserve launchers and CLI usage
 | Area | Files |
 |---|---|
 | Desktop UI | desktop_app.py, desktop_theme.py, signin_window.py, rules_page.py |
+| Repository UI | repository_catalog.py, catalog_page.py, rule_builder_page.py, rule_drafts.py, rule_schema.py |
 | Azure sessions and discovery | desktop_backend.py, workspace_tools.py |
 | Current onboarding | lighthouse_onboarding.py, lighthouse-onboard.json, APP-ONBOARDING.md |
 | Audit collection and analysis | audit_evidence.py, audit_analysis.py, AUDIT-EVIDENCE.md |

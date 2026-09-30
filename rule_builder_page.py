@@ -5,6 +5,8 @@ from pathlib import Path
 
 import rule_drafts as drafts
 import rule_schema
+from rule_review_dialog import ReviewDialog
+from repository_reviews import load_request
 
 
 class RuleBuilderPage:
@@ -12,6 +14,7 @@ class RuleBuilderPage:
         self.app, self.data_dir = app, Path(data_dir)
         self.loading = True
         self.draft_path = None
+        self.source = None
         self.vars, self.texts = {}, {}
         self.saved = None
         outer, body = app.card(parent, "Create a detection rule",
@@ -67,6 +70,8 @@ class RuleBuilderPage:
         actions = ttk.Frame(body, style="Card.TFrame"); actions.pack(fill="x", pady=(14, 0))
         app.button(actions, "Validate & review", self.validate, "Primary.TButton").pack(side="left")
         app.button(actions, "Export YAML", self.export).pack(side="left", padx=8)
+        app.button(actions, "Review for GitHub", self.review).pack(side="left")
+        app.button(body, "Recover / open a saved review request", self.recover_review).pack(anchor="w", pady=(10, 0))
         self.vars["kind"].trace_add("write", self.kind_changed)
         self.load_form(drafts.new_form())
 
@@ -143,12 +148,12 @@ class RuleBuilderPage:
         self.preview.configure(state="normal"); self.preview.delete("1.0", "end")
         self.preview.insert("1.0", text); self.preview.configure(state="disabled")
 
-    def load_form(self, form, path=None):
+    def load_form(self, form, path=None, source=None):
         self.loading = True
         for key, var in self.vars.items(): var.set(form[key])
         for key, text in self.texts.items():
             text.delete("1.0", "end"); text.insert("1.0", form[key]); text.edit_modified(False); text.edit_reset()
-        self.draft_path = path; self.saved = self.form(); self.loading = False
+        self.draft_path = path; self.source = source; self.saved = self.form(); self.loading = False
         self.changed(); self.steps.select(0)
 
     def can_discard(self):
@@ -175,15 +180,16 @@ class RuleBuilderPage:
         if not path: return
         try:
             form = drafts.read_draft(path) if draft else drafts.read_rule(path)
-            if self.can_discard(): self.load_form(form, path if draft else None)
+            source = drafts.read_draft_source(path) if draft else None
+            if self.can_discard(): self.load_form(form, path if draft else None, source)
         except (ValueError, OSError, RecursionError) as error: self.error(error)
 
-    def edit_rule(self, rule):
+    def edit_rule(self, rule, source=None):
         if self.app.busy: return False
         try:
             form = drafts.from_rule(rule)
             if not self.can_discard(): return False
-            self.load_form(form)
+            self.load_form(form, source=source)
             self.note.set("Repository rule copied into a local draft. Its rule ID and advanced properties are retained.")
             return True
         except (ValueError, OSError, RecursionError) as error: self.error(error); return False
@@ -195,7 +201,7 @@ class RuleBuilderPage:
             path = self.draft_path or filedialog.asksaveasfilename(parent=self.app.root, initialdir=folder,
                 initialfile="new-rule.rule-draft.json", defaultextension=".rule-draft.json", filetypes=[("Rule draft", "*.rule-draft.json")])
             if not path: return
-            drafts.save_draft(path, self.form()); self.draft_path = path; self.saved = self.form()
+            drafts.save_draft(path, self.form(), self.source); self.draft_path = path; self.saved = self.form()
             self.note.set("Draft saved locally: " + str(path) + ". It may still need validation.")
         except (ValueError, OSError) as error: self.error(error)
 
@@ -219,3 +225,19 @@ class RuleBuilderPage:
             self.note.set("YAML exported: " + path + ". No clients assigned or deployed. "
                           + ("Missing MITRE requires a target migration exception." if warnings else "Submit through repository review."))
         except (ValueError, OSError, TypeError, RecursionError) as error: self.error(error)
+
+    def review(self):
+        if not self.app.busy and self.validate() is not None:
+            ReviewDialog(self)
+
+    def recover_review(self):
+        if self.app.busy: return
+        folder = self.data_dir / "review-requests"
+        path = filedialog.askopenfilename(parent=self.app.root, title="Open saved review request",
+            initialdir=folder if folder.exists() else self.data_dir,
+            filetypes=[("Review request", "*.review.json")])
+        if not path: return
+        try:
+            ReviewDialog(self, load_request(path))
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            self.error(error)

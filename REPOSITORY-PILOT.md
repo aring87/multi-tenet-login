@@ -59,4 +59,41 @@ All new test data is synthetic. GitHub API reads are mocked in offline tests. No
 
 The validator is a bundled, reviewed copy of your uploaded rules.py; see [schema provenance](RULE-SCHEMA.md).
 KQL still needs a workspace query check. Keep local drafts and private queries out of this
-public application repository. Workflow execution and guided PR submission are future increments.
+public application repository. Guided draft PR submission is available below; client assignment and workflow execution are subsequent increments.
+
+## Submit a rule for repository review
+
+1. Sign in to GitHub CLI with the account authorized for the private detection repository.
+   This pilot uses that existing login; it does not require creating a new personal token.
+2. For an existing rule, refresh the **GitHub repository** catalog and choose
+   **Edit selected rule as draft**. Keep the original rule ID and path. Draft saves retain
+   this repository source. A rule opened only from a local YAML file cannot overwrite an
+   existing remote rule; open that rule from the GitHub catalog first.
+3. In **Rule builder**, finish validation and select **Review for GitHub**.
+4. Check the private repository and file path, then choose **Prepare review**. This only
+   reads GitHub. Review the exact diff, signed-in account, base revision, existing client
+   references and their overrides. New files do not automatically get client assignments.
+5. Select **Create / recover draft PR** to create one rule-file commit on a new branch and
+   a draft pull request. The app never writes to the default branch, merges the request,
+   or dispatches an Azure deployment. Creating a branch or PR can trigger workflows already
+   configured in your repository. Use **Open pull request** for its checks and review.
+6. If a response times out, retry in the same dialog. After an app restart, use
+   **Recover / open a saved review request** and select the matching file from
+   `desktop-data/review-requests/`. Requests include private YAML and are ignored by Git.
+   Keep these app-created files unchanged. Completed requests open their existing PR;
+   changed review branches are refused rather than overwritten.
+
+Submitting requires write access to the private repository and permission to create pull
+requests. Repository rulesets and organization policies still apply. The preview refuses
+incomplete catalogs, duplicate shared IDs and stale source revisions; existing target
+migration exceptions and overrides are validated separately. If main changes before the
+first branch write, refresh the catalog and prepare a new review.
+
+This is schema validation, not live KQL execution or certification of every ARM property.
+The private repository's CI, human review, and deployment approvals remain authoritative.
+Tests use synthetic GitHub responses, including lost-write responses; no private rules
+have been uploaded or live tenant deployments performed during development.
+
+API references: [Git trees](https://docs.github.com/en/rest/git/trees),
+[Git references](https://docs.github.com/en/rest/git/refs),
+[pull requests](https://docs.github.com/en/rest/pulls/pulls).

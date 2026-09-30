@@ -14,7 +14,7 @@ already lives in, and the app will refuse it.
 
 These are done by hand and never repeated.
 
-1. **Three groups in the managing tenant** — a deploy group, a preview group and
+1. **Three groups in the managing tenant** â€” a deploy group, a preview group and
    an engineers group. Record all three Object IDs.
 2. **Two app registrations in the managing tenant**, each with one federated
    credential whose subject is
@@ -22,7 +22,7 @@ These are done by hand and never repeated.
    One for the preview environment, one for production. Record both
    Application (client) IDs.
 3. **Two GitHub environments**, shared by every client. `AZURE_CLIENT_ID` as an
-   environment *variable* in each — preview app in the preview environment,
+   environment *variable* in each â€” preview app in the preview environment,
    deploy app in production. Required reviewers on production only.
 4. Confirm the pipeline workflow references those two environment names as
    literals, not values derived per client.
@@ -36,18 +36,19 @@ environment is a setup error, not something to provision per client.
 
 - **JIT / PIM access into the client tenant**, activated, with **Owner** or
   **User Access Administrator** on the target subscription at *subscription*
-  scope. Contributor and any Sentinel role are not sufficient — creating a
+  scope. Contributor and any Sentinel role are not sufficient â€” creating a
   delegation is a role assignment in the client's directory.
 - If the role was activated in the last few minutes, sign out of any existing
-  session first. Role assignments are baked into the access token, so a
-  freshly activated role is invisible to a token issued before it.
+  session first. Role and group membership changes may need time to propagate or a fresh
+  sign-in. Use the app to refresh its isolated session. A permission denial can
+  also mean the required subscription permissions are missing.
 - A **client slug**, lowercase and hyphenated. It becomes the folder name, the
   `client` field and the target prefix, and the pipeline's validator requires
   all three to agree.
 
 ---
 
-## Step 1 — Start the app and set the managing-tenant defaults
+## Step 1 â€” Start the app and set the managing-tenant defaults
 
 Double-click **Start-Sentinel.cmd**, or run `python .\desktop_app.py`.
 
@@ -57,7 +58,7 @@ card, fill in:
 | Field | What it is |
 |---|---|
 | GitHub organization / repository | the private detection repo |
-| Managing tenant ID | your own tenant — the one *receiving* delegated access |
+| Managing tenant ID | your own tenant â€” the one *receiving* delegated access |
 | Deploy group Object ID | group holding the deploy service principal |
 | Preview group Object ID | group holding the preview service principal |
 | Engineers group Object ID | human read access group |
@@ -71,15 +72,15 @@ reload on every start, so this step is done once rather than per client.
 
 Click **Sign in to GitHub** if `gh` is not already authenticated.
 
-## Step 2 — Activate access to the client tenant
+## Step 2 â€” Activate access to the client tenant
 
 Back on **Discover**. Pick your CyberQP region and click **Sign in to CyberQP**
 if you use it, activate the client's JIT account there, and return.
 
 Then activate the Azure role if it is PIM-eligible rather than permanently
-active. The app cannot do this for you — it is a human approval workflow.
+active. The app cannot do this for you â€” it is a human approval workflow.
 
-## Step 3 — Sign in and discover
+## Step 3 â€” Sign in and discover
 
 Optionally select or add a saved client in the **Client profile** card. Set the
 **Client slug**; the tenant field can stay blank.
@@ -89,10 +90,10 @@ Windows broker. Click **Sign in & discover** and complete Microsoft
 authentication with the client's authorized account.
 
 The app selects the default accessible subscription and loads its Log Analytics
-workspaces. Check the **Subscription** dropdown — it shows the tenant ID, and
+workspaces. Check the **Subscription** dropdown â€” it shows the tenant ID, and
 selecting a different subscription reloads its workspaces.
 
-## Step 4 — Select the workspace
+## Step 4 â€” Select the workspace
 
 Pick the client's workspace in **Log Analytics workspace**. The **Workspace
 details** box then shows the five values the target file needs, including the
@@ -111,26 +112,26 @@ silently points the pipeline at the wrong workspace:
 Discovery lists workspaces; it does not assert Sentinel is enabled on them. If
 in doubt, confirm in the portal that the workspace has a Sentinel instance.
 
-## Step 5 — Configure this client
+## Step 5 â€” Configure this client
 
 Open **Configure**. In the **This client** card:
 
-- **Workspace identity label** — `primary` for a client's first workspace. It
+- **Workspace identity label** â€” `primary` for a client's first workspace. It
   writes `clients/<slug>/workspace.yml`. Any other label writes
   `workspace-<label>.yml` and produces a separate target.
-- **Initial rule path** — optional. Use the pipeline connection-test rule for a
+- **Initial rule path** â€” optional. Use the pipeline connection-test rule for a
   first onboarding; it is committed disabled either way. Leave blank to create
   the target with no rules selected and `enabled: false`.
-- **Allow missing MITRE metadata** — tick only if that exception is approved
+- **Allow missing MITRE metadata** â€” tick only if that exception is approved
   for this repo.
 
-## Step 6 — Preview
+## Step 6 â€” Preview
 
 Open **Review** and click **Preview setup**. Nothing is changed. The plan prints
 to the Activity log and reports:
 
 - client tenant, managing tenant, subscription, workspace and workspace GUID
-- the roles your signed-in account holds — Owner or User Access Administrator
+- the roles your signed-in account holds â€” Owner or User Access Administrator
   must appear
 - whether `Microsoft.ManagedServices` is registered
 - how many delegation assignments already exist on the subscription
@@ -138,14 +139,14 @@ to the Activity log and reports:
 
 Read it rather than skimming. Two failures worth recognizing:
 
-**Roles insufficient** — the activation did not complete, has expired, or is
+**Roles insufficient** â€” the activation did not complete, has expired, or is
 scoped to a resource group rather than the subscription. Reactivate, sign out,
 sign in again.
 
-**Shared environment missing** — the once-only setup was not completed, or the
+**Shared environment missing** â€” the once-only setup was not completed, or the
 environment name in settings does not match GitHub exactly.
 
-## Step 7 — Apply
+## Step 7 â€” Apply
 
 Click **Apply reviewed setup** within 15 minutes of the preview; plans expire,
 and applying a configuration that differs from the previewed one is refused.
@@ -159,41 +160,41 @@ Confirm the destination in the dialog. The app then:
 
 Step 3 matters: the delegation is two resources, and a deployment can report
 success with the definition created and nothing actually delegated. If the app
-stops there, bind it in the client's portal under **Service providers → Service
-provider offers → Delegate subscriptions**, or rerun.
+stops there, bind it in the client's portal under **Service providers â†’ Service
+provider offers â†’ Delegate subscriptions**, or rerun.
 
 The pull request URL is printed in the Activity log.
 
-## Step 8 — Verify the delegation
+## Step 8 â€” Verify the delegation
 
-In the client's tenant: **Service providers → Service provider offers** should
+In the client's tenant: **Service providers â†’ Service provider offers** should
 list your offer with the subscription under Delegations.
 
-In your own tenant: **Azure Lighthouse → My customers → Customers** should list
-the client. If it does not appear within a few minutes, sign out and back in —
+In your own tenant: **Azure Lighthouse â†’ My customers â†’ Customers** should list
+the client. If it does not appear within a few minutes, sign out and back in â€”
 delegation is cached in the access token.
 
 Note that "My role" on that blade shows *your* effective access, which comes
 from the engineers group. It is not what the pipeline identities hold.
 
-## Step 9 — Merge and run the pipeline
+## Step 9 â€” Merge and run the pipeline
 
 The app stops at the pull request by design; deployment goes through the normal
 reviewed pipeline.
 
-1. Review the PR. The target file's `tenant_id` is the **managing** tenant —
+1. Review the PR. The target file's `tenant_id` is the **managing** tenant â€”
    that is correct and deliberate, not a mistake to fix.
 2. Merge after CI passes.
 3. Run the pipeline in **preview** mode for the new target. Green means OIDC,
    the shared credential and the delegation all work.
 4. Run it in **deploy** mode and approve at the gate.
-5. Confirm the rule landed in the client's workspace under Microsoft Sentinel →
+5. Confirm the rule landed in the client's workspace under Microsoft Sentinel â†’
    Analytics.
 
-## Step 10 — Close out
+## Step 10 â€” Close out
 
 Sign out of the app session. Deactivate the JIT access at your privileged-access
-provider — signing out of the app does not do that.
+provider â€” signing out of the app does not do that.
 
 Set `enabled: true` in the target file when you are ready to add that client's
 real rules.
@@ -204,7 +205,7 @@ real rules.
 
 - Create the Sentinel workspace, data connectors or the pipeline
 - Create or modify the two shared GitHub environments
-- Deploy analytics rules — that stays in the reviewed pipeline
+- Deploy analytics rules â€” that stays in the reviewed pipeline
 - Activate JIT or PIM access
 - Delete anything in Azure or GitHub
 
@@ -212,12 +213,12 @@ real rules.
 
 Repeat from step 3 with a different **Workspace identity label**. The
 delegation is per subscription, so a second workspace in the same subscription
-needs no new delegation — the app will report the existing assignment and
+needs no new delegation â€” the app will report the existing assignment and
 create only the new target file.
 
 ## If something fails mid-apply
 
 State lives in `desktop-data/runs/<target>/onboarding.state.json`. Correct the
 cause and rerun; the app resumes and does not roll back or delete. A stale
-`onboarding.lock` in the same folder blocks reruns — check no run is active
+`onboarding.lock` in the same folder blocks reruns â€” check no run is active
 before removing it.

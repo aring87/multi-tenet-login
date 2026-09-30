@@ -13,6 +13,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_theme import configure_theme
+from auth_recovery import AuthenticationRequired
 from rules_page import RulesPage
 from catalog_page import CatalogPage
 from rule_builder_page import RuleBuilderPage
@@ -59,6 +60,7 @@ class App:
         self.signin_handoff = None
         self.signin_timer = None
         self.signin_active = False
+        self.auth_recovery_attempts = set()
         self.build()
         self.refresh_clients()
         self.root.after(100,self.poll)
@@ -475,11 +477,15 @@ class App:
                     self.set_busy(False)
                     if error:
                         self.plan=None
-                        self.status.set("Stopped - "+error[:160])
-                        self.log(error); self.tabs.select(self.operation_page)
+                        details=str(error)
+                        self.status.set("Stopped - "+details[:160])
+                        self.log(details); self.tabs.select(self.operation_page)
                         if self.operation_page==3:
-                            self.audit_summary.set("Collection stopped: "+error)
-                        messagebox.showerror("Operation stopped",error)
+                            self.audit_summary.set("Collection stopped: "+details)
+                        if isinstance(error, AuthenticationRequired):
+                            self.recover_authentication(error)
+                        else:
+                            messagebox.showerror("Operation stopped",details)
                     else:
                         self.status.set("Ready")
                         if callback: callback(result)
@@ -502,7 +508,7 @@ class App:
         self.set_busy(True); self.status.set(title); self.log(title)
         def run():
             try: result,error=task(),None
-            except Exception as ex: result,error=None,str(ex)
+            except Exception as ex: result,error=None,ex
             self.events.put(("done",(done,result,error)))
         threading.Thread(target=run,daemon=True).start()
 
@@ -730,8 +736,37 @@ class App:
         self.signin_handoff=None
         self.signin_button.configure(state="disabled")
 
-    def login(self):
+    def recover_authentication(self, error):
+        self.plan=None
+        self.finish_signin()
+        tenant=error.tenant or self.vars["tenant"].get().strip()
+        attempt=(tenant, error.resource)
+        if attempt in self.auth_recovery_attempts:
+            messagebox.showerror("Authentication still required",
+                "Microsoft still requires authentication after the fresh sign-in. No operation was retried. "
+                "Check this client's Entra sign-in logs and Conditional Access/MFA requirements, "
+                "and confirm the account and tenant. You can start another sign-in after resolving them.\n\n"+str(error),parent=self.root)
+            return
+        if not messagebox.askyesno("Complete Microsoft authentication",
+                "Microsoft requires a fresh sign-in or additional verification for this client.\n\n"
+                "Open Microsoft sign-in now? After signing in, check the workspace and run Preview again. "
+                "The interrupted operation will not be replayed; earlier steps may already have completed.\n\n"+
+                str(error),parent=self.root):
+            return
+        if not tenant:
+            tenant=simpledialog.askstring("Client tenant", "Enter the CLIENT tenant ID or verified domain from Azure portal:",parent=self.root)
+            if not tenant:return
+        try:tenant=validate_tenant_hint(tenant)
+        except Stop as problem:
+            messagebox.showerror("Client tenant",str(problem),parent=self.root);return
+        self.auth_recovery_attempts.add((tenant,error.resource))
+        self.vars["tenant"].set(tenant)
+        self.tabs.select(0)
+        self.login(recovery=error)
+
+    def login(self, recovery=None):
         if self.busy:return
+        if recovery is None:self.auth_recovery_attempts.clear()
         try:
             value=self.vars["tenant"].get().strip()
             hint=validate_tenant_hint(value) if value else ""
@@ -755,6 +790,8 @@ class App:
             try:
                 if old:
                     old.logout()
+                if recovery is not None:
+                    return self.session.login(hint, resource=recovery.resource, claims=recovery.claims)
                 return self.session.login(hint)
             finally:
                 self.events.put(("signin_finished",None))
@@ -783,7 +820,7 @@ class App:
         self.work("Refreshing subscriptions from Azure...",self.session.refresh_subscriptions,done)
 
     def check_subscription(self):
-        if not self.session or not self.subscriptions:
+        if not self.session or not (self.subscriptions or getattr(self.session,"signed_in",False)):
             messagebox.showinfo("Sign in first","Complete Sign in & discover first."); return
         value=simpledialog.askstring("Check missing subscription","Paste the subscription ID shown in Azure portal:",parent=self.root)
         if not value: return

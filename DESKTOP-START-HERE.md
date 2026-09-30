@@ -102,3 +102,29 @@ Windows focus restrictions may still require Alt+Tab. Automatic detection covers
 Microsoft broker hosts and recognized English Microsoft sign-in titles in Edge,
 Chrome, Firefox and Brave; it does not pin your browser permanently above other
 applications. No sign-in credentials or page contents are read by this helper.
+
+## Microsoft asks for MFA after sign-in
+
+If Azure returns AADSTS50076, InteractionRequired, or a recognized revoked-session
+error, the app offers **Complete Microsoft authentication**. Accept to open a fresh
+app session for the affected client, using the selected browser/account-window
+method and the appropriate Azure management or Microsoft Graph scope. If Azure CLI
+provides a supported claims challenge, it is passed through without logging its payload.
+Microsoft chooses the required authentication method; the app cannot force a code
+entry screen or bypass tenant policies.
+
+After signing in, verify the account, subscription and workspace. Run Preview again
+before Apply. The failed operation is never replayed automatically, and any previous
+preview is invalidated. Earlier steps in a failed Apply may already have completed.
+If the same challenge persists after scoped sign-in, the app stops prompting and
+shows the original diagnostic for the client's Entra sign-in/Conditional Access review.
+
+An empty subscription list does not prove the account has no Azure permissions.
+The app retains CLI sign-in warnings, including failures for particular tenants.
+Enter the client tenant ID and use the same authorized identity as in Azure portal.
+When CLI sign-in itself succeeds but returns no subscriptions, **Check missing
+subscription** remains available using the subscription ID from the portal.
+A terminal az login uses a separate cache and does not refresh this app's session.
+
+References: [Azure CLI interactive sign-in](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli-interactively),
+[login scopes and claims challenges](https://learn.microsoft.com/en-us/cli/azure/reference-index#az-login).

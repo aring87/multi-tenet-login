@@ -10,6 +10,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from auth_recovery import AuthenticationRequired, azure_error, recovery_scope
 from lighthouse_onboarding import CLI, Onboard, Stop, guid, require, validate_config
 
 BASE = Path(__file__).resolve().parent
@@ -64,6 +65,9 @@ class Session:
         self.az_exe = shutil.which("az")
         self.gh_exe = shutil.which("gh")
         self.account = None
+        self.login_tenant = ""
+        self.login_diagnostics = ""
+        self.signed_in = False
 
     def execute(self, executable, args, data=None, timeout=900):
         require(executable, "Required tool is missing. Install Azure CLI / GitHub CLI and restart this app.")
@@ -86,24 +90,52 @@ class Session:
             raise Stop("The operation timed out. A cloud change may still be running; inspect its status before retrying.")
         return result
 
+    def authentication_tenant(self):
+        return (self.account or {}).get("tenantId") or self.login_tenant
+
     def az(self, *args):
-        result = self.execute(self.az_exe, [*args, "--only-show-errors", "--output", "json"])
-        require(result.returncode == 0, result.stderr.strip() or "Azure operation failed.")
+        signing_in = bool(args and args[0] == "login")
+        flags = ["--output", "json"] if signing_in else ["--only-show-errors", "--output", "json"]
+        result = self.execute(self.az_exe, [*args, *flags])
+        details = result.stderr.strip()
+        if signing_in:
+            self.login_diagnostics = details
+            self.signed_in = result.returncode == 0
+        if result.returncode:
+            raise azure_error(details or "Azure operation failed.", self.authentication_tenant())
+        # Successful multi-tenant login can still report a failed tenant on stderr.
+        if signing_in and details:
+            self.log("Azure sign-in details: " + str(azure_error(details, self.login_tenant)))
         return json.loads(result.stdout) if result.stdout.strip() else None
 
-    def login(self, tenant_hint=""):
+    def login(self, tenant_hint="", resource=None, claims=None):
         tenant_hint = validate_tenant_hint(tenant_hint) if tenant_hint.strip() else ""
+        self.login_tenant = tenant_hint
+        self.login_diagnostics = ""
+        self.signed_in = False
         self.log("Complete Microsoft sign-in with the client's authorized account and MFA.")
-        # Browser sign-in by default. The desktop can opt into the Windows broker for policies that require it.
         args = ["login", "--allow-no-subscriptions"]
         if tenant_hint:
             args.extend(["--tenant", tenant_hint])
+        if resource is not None:
+            require(tenant_hint, "Enter the client tenant ID or verified domain before recovering authentication.")
+            args.extend(["--scope", recovery_scope(self.az("cloud", "show"), resource)])
+            if claims:
+                args.extend(["--claims-challenge", claims])
         accounts = self.az(*args) or []
         subscriptions = [x for x in accounts if x.get("id") != x.get("tenantId")]
         if re.fullmatch(r"[0-9a-fA-F-]{36}", tenant_hint):
             require(all(x["tenantId"].lower() == tenant_hint.lower() for x in subscriptions),
                     "Sign-in returned a different tenant.")
-        require(subscriptions, "Signed in, but no subscriptions are visible. Check the account's Azure subscription access.")
+        if not subscriptions:
+            if self.login_diagnostics:
+                problem = azure_error(self.login_diagnostics, tenant_hint)
+                if isinstance(problem, AuthenticationRequired):
+                    raise problem
+            raise Stop("Sign-in returned no accessible Azure subscriptions. This can mean the wrong "
+                       "account/tenant, incomplete tenant authentication, or missing Azure access. "
+                       "Enter the client tenant ID and sign in again. If sign-in succeeded, use "
+                       "Check missing subscription with its ID from Azure portal.\n" + self.login_diagnostics)
         return subscriptions
 
     def refresh_subscriptions(self):
@@ -120,6 +152,8 @@ class Session:
                 "Requested subscription ID: "+subscription]
         try:
             sub=self.az("rest","--method","get","--url",endpoint+"/subscriptions/"+subscription+"?api-version=2022-12-01")
+        except AuthenticationRequired:
+            raise
         except Stop as error:
             return "\n".join(report)+"\nSubscription lookup failed:\n"+str(error)
         require(sub.get("subscriptionId","").lower()==subscription,"Subscription response mismatch.")
@@ -137,6 +171,8 @@ class Session:
                                "Workspace name: "+record["workspace_name"],"Workspace ID: "+record["workspace_id"]])
             if not rows: report.append("No accessible workspaces returned by Azure in this subscription.")
             if result.get("nextLink"): report.append("Additional workspace pages exist; this diagnostic shows the first page.")
+        except AuthenticationRequired:
+            raise
         except Stop as error:
             report.append("Workspace lookup failed:\n"+str(error))
         return "\n".join(report)
@@ -166,6 +202,7 @@ class Session:
                     raise
                 self.log("No Azure account is active in this app session; continuing.")
         self.account = None
+        self.signed_in = False
 
 class DesktopCLI(CLI):
     def __init__(self, session, apply):
@@ -181,7 +218,10 @@ class DesktopCLI(CLI):
         if result.returncode:
             if missing and re.search(r"HTTP 404\b", result.stderr):
                 return None
-            raise Stop(result.stderr.strip() or "Operation failed.")
+            details = result.stderr.strip() or "Operation failed."
+            if executable == self.azure:
+                raise azure_error(details, self.session.authentication_tenant())
+            raise Stop(details)
         return json.loads(result.stdout) if result.stdout.strip() else None
 
 def config_from_workspace(workspace, client, label, fields, extras=None):

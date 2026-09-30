@@ -32,6 +32,17 @@ from urllib.parse import quote
 
 MANAGED_SERVICES = "Microsoft.ManagedServices"
 DELEGATION_WRITE = "Microsoft.Authorization/roleAssignments/write"
+AUTHORIZATION_FAILED = re.compile(
+    r"AuthorizationFailed|does not have authorization to perform action", re.I)
+
+# Deploys nothing. Validating it exercises the caller's deployments/validate/action at
+# subscription scope without creating a deployment or touching the directory.
+EMPTY_TEMPLATE = {
+    "$schema": "https://schema.management.azure.com/schemas/2018-05-01/"
+               "subscriptionDeploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "resources": [],
+}
 
 
 class Stop(RuntimeError):
@@ -308,6 +319,7 @@ class Onboard:
                 "Run az account set --subscription with the configured client subscription.")
 
         self.check_delegation_rights()
+        self.check_token_authorization()
         self.check_provider()
         self.check_existing_delegation()
 
@@ -328,7 +340,7 @@ class Onboard:
         """Creating a delegation is a role assignment in the client's directory.
         Owner or User Access Administrator; Contributor and Sentinel roles are not enough."""
         permissions = self.io.az("role", "assignment", "list", "--scope", self.scope,
-                                 "--include-inherited", "--assignee",
+                                 "--include-inherited", "--include-groups", "--assignee",
                                  self.io.az("account", "show")["user"]["name"])
         roles = {p["roleDefinitionName"] for p in permissions}
         require(roles & {"Owner", "User Access Administrator"},
@@ -336,6 +348,37 @@ class Onboard:
                 f"subscription to create a delegation. Found: {sorted(roles) or 'none'}. "
                 "Activate JIT/PIM and sign in again, or ask the client to deploy the template.")
         self.state["caller_roles"] = sorted(roles)
+
+    def check_token_authorization(self):
+        """Role records and the access token can disagree, so checking the records is not
+        enough. az role assignment list reads assignment records, which show a JIT/PIM
+        activation the moment it happens; ARM authorises a deployment against the token,
+        which carries only the membership it was issued with. Probe the real operation so
+        a stale token stops the run here, naming its cause, rather than surfacing later as
+        a bare AuthorizationFailed from inside deploy_delegation."""
+        with tempfile.TemporaryDirectory(prefix="sentinel-") as temp:
+            probe = Path(temp) / "probe.json"
+            probe.write_text(json.dumps(EMPTY_TEMPLATE), encoding="utf-8")
+            try:
+                self.io.az("deployment", "sub", "validate",
+                           "--subscription", self.c["subscription_id"],
+                           "--location", self.c["delegation_location"],
+                           "--name", DEPLOYMENT_PREFIX + "preflight",
+                           "--template-file", str(probe))
+            except Stop as failure:
+                if not AUTHORIZATION_FAILED.search(str(failure)):
+                    raise
+                raise Stop(
+                    "Azure refused a no-op validation on this subscription even though the "
+                    f"role records list {', '.join(self.state['caller_roles'])}. A role "
+                    "activated through JIT/PIM is invisible to an access token issued before "
+                    "the activation, so the records and the token disagree. Sign out and back "
+                    "in, then rerun:\n"
+                    "    az logout\n"
+                    f"    az login --tenant {self.c['tenant_id']}\n"
+                    f"    az account set --subscription {self.c['subscription_id']}\n"
+                    "If it still fails, confirm the roles are Active rather than Eligible, and "
+                    "that they sit on the subscription rather than on a resource group.")
 
     def check_provider(self):
         state = self.io.az("provider", "show", "--namespace", MANAGED_SERVICES,

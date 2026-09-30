@@ -218,4 +218,9 @@ class GitHubReader:
             if len(raw) > MAX_FILE or total > MAX_TOTAL:
                 raise CatalogError("Catalog exceeds its file size limit.")
             files[path] = raw
-        return catalog(files, repository + " / " + branch, revision, identity, issues)
+        result = catalog(files, repository + " / " + branch, revision, identity, issues)
+        result.update(repository=repository, repository_id=meta.get("id"),
+                      private=meta.get("private"), can_push=meta.get("permissions", {}).get("push"),
+                      base_branch=branch, tree_sha=commit["commit"]["tree"]["sha"],
+                      files=files, entries={entry["path"]: entry for entry in tree["tree"]})
+        return result

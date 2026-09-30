@@ -24,3 +24,6 @@ lighthouse-onboard.isi.json
 
 # Local incomplete rule drafts (may contain private detection queries)
 *.rule-draft.json
+
+# Local review requests include private rule content
+*.review.json

@@ -113,9 +113,9 @@ def atomic_write(path, text):
             temp.unlink()
 
 
-def save_draft(path, form):
+def save_draft(path, form, source=None):
     atomic_write(path, json.dumps({"format": "sentinel-rule-draft", "version": 1,
-                                 "form": form}, indent=2) + "\n")
+                                 "form": form, "source": source}, indent=2) + "\n")
 
 
 def read_draft(path):
@@ -134,3 +134,12 @@ def export_rule(path, form):
     text, warnings = validated_yaml(form)
     atomic_write(path, text)
     return warnings
+
+
+def read_draft_source(path):
+    source = json.loads(read_bounded(path)).get("source")
+    if source is not None and (not isinstance(source, dict) or
+            set(source) != {"repository", "revision", "path"} or
+            any(not isinstance(value, str) for value in source.values())):
+        raise ValueError("Draft repository source is invalid.")
+    return source

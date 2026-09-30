@@ -1,0 +1,290 @@
+name: Sentinel - multiple workspaces
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Client 1, or All enabled clients'
+        required: true
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "All enabled clients"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      target_2:
+        description: 'Client 2 (optional)'
+        required: false
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      target_3:
+        description: 'Client 3 (optional)'
+        required: false
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      target_4:
+        description: 'Client 4 (optional)'
+        required: false
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      target_5:
+        description: 'Client 5 (optional)'
+        required: false
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      target_6:
+        description: 'Client 6 (optional)'
+        required: false
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      target_7:
+        description: 'Client 7 (optional)'
+        required: false
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      target_8:
+        description: 'Client 8 (optional)'
+        required: false
+        default: 'Select a client'
+        type: choice
+        # BEGIN GENERATED TARGET OPTIONS
+        options:
+          - "Select a client"
+          - "client-01-workspace"
+          - "client-02-workspace"
+          - "client-03-workspace"
+          - "client-04-workspace"
+          - "client-05-workspace"
+          - "client-06-workspace"
+          - "client-07-workspace"
+          - "client-08-workspace"
+          - "client-09-workspace"
+          - "client-10-workspace"
+          - "client-11-workspace"
+          - "client-12-workspace"
+          - "client-13-workspace"
+          - "client-14-workspace"
+          - "client-15-workspace"
+          - "client-16-workspace"
+          - "client-17-workspace"
+          - "client-18-workspace"
+          - "client-19-workspace"
+          - "legacy-primary"
+        # END GENERATED TARGET OPTIONS
+      rule_path:
+        description: 'Optional exact rule path; blank uses each target’s selected rules'
+        required: false
+        default: ''
+        type: string
+      mode:
+        description: 'Deploy previews each target, then waits for production approval'
+        required: true
+        default: preview
+        type: choice
+        options: [preview, deploy]
+permissions:
+  contents: read
+jobs:
+  select:
+    name: Validate requested clients and rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      targets: ${{ steps.matrix.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require main branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Resolve selected clients
+        id: matrix
+        env:
+          TARGET_CHOICES_JSON: ${{ toJSON(inputs) }}
+          REQUESTED_RULE_PATH: ${{ inputs.rule_path }}
+          REQUESTED_MODE: ${{ inputs.mode }}
+        run: python scripts/target_matrix.py
+  run:
+    name: Run ${{ matrix.target }}
+    needs: select
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        target: ${{ fromJSON(needs.select.outputs.targets) }}
+    uses: ./.github/workflows/sentinel-workspace.yml
+    with:
+      target: ${{ matrix.target }}
+      rule_path: ${{ inputs.rule_path }}
+      mode: ${{ inputs.mode }}
+    permissions:
+      contents: read
+      id-token: write

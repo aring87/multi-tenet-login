@@ -90,6 +90,67 @@ def validate_target(client, workspace_label):
     return combined
 
 
+# ---------------- client dropdown ----------------
+# detection-as-code offers clients as static workflow_dispatch choices, generated between
+# these markers by scripts/sync_target_choices.py. These constants and the sort order must
+# match that script exactly, or its --check will report the dropdown as stale.
+DROPDOWN_WORKFLOWS = ("sentinel.yml", "sentinel-multi-workspace.yml")
+DROPDOWN_BEGIN = "        # BEGIN GENERATED TARGET OPTIONS\n"
+DROPDOWN_END = "        # END GENERATED TARGET OPTIONS\n"
+DROPDOWN_HEADER = "        options:\n"
+DROPDOWN_ITEM = "          - "
+DROPDOWN_FIXED = ("Select a client", "All enabled clients")
+
+
+def dropdown_sort_key(value):
+    """Same ordering as target_ids() in detection-as-code."""
+    return (value.casefold(), value)
+
+
+def add_dropdown_target(text, target):
+    """Insert target into every generated options block of a workflow file.
+
+    Returns the updated text, or None if every block already lists the target. The
+    fixed leading entries (placeholder, and "All enabled clients" where present) keep
+    their position; client entries are re-sorted. Line endings are preserved, because
+    the detection-as-code workflow files are CRLF and a rewrite would change every line.
+    Raises Stop on any structure it does not recognise rather than guessing.
+    """
+    newline = "\r\n" if "\r\n" in text else "\n"
+    body = text.replace("\r\n", "\n")
+    count = body.count(DROPDOWN_BEGIN)
+    require(count >= 1 and body.count(DROPDOWN_END) == count,
+            "Workflow has no matching generated target-options markers.")
+    parts, remaining, changed = [], body, False
+    for _ in range(count):
+        start = remaining.index(DROPDOWN_BEGIN)
+        finish = remaining.index(DROPDOWN_END, start)
+        inner = remaining[start + len(DROPDOWN_BEGIN):finish]
+        require(inner.startswith(DROPDOWN_HEADER), "Generated block does not start with 'options:'.")
+        values = []
+        for line in inner[len(DROPDOWN_HEADER):].split("\n"):
+            if not line:
+                continue
+            require(line.startswith(DROPDOWN_ITEM), "Unexpected line in generated block: " + repr(line))
+            value = json.loads(line[len(DROPDOWN_ITEM):])
+            require(isinstance(value, str), "Non-string dropdown option: " + repr(value))
+            values.append(value)
+        fixed = [v for v in values if v in DROPDOWN_FIXED]
+        require(values[:len(fixed)] == fixed, "Fixed dropdown entries are not at the top of the block.")
+        names = [v for v in values if v not in DROPDOWN_FIXED]
+        if target not in names:
+            names.append(target)
+            changed = True
+        options = fixed + sorted(names, key=dropdown_sort_key)
+        block = DROPDOWN_BEGIN + DROPDOWN_HEADER
+        block += "".join(DROPDOWN_ITEM + json.dumps(v) + "\n" for v in options)
+        parts.append(remaining[:start] + block + DROPDOWN_END)
+        remaining = remaining[finish + len(DROPDOWN_END):]
+    if not changed:
+        return None
+    return ("".join(parts) + remaining).replace("\n", newline)
+
+
 def deployment_name(target):
     """Preserve existing short names; bound longer names with a stable hash suffix."""
     slug(target, "target", TARGET_MAXIMUM)
@@ -378,6 +439,53 @@ class Onboard:
                     or base64.b64decode(entry["content"]).decode().strip() == self.manifest().strip(),
                     "Onboarding branch target changed; review manually.")
 
+    def dropdown_eligible(self):
+        """Whether detection-as-code will list this target in its client dropdown.
+
+        target_ids() there only lists enabled targets, and resolve_targets() rejects an
+        enabled target with no rules. The manifest sets enabled from initial_rule_path,
+        so the two conditions coincide: a target with an initial rule is listed.
+        """
+        return bool(self.c["initial_rule_path"])
+
+    def update_dropdowns(self):
+        """Add this target to the client dropdowns on the onboarding branch.
+
+        Committing the workflow change in the same pull request as the target file means
+        the dropdown is correct the moment the PR merges, with no follow-up step. This
+        needs a GitHub token with the workflow scope; without it the change is skipped
+        and reported rather than failing the onboarding.
+        """
+        if not self.dropdown_eligible():
+            return ["skipped: target has no initial rule, so it is committed disabled and "
+                    "detection-as-code excludes it from the dropdown"]
+        problems = []
+        ref = "?ref=" + quote(self.branch, safe="")
+        for name in DROPDOWN_WORKFLOWS:
+            path = self.repo_path + "/contents/.github/workflows/" + name
+            try:
+                entry = self.io.gh("GET", path + ref, missing=True)
+                if entry is None:
+                    problems.append(name + ": not found on the onboarding branch")
+                    continue
+                text = base64.b64decode(entry["content"]).decode("utf-8")
+                updated = add_dropdown_target(text, self.c["target"])
+                if updated is None:
+                    continue
+                self.io.gh("PUT", path, {
+                    "message": "Add " + self.c["target"] + " to client dropdown in " + name,
+                    "branch": self.branch, "sha": entry["sha"],
+                    "content": base64.b64encode(updated.encode("utf-8")).decode()})
+            except Stop as error:
+                message = str(error)
+                if "workflow" in message and ("permission" in message or "scope" in message):
+                    message = ("the GitHub token lacks the workflow scope; run "
+                               "'gh auth refresh -s workflow' and re-run")
+                problems.append(name + ": " + message)
+        self.state["dropdown"] = problems or "updated"
+        self.save()
+        return problems
+
     def create_target_pr(self):
         if self.target_exists:
             print("Target already matches main; no pull request needed.")
@@ -394,6 +502,14 @@ class Onboard:
             self.io.gh("PUT", path, {"message": "Add Sentinel target " + self.c["target"],
                                      "branch": self.branch,
                                      "content": base64.b64encode(self.manifest().encode()).decode()})
+        dropdown = self.update_dropdowns()
+        if dropdown:
+            print("Client dropdown NOT updated on the branch:")
+            for problem in dropdown:
+                print("  " + problem)
+            print("After merging, run: python scripts/sync_target_choices.py")
+        else:
+            print("Client dropdown updated on the branch; it will be current once the PR merges.")
         prs = self.io.pages(self.repo_path + "/pulls?state=open&head="
                             + quote(self.c["github_owner"] + ":" + self.branch, safe="") + "&base=main")
         pr = prs[0] if prs else self.io.gh("POST", self.repo_path + "/pulls", {
@@ -403,7 +519,13 @@ class Onboard:
                     "delegation, so no per-client identity, credential, environment or role "
                     "definition was created. tenant_id is the MANAGING tenant by design. "
                     "Any initial rule is explicitly disabled. After merging, run preview on "
-                    "main, review the what-if, then run an approved deployment."})
+                    "main, review the what-if, then run an approved deployment."
+                    + ("\n\nThe client dropdowns in " + " and ".join(DROPDOWN_WORKFLOWS)
+                       + " are updated in this PR, so the target is selectable once merged."
+                       if not dropdown else
+                       "\n\nThe client dropdowns were NOT updated in this PR ("
+                       + "; ".join(dropdown) + "). After merging, run "
+                       "python scripts/sync_target_choices.py and commit the result.")})
         self.state["pull_request"] = pr["html_url"]
         self.save()
         print("Review pull request: " + pr["html_url"])
@@ -473,6 +595,9 @@ class Onboard:
         print("Plan: register provider if needed; deploy one subscription-scope Lighthouse "
               "delegation granting three managing-tenant groups built-in roles; open a target "
               "pull request. No apps, credentials, environments or role definitions are created.")
+        print("Dropdown:         " + ("add " + self.c["target"] + " in the same pull request"
+                                      if self.dropdown_eligible() else
+                                      "skipped (no initial rule; target is committed disabled)"))
         if not self.apply:
             print("READ-ONLY PLAN. No resources changed. Run again with --apply to onboard.")
             return

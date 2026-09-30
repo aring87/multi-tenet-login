@@ -49,6 +49,15 @@ class AddDropdownTargetTests(unittest.TestCase):
                 self.assertEqual(block[2:].index(target), expected)
                 self.assertEqual(block[2:], sorted(block[2:], key=lh.dropdown_sort_key))
 
+    def test_malformed_json_and_marker_order_raise_recoverable_stop(self):
+        cases = [SINGLE.replace('"bravo-workspace"', 'unquoted'),
+                 lh.DROPDOWN_END + SINGLE.replace(lh.DROPDOWN_END, ''),
+                 SINGLE.replace(lh.DROPDOWN_HEADER, lh.DROPDOWN_BEGIN + lh.DROPDOWN_HEADER)
+                 + lh.DROPDOWN_END]
+        for text in cases:
+            with self.subTest(text=text), self.assertRaises(lh.Stop):
+                lh.add_dropdown_target(text, "new-workspace")
+
     def test_existing_target_is_a_no_op(self):
         self.assertIsNone(lh.add_dropdown_target(SINGLE, "bravo-workspace"))
 

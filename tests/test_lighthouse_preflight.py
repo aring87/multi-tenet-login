@@ -13,8 +13,7 @@ AUTHORIZATION_ERROR = ('{"code": "AuthorizationFailed", "message": "The client '
 
 
 class TokenAuthorizationTests(unittest.TestCase):
-    """Role records show a JIT/PIM activation at once; the access token does not. The probe
-    exists to tell those two apart before the run reaches deploy_delegation."""
+    """Validate permissions without diagnosing every denial as a stale token."""
 
     def onboard(self, az):
         instance = object.__new__(lh.Onboard)
@@ -42,7 +41,7 @@ class TokenAuthorizationTests(unittest.TestCase):
         self.onboard(az).check_token_authorization()
         self.assertNotIn("write", az.call_args.kwargs)
 
-    def test_authorization_failure_names_the_stale_token_and_the_remedy(self):
+    def test_authorization_failure_preserves_evidence_and_explains_possible_causes(self):
         def az(*args, **kwargs):
             raise lh.Stop(AUTHORIZATION_ERROR)
 
@@ -50,11 +49,11 @@ class TokenAuthorizationTests(unittest.TestCase):
             self.onboard(az).check_token_authorization()
         message = str(error.exception)
         self.assertIn("Contributor, User Access Administrator", message)
-        self.assertIn("az logout", message)
-        self.assertIn("az login --tenant t", message)
-        self.assertIn("az account set --subscription s", message)
+        self.assertIn("Possible causes", message)
+        self.assertIn("desktop app", message)
         self.assertIn("Active rather than Eligible", message)
-        self.assertIn("rather than on a resource group", message)
+        self.assertIn("Original Azure error: " + AUTHORIZATION_ERROR, message)
+
 
     def test_unrelated_failure_is_reported_unchanged(self):
         def az(*args, **kwargs):

@@ -25,7 +25,7 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 - Exports selected Sentinel configuration with a readable report and original JSON. Optional Sentinel activity and selected security source logs include samples or bounded period exports. See [Sentinel Configuration & Logs](AUDIT-EVIDENCE.md).
 - Previews selected source-table counts and latest timestamps. Reports unavailable, denied and incomplete collections explicitly.
 - Previews and applies scoped permissions for existing preview/deployment service principals.
-- Optionally onboards Azure identities, OIDC, GitHub environments, and a client configuration pull request.
+- Onboards clients through Azure Lighthouse and opens a client-target pull request, including generated workflow dropdown updates where supported.
 - Deletes saved client entries without deleting cloud resources.
 - Requires a successful matching preview before Apply.
 
@@ -50,21 +50,28 @@ No third-party Python packages are required. The desktop uses the installed Azur
 | Mode | Purpose |
 |---|---|
 | Permissions only | Validate, preview, and apply the included Azure RBAC template to existing service principals |
-| Full Azure + GitHub onboarding | Create separate application identities, OIDC trust, GitHub environments, scoped RBAC, and a client-target pull request |
+| Lighthouse onboarding | Delegate the client subscription to existing managing-tenant groups and open a client-target pull request |
 
 This application repository is separate from your private detection-rule repository. In full onboarding, configure the private repository that contains your existing Sentinel pipeline.
 
-Full onboarding assumes an existing main-based workflow using environment names <target>-preview and <target>-production and the AZURE_CLIENT_ID environment variable. It does not create the Sentinel workspace, connectors, detection pipeline, or analytics rules.
+Desktop Lighthouse onboarding uses two existing shared GitHub environments, each with an AZURE_CLIENT_ID variable. See [the current onboarding guide](APP-ONBOARDING.md). It does not create the Sentinel workspace, connectors, detection pipeline, or analytics rules.
 
 ## Documentation
 
 - [Desktop guide](DESKTOP-START-HERE.md)
-- [Full onboarding setup](FULL-ONBOARDING.md)
+- [Current Lighthouse onboarding](APP-ONBOARDING.md)
+- [Legacy per-client identity onboarding](FULL-ONBOARDING.md)
+- [Project file map](PROJECT-MAP.md)
+- [Detection repository reference uploads](detection-as-code/README.md)
 - [Web-only procedure](PORTAL-ONLY.md)
 - [Permissions-only Git Bash route](GIT-BASH-QUICKSTART.md)
 - [Verification notes](VALIDATION.md)
 
-## Public examples\n\nExamples use fictional resource names and placeholder or synthetic identifiers. No actual client inventory is distributed. See [Privacy and publication notes](PRIVACY.md).\n\n## Local data and access
+## Public examples
+
+Examples use fictional resource names and placeholder or synthetic identifiers. No actual client inventory is distributed. See [Privacy and publication notes](PRIVACY.md).
+
+## Local data and access
 
 Runtime data lives in desktop-data/, which is excluded from Git:
 - Saved client mappings.
@@ -93,7 +100,8 @@ Live authentication, tenant policies, API permissions, and a disabled-rule deplo
 |---|---|
 | desktop_app.py | Desktop interface and client inventory controls |
 | desktop_backend.py | Azure discovery, isolated CLI sessions, and setup execution |
-| full_onboarding.py | Reusable onboarding orchestration |
+| lighthouse_onboarding.py | Current Lighthouse onboarding and client dropdown updates |
+| full_onboarding.py | Legacy per-client identity CLI workflow |
 | azuredeploy.json | Scoped custom roles and assignments |
 | Start-Sentinel.cmd | Windows launcher |
 | onboard-all.sh | Optional Git Bash launcher |

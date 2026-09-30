@@ -134,8 +134,11 @@ def add_dropdown_target(text, target):
             "Workflow has no matching generated target-options markers.")
     parts, remaining, changed = [], body, False
     for _ in range(count):
-        start = remaining.index(DROPDOWN_BEGIN)
-        finish = remaining.index(DROPDOWN_END, start)
+        start = remaining.find(DROPDOWN_BEGIN)
+        finish = remaining.find(DROPDOWN_END)
+        require(0 <= start < finish and DROPDOWN_BEGIN not in
+                remaining[start + len(DROPDOWN_BEGIN):finish],
+                "Generated target-options markers are out of order or nested.")
         inner = remaining[start + len(DROPDOWN_BEGIN):finish]
         require(inner.startswith(DROPDOWN_HEADER), "Generated block does not start with 'options:'.")
         values = []
@@ -143,7 +146,10 @@ def add_dropdown_target(text, target):
             if not line:
                 continue
             require(line.startswith(DROPDOWN_ITEM), "Unexpected line in generated block: " + repr(line))
-            value = json.loads(line[len(DROPDOWN_ITEM):])
+            try:
+                value = json.loads(line[len(DROPDOWN_ITEM):])
+            except json.JSONDecodeError as error:
+                raise Stop("Invalid JSON string in generated dropdown option: " + repr(line)) from error
             require(isinstance(value, str), "Non-string dropdown option: " + repr(value))
             values.append(value)
         fixed = [v for v in values if v in DROPDOWN_FIXED]
@@ -350,12 +356,9 @@ class Onboard:
         self.state["caller_roles"] = sorted(roles)
 
     def check_token_authorization(self):
-        """Role records and the access token can disagree, so checking the records is not
-        enough. az role assignment list reads assignment records, which show a JIT/PIM
-        activation the moment it happens; ARM authorises a deployment against the token,
-        which carries only the membership it was issued with. Probe the real operation so
-        a stale token stops the run here, naming its cause, rather than surfacing later as
-        a bare AuthorizationFailed from inside deploy_delegation."""
+        """Probe subscription deployment validation permissions without deploying resources.
+        This does not prove that all Lighthouse resource actions will be authorized.
+        """
         with tempfile.TemporaryDirectory(prefix="sentinel-") as temp:
             probe = Path(temp) / "probe.json"
             probe.write_text(json.dumps(EMPTY_TEMPLATE), encoding="utf-8")
@@ -369,16 +372,16 @@ class Onboard:
                 if not AUTHORIZATION_FAILED.search(str(failure)):
                     raise
                 raise Stop(
-                    "Azure refused a no-op validation on this subscription even though the "
-                    f"role records list {', '.join(self.state['caller_roles'])}. A role "
-                    "activated through JIT/PIM is invisible to an access token issued before "
-                    "the activation, so the records and the token disagree. Sign out and back "
-                    "in, then rerun:\n"
-                    "    az logout\n"
-                    f"    az login --tenant {self.c['tenant_id']}\n"
-                    f"    az account set --subscription {self.c['subscription_id']}\n"
-                    "If it still fails, confirm the roles are Active rather than Eligible, and "
-                    "that they sit on the subscription rather than on a resource group.")
+                    "Azure refused deployment validation on this subscription. Role records list "
+                    f"{', '.join(self.state['caller_roles'])}. Possible causes include insufficient "
+                    "subscription permissions, a recent role change still propagating, or a stale "
+                    "sign-in session. In the desktop app, sign out and sign in again there; its "
+                    "Azure session is separate from your terminal. For CLI use, sign in again in "
+                    "the same Azure CLI configuration. Confirm JIT/PIM roles are Active rather than "
+                    "Eligible and that the required permissions apply to the subscription rather "
+                    "than only a resource group. User Access Administrator alone does not provide "
+                    "deployment permissions.\n\nOriginal Azure error: " + str(failure)) from failure
+
 
     def check_provider(self):
         state = self.io.az("provider", "show", "--namespace", MANAGED_SERVICES,

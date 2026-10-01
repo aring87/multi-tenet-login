@@ -162,3 +162,24 @@ use synthetic files and mocked dispatch responses.
 API contract: [GitHub workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
 using API version `2026-03-10` for returned run IDs. Deployment controls will follow
 successful preview testing against the private repository.
+
+## Export rules during a client audit
+
+After signing in and choosing a workspace, open **Analytics rules** and click
+**Export all rules**. Save the ZIP containing `rules.json` (all original rule
+configuration fields plus collection metadata), `rules.csv` (readable state and
+flattened configuration columns), and `manifest.json` (workspace identifiers,
+collection/export times, count, completeness, and SHA-256 file hashes).
+
+This exports the inventory already loaded, including enabled, disabled and
+unspecified states. Search and state filters do not restrict it, and export does
+not call Azure again. Use **Refresh rules** first when you need a newer snapshot.
+An incomplete collection requires acknowledgment and remains marked incomplete
+in the package; a failed collection with no records cannot be exported. A
+successful empty collection can be exported. Switching workspace or signing out
+clears the cached inventory. Completeness refers to the API collection within
+the account's visibility, not a compliance verdict or a history of rule changes.
+
+Numeric client slugs retain their string identity in generated YAML. Existing
+private detection repositories must also apply the validator patch and quote
+previously generated numeric manifests; see `detection-as-code/README.md`.

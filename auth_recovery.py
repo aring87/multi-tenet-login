@@ -11,6 +11,19 @@ CHALLENGE = re.compile(
 CLAIMS_ARGUMENT = re.compile(r"--claims-challenge\s+['\"]?([A-Za-z0-9_+/=-]{1,16384})")
 
 
+class SignInCancelled(Stop):
+    def __init__(self):
+        super().__init__("Sign-in cancelled. You can sign in again.")
+
+
+def signin_was_cancelled(details):
+    # These are explicit user-cancellation signals, not generic access_denied,
+    # consent_required, Conditional Access failures, or missing permissions.
+    return bool(re.search(r"\b(?:user_cancelled|user_canceled|usercancelled|usercanceled|"
+                         r"authentication_cancelled|authentication_canceled|Status_UserCanceled|"
+                         r"Status_UserCancelled|AADSTS65004)\b|\buser (?:has )?cancel(?:led|ed)\b", details, re.I))
+
+
 class AuthenticationRequired(Stop):
     def __init__(self, details, tenant=""):
         self.tenant = tenant

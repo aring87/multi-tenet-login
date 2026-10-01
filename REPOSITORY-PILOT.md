@@ -1,6 +1,6 @@
 # Repository UI pilot
 
-This development branch includes the read-only catalog and local rule authoring. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. Browsing the catalog makes no changes. The separate rule-review and client-preview dialogs require an explicit submission action.
+This development branch includes the read-only catalog and local rule authoring. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. Browsing the catalog makes no changes. The separate rule-review, client-preview and deployment dialogs require an explicit submission action.
 
 ## Start the development copy
 
@@ -59,7 +59,7 @@ All new test data is synthetic. GitHub API reads are mocked in offline tests. No
 
 The validator is a bundled, reviewed copy of your uploaded rules.py; see [schema provenance](RULE-SCHEMA.md).
 KQL still needs a workspace query check. Keep local drafts and private queries out of this
-public application repository. Guided draft PR submission is available below; client assignment and deployment controls are subsequent increments; selected-rule previews are available below.
+public application repository. Guided draft PR submission is available below; client assignment remains a subsequent increment; selected-rule previews and reviewed deployment controls are available below.
 
 ## Submit a rule for repository review
 
@@ -118,7 +118,7 @@ its private review request files into that laptop's ignored app data folder.
 
 1. Load the **GitHub repository** catalog for the private detection repository.
    Resolve any catalog issues first. Local working files cannot start workflow runs.
-2. Choose **Rules**, select a rule, and click **Preview selected rule for clients**.
+2. Choose **Rules**, select a rule, and click **Preview / deploy selected rule for clients**.
 3. Click client rows (or press Space) to select them. Search by client, workspace or
    target. **Select all eligible** selects all enabled targets that already reference
    this rule, including those hidden by the search. Disabled or unassigned targets
@@ -127,7 +127,7 @@ its private review request files into that laptop's ignored app data folder.
    private repository, account, default branch and workflow inputs. Review the exact
    clients, rule, revision and number of batches. Preparing starts no workflow.
 5. Choose **Start previews** to dispatch the private repository's configured workflow
-   with `mode: preview` on `main`. The app does not send deploy mode. The existing
+   with `mode: preview` on `main`. This button only sends preview mode. Deployment requires the separate review below. The existing
    workflow remains responsible for its Azure operations and preview artifacts.
 6. **Refresh status** reads the exact run IDs returned by GitHub. Select a run and
    choose **Open GitHub** to inspect jobs, errors and artifacts. Submission is not a
@@ -160,8 +160,9 @@ Private-repository and live-workspace testing remain required; development tests
 use synthetic files and mocked dispatch responses.
 
 API contract: [GitHub workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
-using API version `2026-03-10` for returned run IDs. Deployment controls will follow
-successful preview testing against the private repository.
+using API version `2026-03-10` for returned run IDs. The user reported a successful
+rule creation, merge and workspace deployment pilot; the new in-app deployment
+controls still need a pilot against the private repository.
 
 ## Export rules during a client audit
 
@@ -183,3 +184,48 @@ the account's visibility, not a compliance verdict or a history of rule changes.
 Numeric client slugs retain their string identity in generated YAML. Existing
 private detection repositories must also apply the validator patch and quote
 previously generated numeric manifests; see `detection-as-code/README.md`.
+
+## Deploy a previewed rule from the app
+
+1. In **Repository catalog**, load the private GitHub repository, select a rule,
+   and choose **Preview / deploy selected rule for clients**.
+2. Select assigned, enabled client targets, prepare the exact request, and start
+   previews. Use **Open GitHub** to review each run's checks and what-if artifacts.
+3. Select **Refresh status**. **Review deployment** becomes available only after
+   all confirmed preview runs finish successfully at the reviewed main revision.
+   A partial submission, unknown run ID, failed run, or different revision blocks it.
+4. **Review deployment** reads GitHub again without submitting anything. Review
+   the repository, account, rule, exact clients/workspaces, subscription/resource
+   group, configured enabled/disabled state, assignment overrides and preview runs.
+5. Select **Start reviewed deployment** to send `mode: deploy` through the existing
+   `sentinel-multi-workspace.yml`, using the same selected rule and concrete targets.
+   Selections larger than the workflow's slots are split into batches. The app
+   never sends the **All enabled clients** sentinel or assigns additional clients.
+6. **Refresh status** reports each returned run; **Open GitHub** opens its jobs,
+   artifacts and any environment approvals. Submission is not deployment success.
+   Reopening the review in the same preview dialog retains the submitted request
+   and cannot dispatch it a second time.
+
+The supplied workflow already supports deploy mode, performs new previews, and
+uses the same per-run deployment bundle for its production job. No workflow file
+replacement is needed for this increment if that contract is unchanged. GitHub
+uses its configured environment protections; the app does not approve environments,
+change protection rules or bypass Azure permissions. If production has no approval
+requirement, a submitted deployment can proceed without another prompt.
+
+The app rechecks preview run identity, successful completion and revision, current
+account/repository/workflow, and main before submission and each additional batch.
+A newer main revision requires a refreshed catalog and new previews. This check
+is not atomic with GitHub dispatch: GitHub resolves main when starting each run.
+Do not treat this as a pinned-commit deployment. Review each deployment run's actual
+revision and fresh preview artifacts before approving production; status refresh
+flags revision mismatches. No automatic rollback or cancellation is performed.
+
+Deployment receipts are saved in ignored `desktop-data/deployment-requests/` as
+`.deployment.json`, including the original preview evidence. An uncertain response
+stops further batches and cannot be automatically retried; check Actions before
+starting a new request. After restarting the app, follow the saved run IDs in GitHub
+Actions. An in-app deployment history browser is a subsequent increment.
+
+Development validation uses mocked GitHub APIs and synthetic tenants only. No
+private workflow or live Azure deployment is started by the development tests.

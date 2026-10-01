@@ -30,3 +30,6 @@ lighthouse-onboard.isi.json
 
 # Preview receipts contain private client names and run information
 *.preview.json
+
+# Local deployment receipts include private client selections and preview evidence
+*.deployment.json

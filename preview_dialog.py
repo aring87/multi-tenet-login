@@ -5,6 +5,8 @@ from tkinter import ttk
 import webbrowser
 
 from preview_workflow import PreviewService, eligible_clients, WORKFLOW
+from deployment_workflow import preview_ready
+from deployment_dialog import DeploymentDialog
 
 
 class PreviewDialog:
@@ -13,14 +15,15 @@ class PreviewDialog:
         self.service = PreviewService()
         self.folder = app.rule_builder.data_dir / "preview-requests"
         self.record, self.locked = None, False
+        self.deployment_record = None
         self.selected, self.visible = set(), {}
         self.eligible = {c["target"] for c in eligible_clients(snapshot, rule["path"])}
-        self.window = tk.Toplevel(app.root); self.window.title("Preview rule for clients")
+        self.window = tk.Toplevel(app.root); self.window.title("Preview and deploy rule for clients")
         self.window.geometry("1000x760"); self.window.minsize(850, 680)
         self.window.transient(app.root); self.window.grab_set(); self.window.protocol("WM_DELETE_WINDOW", self.close)
         body = ttk.Frame(self.window, padding=18); body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1); body.rowconfigure(4, weight=2); body.rowconfigure(6, weight=1)
-        ttk.Label(body, text="Preview rule for clients", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(body, text="Preview and deploy rule for clients", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(body, text=rule["name"] + "\n" + rule["path"], wraplength=800).grid(row=1, column=0, sticky="ew", pady=(6, 10))
         self.search = tk.StringVar()
         search_frame = ttk.Frame(body); search_frame.grid(row=2, column=0, sticky="ew")
@@ -60,8 +63,9 @@ class PreviewDialog:
         self.start_button = ttk.Button(actions, text="Start previews", command=self.start, state="disabled")
         self.status_button = ttk.Button(actions, text="Refresh status", command=self.refresh_status, state="disabled")
         self.open_button = ttk.Button(actions, text="Open GitHub", command=self.open_run)
+        self.deploy_button = ttk.Button(actions, text="Review deployment", command=self.open_deployment, state="disabled")
         self.close_button = ttk.Button(actions, text="Close", command=self.close)
-        for b in (self.prepare_button, self.start_button, self.status_button, self.open_button, self.close_button): b.pack(side="left", padx=(0, 8))
+        for b in (self.prepare_button, self.start_button, self.deploy_button, self.status_button, self.open_button, self.close_button): b.pack(side="left", padx=(0, 8))
         self.search.trace_add("write", lambda *args: self.render_clients())
         self.render_clients()
 
@@ -79,7 +83,8 @@ class PreviewDialog:
         self.count.set(str(len(self.selected)) + " selected / " + str(len(self.eligible)) + " eligible")
 
     def invalidate(self):
-        self.record = None; self.start_button.configure(state="disabled")
+        self.record = None; self.deployment_record = None; self.start_button.configure(state="disabled")
+        self.deploy_button.configure(state="disabled")
         self.show_review(""); self.notice.set("Selection changed. Prepare the request again.")
         self.render_clients()
 
@@ -112,11 +117,12 @@ class PreviewDialog:
         for widget in (self.search_box, self.all_button, self.clear_button, self.prepare_button): widget.configure(state="disabled" if self.locked else "normal")
         self.start_button.configure(state="normal" if self.record and not self.locked else "disabled")
         self.status_button.configure(state="normal" if self.record and any(r.get("run_id") for r in self.record["results"]) else "disabled")
+        self.deploy_button.configure(state="normal" if self.deployment_record or preview_ready(self.record) else "disabled")
         self.open_button.configure(state="normal"); self.close_button.configure(state="normal")
 
     def work(self, title, task, done):
         if self.app.busy: return
-        for widget in (self.search_box, self.all_button, self.clear_button, self.prepare_button, self.start_button, self.status_button, self.open_button, self.close_button): widget.configure(state="disabled")
+        for widget in (self.search_box, self.all_button, self.clear_button, self.prepare_button, self.start_button, self.deploy_button, self.status_button, self.open_button, self.close_button): widget.configure(state="disabled")
         self.notice.set(title)
         def wrapped():
             try: return task(), None
@@ -140,7 +146,7 @@ class PreviewDialog:
             lines = ["Repository: " + plan["repository"], "GitHub account: " + plan["identity"],
                      "Reviewed main revision: " + plan["revision"], "Rule: " + plan["rule_path"],
                      "Mode: preview | Workflow runs: " + str(len(plan["batches"])), "", "Selected workspaces:"]
-            lines += [c["name"] + " | " + c["workspace"] + " | " + c["target"] for c in plan["clients"]]
+            lines += [c["name"] + " | " + c["workspace"] + " | " + c["target"] + " | Rule " + c["rule_state"].lower() for c in plan["clients"]]
             lines += ["", "GitHub resolves main when each run starts. Refresh status to check the actual revision.",
                       "This runs the repository's configured preview workflow; it does not assign rules to new clients."]
             self.show_review("\n".join(lines)); self.notice.set("Request prepared. Review the exact targets above, then select Start previews.")
@@ -160,7 +166,7 @@ class PreviewDialog:
     def refresh_status(self):
         if self.app.busy or not self.record: return
         self.work("Reading GitHub preview run status...", lambda: self.service.refresh(self.record, self.folder),
-                  lambda value: self.notice.set("Status refreshed from GitHub. Open a run to inspect its jobs, errors and preview artifacts."))
+                  lambda value: self.notice.set("Status refreshed. Review deployment becomes available after all previews succeed at the reviewed revision. Open GitHub to inspect preview artifacts."))
 
     def open_run(self):
         if self.app.busy: return
@@ -170,3 +176,10 @@ class PreviewDialog:
             result = self.record["results"][int(selected[0])]
             if result.get("run_id"): url = "https://github.com/" + self.snapshot["repository"] + "/actions/runs/" + str(result["run_id"])
         webbrowser.open(url)
+
+    def open_deployment(self):
+        if self.app.busy:return
+        if not self.deployment_record and not preview_ready(self.record):
+            self.notice.set("Refresh status after every preview succeeds before reviewing deployment.")
+            return
+        DeploymentDialog(self)

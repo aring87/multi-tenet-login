@@ -313,8 +313,8 @@ class App:
         top,body=self.card(settings,"Client configuration",
             "Create an Azure Lighthouse delegation and prepare the client target-file pull request.")
         top.pack(fill="x",pady=(0,16))
-        self.form(body,"Workspace identity label","label","primary")
-        ttk.Label(body,text="The primary label uses workspace.yml. Additional labels keep separate workspace files and targets.",
+        self.form(body,"Workspace identity label","label","workspace-commercial")
+        ttk.Label(body,text="Use workspace-commercial for commercial-cloud workspaces and workspace-gcc for GCC. The target becomes <client>-<label> and the file clients/<client>/<client>-<label>.yml.",
                   style="Muted.TLabel",wraplength=650).pack(anchor="w",pady=(0,14))
         self.form(body,"Initial rule path - optional","rule_path")
         self.vars["allow_missing_mitre"]=tk.BooleanVar(value=False)

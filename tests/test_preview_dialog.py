@@ -90,7 +90,7 @@ class PreviewDialogTests(unittest.TestCase):
         self.dialog.window.geometry("850x680"); self.root.update()
         bottom = self.dialog.window.winfo_rooty() + self.dialog.window.winfo_height()
         right = self.dialog.window.winfo_rootx() + self.dialog.window.winfo_width()
-        for button in (self.dialog.prepare_button, self.dialog.start_button, self.dialog.status_button, self.dialog.open_button, self.dialog.close_button):
+        for button in (self.dialog.prepare_button, self.dialog.start_button, self.dialog.deploy_button, self.dialog.status_button, self.dialog.open_button, self.dialog.close_button):
             self.assertTrue(button.winfo_ismapped())
             self.assertLessEqual(button.winfo_rooty() + button.winfo_height(), bottom)
             self.assertLessEqual(button.winfo_rootx() + button.winfo_width(), right)

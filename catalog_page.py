@@ -54,7 +54,7 @@ class CatalogPage:
         scroll.pack(side="right", fill="y"); self.details.pack(fill="both", expand=True)
         app.button(body, "Show catalog issues", self.issues).pack(anchor="w", pady=(10, 0))
         app.button(body, "Edit selected rule as draft", self.edit_selected).pack(anchor="w", pady=(8, 0))
-        app.button(body, "Preview selected rule for clients", self.preview_selected).pack(anchor="w", pady=(8, 0))
+        app.button(body, "Preview / deploy selected rule for clients", self.preview_selected).pack(anchor="w", pady=(8, 0))
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.mode.trace_add("write", self.mode_changed)
         self.source.trace_add("write", self.invalidate)

@@ -13,7 +13,8 @@ import webbrowser
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from desktop_theme import configure_theme
-from auth_recovery import AuthenticationRequired
+from auth_recovery import AuthenticationRequired, SignInCancelled
+from signin_process import check_cancelled
 from rules_page import RulesPage
 from catalog_page import CatalogPage
 from rule_builder_page import RuleBuilderPage
@@ -60,6 +61,7 @@ class App:
         self.signin_handoff = None
         self.signin_timer = None
         self.signin_active = False
+        self.signin_cancel = None
         self.auth_recovery_attempts = set()
         self.build()
         self.refresh_clients()
@@ -269,7 +271,12 @@ class App:
         self.form(body,"Sign-in method","login_method","Browser",["Browser","Windows account window"])
         self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(fill="x",pady=(0,14))
         self.signin_button=ttk.Button(body,text="Bring sign-in window forward",command=self.bring_signin_forward,state="disabled")
-        self.signin_button.pack(fill="x",pady=(0,14))
+        self.signin_button.pack(fill="x",pady=(0,8))
+        self.cancel_signin_button=ttk.Button(body,text="Cancel sign-in",command=self.cancel_signin,state="disabled")
+        self.cancel_signin_button.pack(fill="x",pady=(0,6))
+        help_signin=ttk.Label(body,text="Closed the browser tab? Select Cancel sign-in here to stop waiting.",
+                             style="Muted.TLabel",wraplength=300)
+        help_signin.pack(fill="x",pady=(0,14)); self.wrap_to_parent(help_signin)
         self.subbox=self.form(body,"Subscription","subscription",values=[])
         self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
         self.wsbox=self.form(body,"Log Analytics workspace","workspace",values=[])
@@ -474,6 +481,11 @@ class App:
                     self.finish_signin()
                 elif kind=="done":
                     callback,result,error=data
+                    # The callback retains its event after the worker has finished.
+                    # Cancellation also wins over an error already queued for the UI.
+                    cancel=getattr(callback,"_signin_cancel",None)
+                    if isinstance(cancel,threading.Event) and cancel.is_set():
+                        error=SignInCancelled()
                     self.set_busy(False)
                     if error:
                         self.plan=None
@@ -482,7 +494,9 @@ class App:
                         self.log(details); self.tabs.select(self.operation_page)
                         if self.operation_page==3:
                             self.audit_summary.set("Collection stopped: "+details)
-                        if isinstance(error, AuthenticationRequired):
+                        if isinstance(error, SignInCancelled):
+                            self.discard_cancelled_signin()
+                        elif isinstance(error, AuthenticationRequired):
                             self.recover_authentication(error)
                         else:
                             messagebox.showerror("Operation stopped",details)
@@ -713,6 +727,22 @@ class App:
         except Exception as error:
             messagebox.showerror("Open CyberQP",str(error),parent=self.root)
 
+    def cancel_signin(self):
+        if not self.signin_active or self.signin_cancel is None:return
+        self.signin_cancel.set()
+        self.finish_signin()
+        self.status.set("Cancelling Microsoft sign-in...")
+
+    def discard_cancelled_signin(self):
+        self.finish_signin()
+        if self.session:
+            # Keep the isolated session only so retry/sign-out/close can clear
+            # any CLI cache written just before cancellation won the race.
+            self.session.account=None; self.session.signed_in=False
+        self.clear_selection()
+        self.status.set("Sign-in cancelled. You can sign in again.")
+        self.tabs.select(0)
+
     def bring_signin_forward(self):
         if not self.signin_active:return
         try:
@@ -735,6 +765,8 @@ class App:
             self.root.after_cancel(self.signin_timer);self.signin_timer=None
         self.signin_handoff=None
         self.signin_button.configure(state="disabled")
+        self.cancel_signin_button.configure(state="disabled")
+        self.signin_cancel=None
 
     def recover_authentication(self, error):
         self.plan=None
@@ -788,27 +820,46 @@ class App:
         self.session.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] = (
             "true" if self.vars["login_method"].get()=="Windows account window" else "false")
         self.finish_signin()
+        cancel=threading.Event()
+        self.signin_cancel=cancel
+        session=self.session
         self.signin_handoff=create_handoff()
         self.signin_active=True
+        self.cancel_signin_button.configure(state="normal")
         self.signin_deadline=time.monotonic()+90
         self.signin_button.configure(state="normal" if self.signin_handoff else "disabled")
         self.watch_signin()
         def task():
             try:
+                check_cancelled(cancel)
                 if old:
-                    old.logout()
+                    old._signin_cancel=cancel
+                    try:old.logout()
+                    finally:old._signin_cancel=None
+                check_cancelled(cancel)
+                session._signin_cancel=cancel
                 if recovery is not None:
-                    return self.session.login(hint, resource=recovery.resource, claims=recovery.claims)
-                return self.session.login(hint)
+                    rows=session.login(hint, resource=recovery.resource, claims=recovery.claims)
+                else:
+                    rows=session.login(hint)
+                check_cancelled(cancel)
+                return rows
+            except Exception:
+                check_cancelled(cancel)
+                raise
             finally:
+                session._signin_cancel=None
                 self.events.put(("signin_finished",None))
         def done(rows):
+            if cancel.is_set():
+                self.discard_cancelled_signin(); return
             rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
             self.subscriptions=rows
             self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+" | Tenant: "+r["tenantId"] for r in rows])
             self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
             self.subscription_changed()
-        self.work("Waiting for Microsoft sign-in...",task,done)
+        done._signin_cancel=cancel
+        self.work("Waiting for Microsoft sign-in. Use Cancel sign-in to stop waiting.",task,done)
 
     def refresh_subscriptions(self):
         if not self.session or not self.subscriptions:

@@ -10,7 +10,8 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from auth_recovery import AuthenticationRequired, azure_error, recovery_scope
+from auth_recovery import AuthenticationRequired, SignInCancelled, signin_was_cancelled, azure_error, recovery_scope
+from signin_process import run_signin
 from lighthouse_onboarding import CLI, Onboard, Stop, guid, require, validate_config
 
 BASE = Path(__file__).resolve().parent
@@ -69,9 +70,12 @@ class Session:
         self.login_tenant = ""
         self.login_diagnostics = ""
         self.signed_in = False
+        self._signin_cancel = None
 
     def execute(self, executable, args, data=None, timeout=900):
         require(executable, "Required tool is missing. Install Azure CLI / GitHub CLI and restart this app.")
+        auth_command = executable == self.az_exe and (
+            tuple(args[:1]) in (("login",), ("logout",)) or tuple(args[:2]) == ("cloud", "show"))
         # The MSI wrapper invokes this exact interpreter. Bypass cmd.exe so REST
         # query separators, percent escapes and pagination links remain literal.
         if executable == self.az_exe and Path(executable).name.lower() == "az.cmd":
@@ -82,6 +86,14 @@ class Session:
         if executable.lower().endswith((".cmd", ".bat")):
             require(all(not re.search(r'[&|<>^%!\r\n"]', str(x)) for x in args),
                     "An argument contains unsupported Windows shell characters.")
+        if self._signin_cancel is not None:
+            require(auth_command, "Only authentication commands can use sign-in cancellation.")
+            # Authentication owns a direct process. A shell wrapper could leave
+            # its Python child waiting after cancellation, so require the normal
+            # Azure CLI interpreter resolved above for Windows cmd installations.
+            require(not executable.lower().endswith((".cmd", ".bat")),
+                    "Cannot safely cancel this Azure CLI wrapper. Repair the Azure CLI installation and restart the app.")
+            return run_signin([executable, *map(str, args)], self.env, self._signin_cancel, timeout)
         try:
             result = subprocess.run([executable, *map(str, args)], input=data or "", text=True,
                 encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -104,6 +116,8 @@ class Session:
             self.login_diagnostics = details
             self.signed_in = result.returncode == 0
         if result.returncode:
+            if signing_in and signin_was_cancelled(details):
+                raise SignInCancelled()
             raise azure_error(details or "Azure operation failed.", self.authentication_tenant())
         # Successful multi-tenant login can still report a failed tenant on stderr.
         if signing_in and details:
@@ -131,6 +145,8 @@ class Session:
                     "Sign-in returned a different tenant.")
         if not subscriptions:
             if self.login_diagnostics:
+                if signin_was_cancelled(self.login_diagnostics):
+                    raise SignInCancelled()
                 problem = azure_error(self.login_diagnostics, tenant_hint)
                 if isinstance(problem, AuthenticationRequired):
                     raise problem

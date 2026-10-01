@@ -14,6 +14,18 @@ The Repository catalog, guided Rule builder, reviewed draft pull request submiss
 6. Select the intended workspace if several are available. The **Workspace details** text box shows **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**. Workspace ID is the Log Analytics customer GUID, not the ARM resource path.
 7. Click **Copy workspace details** to copy the displayed text. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
 
+**Cancel sign-in** stays available while Microsoft authentication is pending. If you
+close the browser tab or abandon sign-in, click this button in the app to stop its
+waiting Azure CLI process. Cancelled attempts cannot continue into workspace
+discovery, and the next sign-in uses a fresh app session. A sign-in command times
+out after five minutes. This does not close your browser or cancel deployments.
+
+The external browser does not reliably notify Azure CLI when its tab is closed;
+the app therefore provides its own cancel action. Explicit Microsoft user-cancel
+responses are also handled as cancellation, without starting MFA recovery.
+Microsoft's [MSAL callback implementation](https://github.com/AzureAD/microsoft-authentication-library-for-python/blob/dev/msal/oauth2cli/authcode.py)
+waits for an authentication response, rather than tracking browser-tab lifetime.
+
 **Open Azure portal** is a separate browser shortcut. A portal-only sign-in cannot populate this app's authenticated session; use **Sign in & discover** to authorize discovery. The app never collects your password. Windows account window remains available for organizations that require broker-based authentication.
 
 Only resources accessible to the signed-in account are returned. No subscriptions means the account needs appropriate subscription access or the correct directory; no workspaces means check the selected subscription and workspace read access. Discovery lists Log Analytics workspaces and does not assert that Sentinel is enabled on each. Advanced permission/onboarding tools remain separate and require explicit review and apply.

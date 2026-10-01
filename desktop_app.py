@@ -740,16 +740,22 @@ class App:
         self.plan=None
         self.finish_signin()
         tenant=error.tenant or self.vars["tenant"].get().strip()
-        attempt=(tenant, error.resource)
+        # A broker failure may omit the resource challenge; the browser flow can expose it.
+        method="Browser" if error.broker_failure else self.vars["login_method"].get()
+        attempt=(tenant, error.resource, method, bool(error.claims))
         if attempt in self.auth_recovery_attempts:
             messagebox.showerror("Authentication still required",
                 "Microsoft still requires authentication after the fresh sign-in. No operation was retried. "
-                "Check this client's Entra sign-in logs and Conditional Access/MFA requirements, "
+                "Confirm Azure CLI is current. Check this client's Entra sign-in logs using the correlation ID below, "
+                "including Authentication Details and Conditional Access results, "
                 "and confirm the account and tenant. You can start another sign-in after resolving them.\n\n"+str(error),parent=self.root)
             return
         if not messagebox.askyesno("Complete Microsoft authentication",
-                "Microsoft requires a fresh sign-in or additional verification for this client.\n\n"
-                "Open Microsoft sign-in now? After signing in, check the workspace and run Preview again. "
+                ("The Windows sign-in component could not complete verification. Try a fresh browser sign-in?\n\n"
+                 if error.broker_failure else "Microsoft requires additional verification. Open Microsoft sign-in now?\n\n") +
+                ("Azure supplied an additional authentication challenge; it will be included in this sign-in.\n\n"
+                 if error.claims else "") +
+                "After signing in, check the workspace and run Preview again. "
                 "The interrupted operation will not be replayed; earlier steps may already have completed.\n\n"+
                 str(error),parent=self.root):
             return
@@ -759,7 +765,8 @@ class App:
         try:tenant=validate_tenant_hint(tenant)
         except Stop as problem:
             messagebox.showerror("Client tenant",str(problem),parent=self.root);return
-        self.auth_recovery_attempts.add((tenant,error.resource))
+        self.auth_recovery_attempts.add((tenant,error.resource,method,bool(error.claims)))
+        self.vars["login_method"].set(method)
         self.vars["tenant"].set(tenant)
         self.tabs.select(0)
         self.login(recovery=error)

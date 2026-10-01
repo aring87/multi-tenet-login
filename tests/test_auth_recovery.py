@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import desktop_backend as backend
 import desktop_app as ui
 from auth_recovery import AuthenticationRequired, azure_error, recovery_scope
-from lighthouse_onboarding import Stop
+from lighthouse_onboarding import Stop, CLI
 from test_desktop import TENANT, SUB, WORKSPACE
 
 MFA = "AADSTS50076: You must use multi-factor authentication to access '797f4846-ba00-4fd7-ba43-dac1f8f63013'. Correlation ID: synthetic"
@@ -107,6 +107,41 @@ class AuthenticationBackendTests(unittest.TestCase):
             with self.assertRaises(Stop) as caught: cli.gh("GET", "repos/example/test")
         self.assertNotIsInstance(caught.exception, AuthenticationRequired)
 
+    def test_resource_challenge_warning_reaches_onboarding_recovery(self):
+        encoded = base64.b64encode(b'{"access_token":{"amr":{"values":["mfa"]}}}').decode()
+        warning = 'WARNING: az login --claims-challenge "' + encoded + '"\n'
+        self.session.account = {"tenantId": TENANT}
+        def execute(executable, args, data=None):
+            # Reproduce CLI warning suppression, not just a static exception fixture.
+            visible = "" if "--only-show-errors" in args else warning
+            return self.result(1, error=visible + MFA)
+        with patch.object(self.session, "execute", side_effect=execute) as call:
+            with self.assertRaises(AuthenticationRequired) as caught:
+                backend.DesktopCLI(self.session, True).az("deployment", "sub", "validate")
+        self.assertEqual(caught.exception.claims, encoded)
+        self.assertNotIn(encoded, str(caught.exception)); call.assert_called_once()
+
+    def test_session_operations_keep_challenge_warnings_despite_inherited_setting(self):
+        with patch.dict(backend.os.environ, {"AZURE_CORE_ONLY_SHOW_ERRORS": "true"}):
+            session = backend.Session(Path(self.temp.name))
+        self.assertEqual(session.env["AZURE_CORE_ONLY_SHOW_ERRORS"], "false")
+        with patch.object(session, "execute", return_value=self.result(data={})) as execute:
+            session.az("deployment", "sub", "validate")
+        self.assertNotIn("--only-show-errors", execute.call_args.args[1])
+
+    def test_standalone_cli_preserves_warning_setting(self):
+        cli = object.__new__(CLI); cli.azure = "fake-az"; cli.apply = False
+        with patch("lighthouse_onboarding.subprocess.run", return_value=self.result(data={})) as run:
+            cli.az("deployment", "sub", "validate")
+        self.assertNotIn("--only-show-errors", run.call_args.args[0])
+        self.assertEqual(run.call_args.kwargs["env"]["AZURE_CORE_ONLY_SHOW_ERRORS"], "false")
+
+    def test_unsupported_claims_flag_is_upgrade_error_not_signin_loop(self):
+        error = azure_error("unrecognized arguments: --claims-challenge abc", TENANT)
+        self.assertNotIsInstance(error, AuthenticationRequired)
+        self.assertIn("Update Azure CLI", str(error))
+        self.assertNotIn(" abc", str(error))
+
     def test_scope_follows_cloud_metadata_and_refuses_unknown_resource(self):
         self.assertEqual(recovery_scope({"endpoints": {"activeDirectoryResourceId": "https://management.core.usgovcloudapi.net/"}}, "arm"),
                          "https://management.core.usgovcloudapi.net//.default")
@@ -142,10 +177,46 @@ class AuthenticationUITests(unittest.TestCase):
         login.assert_not_called(); self.assertIsNone(self.app.plan)
 
     def test_repeated_challenge_stops_instead_of_prompt_loop(self):
-        self.app.auth_recovery_attempts.add((TENANT, "arm"))
+        self.app.auth_recovery_attempts.add((TENANT, "arm", "Browser", False))
         with patch.object(ui.messagebox, "showerror") as show, patch.object(ui.messagebox, "askyesno") as ask, patch.object(self.app, "login") as login:
             self.app.recover_authentication(self.error)
         show.assert_called_once(); ask.assert_not_called(); login.assert_not_called()
+
+    def test_new_resource_claim_can_follow_scoped_signin_once(self):
+        self.app.auth_recovery_attempts.add((TENANT, "arm", "Browser", False))
+        encoded = base64.b64encode(b'{"access_token":{"amr":{"values":["mfa"]}}}').decode()
+        error = AuthenticationRequired(MFA + " --claims-challenge " + encoded, TENANT)
+        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(self.app, "login") as login:
+            self.app.recover_authentication(error)
+        login.assert_called_once_with(recovery=error)
+        # A different payload must not create an endless series of prompts.
+        changed = base64.b64encode(b'{"access_token":{"amr":{"essential":true,"values":["mfa"]}}}').decode()
+        with patch.object(ui.messagebox, "showerror") as show, patch.object(self.app, "login") as login:
+            self.app.recover_authentication(AuthenticationRequired(MFA + " --claims-challenge " + changed, TENANT))
+        show.assert_called_once(); login.assert_not_called()
+
+    def test_broker_failure_offers_browser_and_changes_method_only_when_accepted(self):
+        error = AuthenticationRequired("SubError: basic_action V2Error: " + MFA + " Status_InteractionRequired", TENANT)
+        self.app.vars["login_method"].set("Windows account window")
+        with patch.object(ui.messagebox, "askyesno", return_value=False), patch.object(self.app, "login") as login:
+            self.app.recover_authentication(error)
+        self.assertEqual(self.app.vars["login_method"].get(), "Windows account window")
+        login.assert_not_called()
+        with patch.object(ui.messagebox, "askyesno", return_value=True) as ask, patch.object(self.app, "login") as login:
+            self.app.recover_authentication(error)
+        self.assertIn("browser", ask.call_args.args[1])
+        self.assertEqual(self.app.vars["login_method"].get(), "Browser")
+        login.assert_called_once_with(recovery=error)
+
+    def test_recovery_with_claims_reaches_new_isolated_login(self):
+        old, new = MagicMock(), MagicMock(); new.env = {}; new.login.return_value = ROWS
+        encoded = base64.b64encode(b'{"access_token":{"amr":{"values":["mfa"]}}}').decode()
+        error = AuthenticationRequired(MFA + " --claims-challenge " + encoded, TENANT)
+        self.app.session = old; self.app.vars["tenant"].set(TENANT)
+        with patch.object(ui, "Session", return_value=new), patch.object(self.app, "work") as work:
+            self.app.login(recovery=error); work.call_args.args[1]()
+        new.login.assert_called_once_with(TENANT, resource="arm", claims=encoded)
+        old.logout.assert_called_once()
 
     def test_unknown_tenant_must_be_supplied_not_guessed(self):
         with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(ui.simpledialog, "askstring", return_value=None), patch.object(self.app, "login") as login:

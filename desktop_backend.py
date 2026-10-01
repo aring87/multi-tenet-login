@@ -59,6 +59,7 @@ class Session:
         self.log = logger or (lambda message: None)
         self.env = dict(os.environ, AZURE_CONFIG_DIR=str(self.folder),
                         AZURE_CORE_LOGIN_EXPERIENCE_V2="off",
+                        AZURE_CORE_ONLY_SHOW_ERRORS="false",
                         AZURE_CORE_ENABLE_BROKER_ON_WINDOWS="false",
                         MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*",
                         PYTHONIOENCODING="utf-8")
@@ -95,7 +96,8 @@ class Session:
 
     def az(self, *args):
         signing_in = bool(args and args[0] == "login")
-        flags = ["--output", "json"] if signing_in else ["--only-show-errors", "--output", "json"]
+        # Azure CLI emits its claims-challenge recovery command as a warning.
+        flags = ["--output", "json"]
         result = self.execute(self.az_exe, [*args, *flags])
         details = result.stderr.strip()
         if signing_in:

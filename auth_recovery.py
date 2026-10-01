@@ -14,6 +14,7 @@ CLAIMS_ARGUMENT = re.compile(r"--claims-challenge\s+['\"]?([A-Za-z0-9_+/=-]{1,16
 class AuthenticationRequired(Stop):
     def __init__(self, details, tenant=""):
         self.tenant = tenant
+        self.broker_failure = bool(re.search(r"Status_InteractionRequired|V2Error:|MSALRuntime", details, re.I))
         self.resource = "arm"
         if "797f4846-ba00-4fd7-ba43-dac1f8f63013" not in details.lower() and re.search(
                 r"00000003-0000-0000-c000-000000000000|https://graph\.|_msgraph", details, re.I):
@@ -34,6 +35,8 @@ class AuthenticationRequired(Stop):
 
 
 def azure_error(details, tenant=""):
+    if re.search(r"unrecognized arguments:.*--claims-challenge", details, re.I):
+        return Stop("This Azure CLI does not support claims-challenge sign-in. Update Azure CLI to 2.76.0 or later, restart the app, and sign in again.\n" + CLAIMS_ARGUMENT.sub("--claims-challenge [omitted]", details))
     if CHALLENGE.search(details):
         return AuthenticationRequired(details, tenant)
     return Stop(details)
@@ -47,6 +50,6 @@ def recovery_scope(cloud, resource):
     audience = endpoints.get(key)
     if not isinstance(audience, str) or not audience.startswith("https://"):
         raise Stop("Azure CLI did not return the cloud's authentication endpoint. Check the CLI cloud configuration.")
-    # Preserve the ARM audience trailing slash: its scope ends in // .default
-    # (without the space). Graph uses its standard single-slash scope.
+    # Preserve the ARM audience trailing slash: its scope ends in //.default.
+    # Graph uses its standard single-slash scope.
     return (audience if resource == "arm" else audience.rstrip("/")) + "/.default"

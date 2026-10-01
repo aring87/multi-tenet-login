@@ -27,3 +27,6 @@ lighthouse-onboard.isi.json
 
 # Local review requests include private rule content
 *.review.json
+
+# Preview receipts contain private client names and run information
+*.preview.json

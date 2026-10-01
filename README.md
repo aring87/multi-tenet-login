@@ -1,6 +1,6 @@
 ## Repository UI development pilot
 
-The read-only Repository catalog and guided Rule builder are available in this development branch. See [pilot setup and limits](REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
+The Repository catalog, guided Rule builder, reviewed draft pull request submission, and a searchable saved-review list are available in this development branch. See [pilot setup and limits](REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
 
 # Sentinel Workspace
 

@@ -22,7 +22,7 @@ Use Python 3.10+ with Tkinter. Keep the working onboarding copy at its known wor
 4. Switch between Clients and Rules, search, filter configured state and select a row to see assignments and raw configuration.
 5. Check **Show catalog issues** if any file is unavailable or malformed. A loaded catalog is not a pipeline validation result and does not establish deployment state.
 
-For this pilot GitHub mode uses the existing GitHub CLI login (`gh auth login --hostname github.com`); local mode requires no GitHub or Azure sign-in. The planned GitHub App device login, request history and installable distribution are subsequent work, not implemented here. No new personal access token is required by this feature.
+For this pilot GitHub mode uses the existing GitHub CLI login (`gh auth login --hostname github.com`); local mode requires no GitHub or Azure sign-in. The planned GitHub App device login, live review/check status and installable distribution are subsequent work, not implemented here. No new personal access token is required by this feature.
 
 The catalog reads YAML workspace manifests recursively, including secondary workspace filenames, and YAML rules under `rules/sentinel/`. It supports the supplied version 1 manifest shape, reports duplicate target IDs, missing assigned rules and unreadable files, and rejects unsafe YAML and linked directories/files. It is a display adapter, not a replacement for the repository's authoritative validators. An unspecified rule enabled value remains unspecified; it is never inferred from lifecycle status.
 
@@ -59,4 +59,57 @@ All new test data is synthetic. GitHub API reads are mocked in offline tests. No
 
 The validator is a bundled, reviewed copy of your uploaded rules.py; see [schema provenance](RULE-SCHEMA.md).
 KQL still needs a workspace query check. Keep local drafts and private queries out of this
-public application repository. Workflow execution and guided PR submission are future increments.
+public application repository. Guided draft PR submission is available below; client assignment and workflow execution are subsequent increments.
+
+## Submit a rule for repository review
+
+1. Sign in to GitHub CLI with the account authorized for the private detection repository.
+   This pilot uses that existing login; it does not require creating a new personal token.
+2. For an existing rule, refresh the **GitHub repository** catalog and choose
+   **Edit selected rule as draft**. Keep the original rule ID and path. Draft saves retain
+   this repository source. A rule opened only from a local YAML file cannot overwrite an
+   existing remote rule; open that rule from the GitHub catalog first.
+3. In **Rule builder**, finish validation and select **Review for GitHub**.
+4. Check the private repository and file path, then choose **Prepare review**. This only
+   reads GitHub. Review the exact diff, signed-in account, base revision, existing client
+   references and their overrides. New files do not automatically get client assignments.
+5. Select **Create / recover draft PR** to create one rule-file commit on a new branch and
+   a draft pull request. The app never writes to the default branch, merges the request,
+   or dispatches an Azure deployment. Creating a branch or PR can trigger workflows already
+   configured in your repository. Use **Open pull request** for its checks and review.
+6. If a response times out, retry in the same dialog. After an app restart, use
+   **Saved review requests** to search and reopen a request. For files copied from another computer, use **Open request file** and select the matching file from
+   `desktop-data/review-requests/`. Requests include private YAML and are ignored by Git.
+   Keep these app-created files unchanged. Completed requests open their existing PR;
+   changed review branches are refused rather than overwritten.
+
+Submitting requires write access to the private repository and permission to create pull
+requests. Repository rulesets and organization policies still apply. The preview refuses
+incomplete catalogs, duplicate shared IDs and stale source revisions; existing target
+migration exceptions and overrides are validated separately. If main changes before the
+first branch write, refresh the catalog and prepare a new review.
+
+This is schema validation, not live KQL execution or certification of every ARM property.
+The private repository's CI, human review, and deployment approvals remain authoritative.
+Tests use synthetic GitHub responses, including lost-write responses; no private rules
+have been uploaded or live tenant deployments performed during development.
+
+API references: [Git trees](https://docs.github.com/en/rest/git/trees),
+[Git references](https://docs.github.com/en/rest/git/refs),
+[pull requests](https://docs.github.com/en/rest/pulls/pulls).
+
+## Find a saved review
+
+In **Rule builder**, select **Saved review requests**. The list reads this computer's
+`desktop-data/review-requests/` folder, newest first. Search by rule name, repository,
+rule file path or request ID, then choose **Open saved review** to inspect the original
+diff and recover an interrupted submission or open its PR. Your current draft stays intact.
+
+**PR link saved** means a URL was recorded locally; it does not indicate current GitHub
+checks, review or merge status. **Submission unconfirmed** means the request may need
+recovery; it does not mean GitHub received nothing. Opening a saved review never submits
+it automatically. Use its explicit recovery button if needed.
+
+Unreadable files are reported and left unchanged. The list shows up to 200 recent files;
+use **Open request file** for older files. A new laptop has an empty list unless you copy
+its private review request files into that laptop's ignored app data folder.

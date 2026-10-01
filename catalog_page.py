@@ -66,7 +66,10 @@ class CatalogPage:
             self.note.set("Choose Rules and select a rule to edit a local draft.")
             return
         row = self.visible[int(selected[0])]
-        if self.app.rule_builder.edit_rule(row["raw"]):
+        source = None
+        if self.snapshot.get("repository"):
+            source = {"repository": self.snapshot["repository"], "revision": self.snapshot["revision"], "path": row["path"]}
+        if self.app.rule_builder.edit_rule(row["raw"], source=source):
             self.app.tabs.select(6)
 
     def mode_changed(self, *args):

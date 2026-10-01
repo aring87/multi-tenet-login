@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from full_onboarding import Onboard, CLI, Stop, validate_config
+from sentinel_app.full_onboarding import Onboard, CLI, Stop, validate_config
 
 def gid(n):
     return f"11111111-1111-4111-8111-{n:012d}"
@@ -138,7 +138,7 @@ class Tests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.state=Path(self.temp.name)/"state.json"
-        self.template=Path(__file__).resolve().parents[1]/"azuredeploy.json"
+        self.template=Path(__file__).resolve().parents[1]/"templates/azuredeploy.json"
         self.cloud=Cloud()
     def run_it(self, c=None):
         run=Onboard(c or config(), self.cloud, self.state, self.template)

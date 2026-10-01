@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from repository_catalog import CatalogError, GitHubReader, catalog, load_local, parse_yaml
+from sentinel_app.repository_catalog import CatalogError, GitHubReader, catalog, load_local, parse_yaml
 
 
 def fixtures():

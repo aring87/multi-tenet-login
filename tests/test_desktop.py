@@ -10,9 +10,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import desktop_backend as backend
-import desktop_app as ui
-from lighthouse_onboarding import Stop
+from sentinel_app import desktop_backend as backend
+from sentinel_app import desktop_app as ui
+from sentinel_app.lighthouse_onboarding import Stop
 
 TENANT="11111111-1111-4111-8111-111111111111"
 SUB="22222222-2222-4222-8222-222222222222"
@@ -255,7 +255,7 @@ class DesktopTests(unittest.TestCase):
             a=backend.Session(self.data/"one"); b=backend.Session(self.data/"two")
         self.assertNotEqual(a.env["AZURE_CONFIG_DIR"],b.env["AZURE_CONFIG_DIR"])
     def lighthouse_config(self):
-        config=json.loads((backend.BASE/"lighthouse-onboarding.example.json").read_text(encoding="utf-8"))
+        config=json.loads((backend.BASE/"examples/lighthouse-onboarding.example.json").read_text(encoding="utf-8"))
         config.update({k:WORKSPACE[k] for k in ("tenant_id","subscription_id","resource_group","workspace_name")})
         return config
 
@@ -273,7 +273,7 @@ class DesktopTests(unittest.TestCase):
             result=backend.full_run(session,self.lighthouse_config(),False)
         args=onboard.call_args.args
         self.assertFalse(args[1].apply)
-        self.assertEqual(args[3],backend.BASE/"lighthouse-onboard.json")
+        self.assertEqual(args[3],backend.BASE/"templates/lighthouse-onboard.json")
         onboard.return_value.run.assert_called_once_with()
         self.assertIn("no cloud resources changed",result)
         self.assertFalse(list(self.data.rglob("*.lock")))

@@ -5,12 +5,12 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import desktop_app as ui
-import rule_drafts as drafts
-from rule_review_dialog import ReviewDialog
+from sentinel_app import desktop_app as ui
+from sentinel_app import rule_drafts as drafts
+from sentinel_app.rule_review_dialog import ReviewDialog
 from test_rule_drafts import valid_form
 from test_repository_reviews import FakeGitHub, REPO, NEW
-from repository_reviews import ReviewService
+from sentinel_app.repository_reviews import ReviewService
 
 
 class ReviewDialogTests(unittest.TestCase):
@@ -64,10 +64,10 @@ class ReviewDialogTests(unittest.TestCase):
         source = {"repository": REPO, "revision": "a" * 40, "path": NEW}
         self.builder.load_form(valid_form(), source=source)
         path = Path(self.temp.name) / "local.rule-draft.json"
-        with patch("rule_builder_page.filedialog.asksaveasfilename", return_value=str(path)): self.builder.save()
+        with patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename", return_value=str(path)): self.builder.save()
         self.assertEqual(drafts.read_draft_source(path), source)
         self.builder.load_form(drafts.new_form())
-        with patch("rule_builder_page.filedialog.askopenfilename", return_value=str(path)): self.builder.open_draft()
+        with patch("sentinel_app.rule_builder_page.filedialog.askopenfilename", return_value=str(path)): self.builder.open_draft()
         self.assertEqual(self.builder.source, source)
 
     def test_review_form_is_a_snapshot_not_live_editable_inputs(self):

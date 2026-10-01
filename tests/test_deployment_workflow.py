@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from deployment_workflow import DeploymentService, preview_ready
-from preview_workflow import PreviewService, WORKFLOW_PATH
-from repository_reviews import ReviewError, fingerprint
+from sentinel_app.deployment_workflow import DeploymentService, preview_ready
+from sentinel_app.preview_workflow import PreviewService, WORKFLOW_PATH
+from sentinel_app.repository_reviews import ReviewError, fingerprint
 from test_preview_workflow import PreviewGitHub, REPO, EXISTING, workflow
 
 

@@ -5,10 +5,10 @@ import tkinter as tk
 import unittest
 from unittest.mock import patch
 
-import desktop_app as ui
-from preview_dialog import PreviewDialog
-from preview_workflow import PreviewService
-from repository_catalog import GitHubReader
+from sentinel_app import desktop_app as ui
+from sentinel_app.preview_dialog import PreviewDialog
+from sentinel_app.preview_workflow import PreviewService
+from sentinel_app.repository_catalog import GitHubReader
 from test_preview_workflow import PreviewGitHub, REPO, EXISTING
 
 
@@ -66,7 +66,7 @@ class PreviewDialogTests(unittest.TestCase):
         with patch.object(self.app, "work", side_effect=self.work): self.dialog.refresh_status()
         self.assertEqual(self.dialog.record["results"][0]["state"], "success")
         self.dialog.runs.selection_set("0")
-        with patch("preview_dialog.webbrowser.open") as open_url: self.dialog.open_run()
+        with patch("sentinel_app.preview_dialog.webbrowser.open") as open_url: self.dialog.open_run()
         open_url.assert_called_once_with("https://github.com/example/detections/actions/runs/101")
 
     def test_uncertain_dispatch_locks_submission_but_retains_actions_link(self):
@@ -75,14 +75,14 @@ class PreviewDialogTests(unittest.TestCase):
         self.assertTrue(self.dialog.locked)
         self.assertEqual(str(self.dialog.start_button.cget("state")), "disabled")
         self.assertIn("unconfirmed", self.dialog.record["results"][0]["state"])
-        with patch("preview_dialog.webbrowser.open") as open_url: self.dialog.open_run()
+        with patch("sentinel_app.preview_dialog.webbrowser.open") as open_url: self.dialog.open_run()
         self.assertIn("/actions/workflows/", open_url.call_args.args[0])
 
     def test_catalog_local_snapshot_cannot_open_dispatch(self):
         page = self.app.catalog_page
         page.snapshot = dict(self.snapshot); page.snapshot.pop("repository")
         page.view.set("Rules"); page.render(); page.tree.selection_set("0")
-        with patch("catalog_page.PreviewDialog") as dialog: page.preview_selected()
+        with patch("sentinel_app.catalog_page.PreviewDialog") as dialog: page.preview_selected()
         dialog.assert_not_called(); self.assertIn("private GitHub", page.note.get())
 
     def test_controls_are_visible_at_minimum_size(self):

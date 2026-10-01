@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import lighthouse_onboarding as lh
+from sentinel_app import lighthouse_onboarding as lh
 
 BASE = Path(__file__).resolve().parents[1]
 # A real copy of detection-as-code's multi-workspace workflow, eight blocks. This repo's
@@ -132,14 +132,14 @@ class FakeGitHub:
 
 class UpdateDropdownsTests(unittest.TestCase):
     def config(self, rule="rules/sentinel/testing/pipeline-connection-test.yml"):
-        config = json.loads((BASE / "lighthouse-onboarding.example.json").read_text(encoding="utf-8"))
+        config = json.loads((BASE / "examples/lighthouse-onboarding.example.json").read_text(encoding="utf-8"))
         config.update(client="new-client", workspace_label="workspace", initial_rule_path=rule)
         return config
 
     def onboard(self, github, **kw):
         folder = tempfile.mkdtemp()
         run = lh.Onboard(self.config(**kw), github, Path(folder) / "state.json",
-                         BASE / "lighthouse-onboard.json")
+                         BASE / "templates/lighthouse-onboard.json")
         run.branch = "onboard/" + run.c["target"]
         return run
 

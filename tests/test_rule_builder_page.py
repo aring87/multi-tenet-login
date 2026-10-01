@@ -4,8 +4,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import desktop_app as ui
-import rule_drafts as drafts
+from sentinel_app import desktop_app as ui
+from sentinel_app import rule_drafts as drafts
 from test_rule_drafts import valid_form
 
 
@@ -31,24 +31,24 @@ class RuleBuilderPageTests(unittest.TestCase):
         self.assertEqual(self.page.preview.get("1.0", "end-1c"), "")
 
     def test_invalid_export_does_not_open_save_dialog(self):
-        with patch("rule_builder_page.messagebox.showerror"), patch("rule_builder_page.filedialog.asksaveasfilename") as save:
+        with patch("sentinel_app.rule_builder_page.messagebox.showerror"), patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename") as save:
             self.page.export(); save.assert_not_called()
 
     def test_cancel_new_keeps_unsaved_form(self):
         self.page.vars["name"].set("Keep this")
         identity = self.page.vars["id"].get()
-        with patch("rule_builder_page.messagebox.askyesno", return_value=False): self.page.new()
+        with patch("sentinel_app.rule_builder_page.messagebox.askyesno", return_value=False): self.page.new()
         self.assertEqual(self.page.vars["name"].get(), "Keep this")
         self.assertEqual(self.page.vars["id"].get(), identity)
 
     def test_save_incomplete_then_reopen_and_export(self):
         path = Path(self.temp.name) / "draft.rule-draft.json"
         self.page.vars["name"].set("Incomplete")
-        with patch("rule_builder_page.filedialog.asksaveasfilename", return_value=str(path)): self.page.save()
+        with patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename", return_value=str(path)): self.page.save()
         self.assertFalse(self.page.dirty()); self.assertEqual(drafts.read_draft(path)["name"], "Incomplete")
         self.page.load_form(valid_form()); self.root.update()
         output = Path(self.temp.name) / "export.yml"
-        with patch("rule_builder_page.filedialog.asksaveasfilename", return_value=str(output)): self.page.export()
+        with patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename", return_value=str(output)): self.page.export()
         self.assertEqual(drafts.read_rule(output)["id"], self.page.vars["id"].get())
 
     def test_repository_edit_preserves_id_without_changing_source(self):
@@ -61,7 +61,7 @@ class RuleBuilderPageTests(unittest.TestCase):
 
     def test_close_can_be_cancelled_before_logout(self):
         self.page.vars["name"].set("Unsaved")
-        with patch("rule_builder_page.messagebox.askyesno", return_value=False), patch.object(self.root, "destroy") as destroy:
+        with patch("sentinel_app.rule_builder_page.messagebox.askyesno", return_value=False), patch.object(self.root, "destroy") as destroy:
             self.app.close(); destroy.assert_not_called()
 
     def test_rule_builder_has_no_azure_signin_requirement(self):

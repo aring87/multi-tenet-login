@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import unquote
 
-import audit_evidence as audit
-from desktop_backend import Stop
+from sentinel_app import audit_evidence as audit
+from sentinel_app.desktop_backend import Stop
 from test_audit_evidence import FakeSession
 from test_desktop import WORKSPACE
 

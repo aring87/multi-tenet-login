@@ -1,6 +1,6 @@
 ## Repository UI development pilot
 
-The Repository catalog, guided Rule builder, reviewed draft pull request submission, a searchable saved-review list, and client selection for GitHub previews are available in this development branch. See [pilot setup and limits](REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
+The Repository catalog, guided Rule builder, reviewed draft pull request submission, a searchable saved-review list, and client selection for GitHub previews are available in this development branch. See [pilot setup and limits](docs/REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
 
 # Sentinel Workspace
 
@@ -38,7 +38,7 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 - Saves client names and tenant IDs/domains in a local dropdown.
 - Opens Microsoft sign-in for an authorized Azure account, including JIT accounts.
 - Discovers accessible subscriptions and Log Analytics workspace details.
-- Exports selected Sentinel configuration with a readable report and original JSON. Optional Sentinel activity and selected security source logs include samples or bounded period exports. See [Sentinel Configuration & Logs](AUDIT-EVIDENCE.md).
+- Exports selected Sentinel configuration with a readable report and original JSON. Optional Sentinel activity and selected security source logs include samples or bounded period exports. See [Sentinel Configuration & Logs](docs/AUDIT-EVIDENCE.md).
 - Previews selected source-table counts and latest timestamps. Reports unavailable, denied and incomplete collections explicitly.
 - Previews and applies scoped permissions for existing preview/deployment service principals.
 - Onboards clients through Azure Lighthouse and opens a client-target pull request, including generated workflow dropdown updates where supported.
@@ -70,22 +70,22 @@ This development app requires PyYAML. Run `py -m pip install -r requirements.txt
 
 This application repository is separate from your private detection-rule repository. In full onboarding, configure the private repository that contains your existing Sentinel pipeline.
 
-Desktop Lighthouse onboarding uses two existing shared GitHub environments, each with an AZURE_CLIENT_ID variable. See [the current onboarding guide](APP-ONBOARDING.md). It does not create the Sentinel workspace, connectors, detection pipeline, or analytics rules.
+Desktop Lighthouse onboarding uses two existing shared GitHub environments, each with an AZURE_CLIENT_ID variable. See [the current onboarding guide](docs/APP-ONBOARDING.md). It does not create the Sentinel workspace, connectors, detection pipeline, or analytics rules.
 
 ## Documentation
 
-- [Desktop guide](DESKTOP-START-HERE.md)
-- [Current Lighthouse onboarding](APP-ONBOARDING.md)
-- [Legacy per-client identity onboarding](FULL-ONBOARDING.md)
-- [Project file map](PROJECT-MAP.md)
+- [Desktop guide](docs/DESKTOP-START-HERE.md)
+- [Current Lighthouse onboarding](docs/APP-ONBOARDING.md)
+- [Legacy per-client identity onboarding](docs/FULL-ONBOARDING.md)
+- [Project file map](docs/PROJECT-MAP.md)
 - [Detection repository reference uploads](detection-as-code/README.md)
-- [Web-only procedure](PORTAL-ONLY.md)
-- [Permissions-only Git Bash route](GIT-BASH-QUICKSTART.md)
-- [Verification notes](VALIDATION.md)
+- [Web-only procedure](docs/PORTAL-ONLY.md)
+- [Permissions-only Git Bash route](docs/GIT-BASH-QUICKSTART.md)
+- [Verification notes](docs/VALIDATION.md)
 
 ## Public examples
 
-Examples use fictional resource names and placeholder or synthetic identifiers. No actual client inventory is distributed. See [Privacy and publication notes](PRIVACY.md).
+Examples use fictional resource names and placeholder or synthetic identifiers. No actual client inventory is distributed. See [Privacy and publication notes](docs/PRIVACY.md).
 
 ## Local data and access
 
@@ -110,20 +110,25 @@ The tests simulate Azure/GitHub calls and do not contact a live tenant. Desktop 
 
 Live authentication, tenant policies, API permissions, and a disabled-rule deployment pilot still require validation in an authorized environment. The app is an initial implementation, not a claim of production certification.
 
-## Files
+## Repository layout
 
-| File | Purpose |
+| Location | Purpose |
 |---|---|
-| desktop_app.py | Desktop interface and client inventory controls |
-| desktop_backend.py | Azure discovery, isolated CLI sessions, and setup execution |
-| lighthouse_onboarding.py | Current Lighthouse onboarding and client dropdown updates |
-| full_onboarding.py | Legacy per-client identity CLI workflow |
-| azuredeploy.json | Scoped custom roles and assignments |
-| Start-Sentinel.cmd | Windows launcher |
-| onboard-all.sh | Optional Git Bash launcher |
-| onboarding.example.json | Placeholder configuration for command-line onboarding |
-| tests/ | Offline regression tests |
+| `Start-Sentinel.cmd` | Start the desktop app on Windows |
+| `sentinel_app/` | Application code, rule builder, Azure onboarding, GitHub previews and deployments |
+| `docs/` | User guides, project map, validation and privacy notes |
+| `templates/` | Azure deployment templates |
+| `examples/` | Placeholder configuration files |
+| `scripts/` | Optional CLI launchers and workspace maintenance tools |
+| `tests/` | Offline tests and fixtures |
+| `detection-as-code/` | Sanitized private-repository reference uploads |
+| `desktop-data/` | Your local clients, settings and authentication state; ignored by Git |
 
+The launcher stays in the root. From a terminal in this folder, use
+`py -m sentinel_app` instead of `py desktop_app.py`. Saved clients and settings
+remain in the same `desktop-data/` folder. See the [project map](docs/PROJECT-MAP.md)
+for command-line entry points and upgrade steps. The private detection repository
+does not need changes for this reorganization.
 
 ## License
 

@@ -10,10 +10,10 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import audit_analysis as analysis
-from full_onboarding import Stop as LegacyAnalysisStop
-import audit_evidence as audit
-from desktop_backend import Stop
+from sentinel_app import audit_analysis as analysis
+from sentinel_app.full_onboarding import Stop as LegacyAnalysisStop
+from sentinel_app import audit_evidence as audit
+from sentinel_app.desktop_backend import Stop
 from test_audit_evidence import FakeSession
 from test_desktop import WORKSPACE
 

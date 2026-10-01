@@ -2,7 +2,7 @@ from unittest.mock import patch
 import unittest
 
 import test_preview_dialog as preview_tests
-from deployment_dialog import DeploymentDialog
+from sentinel_app.deployment_dialog import DeploymentDialog
 
 
 class DeploymentDialogTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class DeploymentDialogTests(unittest.TestCase):
     def test_deployment_only_available_after_refreshed_success(self):
         self.prepare()
         self.assertEqual(str(self.dialog.deploy_button.cget("state")), "disabled")
-        with patch("preview_dialog.DeploymentDialog") as dialog:
+        with patch("sentinel_app.preview_dialog.DeploymentDialog") as dialog:
             self.dialog.open_deployment()
         dialog.assert_not_called()
         with patch.object(self.app, "work", side_effect=self.work):self.dialog.start()
@@ -57,7 +57,7 @@ class DeploymentDialogTests(unittest.TestCase):
             reopened = DeploymentDialog(self.dialog); reopened.start(); reopened.refresh()
         self.assertEqual(len(self.remote.dispatched), 2)
         reopened.runs.selection_set("0")
-        with patch("deployment_dialog.webbrowser.open") as browser:reopened.open_run()
+        with patch("sentinel_app.deployment_dialog.webbrowser.open") as browser:reopened.open_run()
         self.assertTrue(browser.call_args.args[0].endswith("/actions/runs/102"))
 
     def test_uncertain_submission_stays_locked_and_keeps_workflow_link(self):
@@ -65,7 +65,7 @@ class DeploymentDialogTests(unittest.TestCase):
         with patch.object(self.app, "work", side_effect=self.work):dialog.start()
         self.assertIn("unconfirmed", dialog.record["results"][0]["state"])
         self.assertEqual(str(dialog.start_button.cget("state")), "disabled")
-        with patch("deployment_dialog.webbrowser.open") as browser:dialog.open_run()
+        with patch("sentinel_app.deployment_dialog.webbrowser.open") as browser:dialog.open_run()
         self.assertIn("/actions/workflows/", browser.call_args.args[0])
         with patch.object(self.app, "work", side_effect=self.work):dialog.start()
         self.assertEqual(len(self.remote.dispatched), 2)

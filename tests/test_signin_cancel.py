@@ -10,11 +10,11 @@ import tkinter as tk
 import unittest
 from unittest.mock import MagicMock, patch
 
-import desktop_app as ui
-import desktop_backend as backend
-from auth_recovery import SignInCancelled, signin_was_cancelled, AuthenticationRequired
-from signin_process import run_signin
-from lighthouse_onboarding import Stop
+from sentinel_app import desktop_app as ui
+from sentinel_app import desktop_backend as backend
+from sentinel_app.auth_recovery import SignInCancelled, signin_was_cancelled, AuthenticationRequired
+from sentinel_app.signin_process import run_signin
+from sentinel_app.lighthouse_onboarding import Stop
 from test_desktop import TENANT, SUB
 
 ROWS = [dict(id=SUB, tenantId=TENANT, name="Synthetic subscription", isDefault=True)]
@@ -23,7 +23,7 @@ ROWS = [dict(id=SUB, tenantId=TENANT, name="Synthetic subscription", isDefault=T
 class SignInProcessTests(unittest.TestCase):
     def test_cancel_before_launch_starts_no_process(self):
         cancel = threading.Event(); cancel.set()
-        with patch("signin_process.subprocess.Popen") as process:
+        with patch("sentinel_app.signin_process.subprocess.Popen") as process:
             with self.assertRaises(SignInCancelled):run_signin(["unused"], {}, cancel)
         process.assert_not_called()
 
@@ -35,7 +35,7 @@ class SignInProcessTests(unittest.TestCase):
             cancel.set()
             return process
         started = time.monotonic()
-        with patch("signin_process.subprocess.Popen", side_effect=spawn):
+        with patch("sentinel_app.signin_process.subprocess.Popen", side_effect=spawn):
             with self.assertRaises(SignInCancelled):
                 run_signin([sys.executable, "-c", "import time; time.sleep(30)"], os.environ.copy(), cancel)
         self.assertLess(time.monotonic() - started, 5)
@@ -52,7 +52,7 @@ class SignInProcessTests(unittest.TestCase):
         children = []; popen = subprocess.Popen
         def spawn(*args, **kwargs):
             child = popen(*args, **kwargs); children.append(child); return child
-        with patch("signin_process.subprocess.Popen", side_effect=spawn):
+        with patch("sentinel_app.signin_process.subprocess.Popen", side_effect=spawn):
             with self.assertRaisesRegex(Stop, "sign-in timed out"):
                 run_signin([sys.executable, "-c", "import time; time.sleep(30)"], os.environ.copy(), threading.Event(), timeout=0.1)
         self.assertIsNotNone(children[0].poll())
@@ -61,7 +61,7 @@ class SignInProcessTests(unittest.TestCase):
         cancel = threading.Event(); process = MagicMock(returncode=0)
         process.wait.side_effect = lambda **kwargs:cancel.set()
         process.poll.return_value = 0
-        with patch("signin_process.subprocess.Popen", return_value=process):
+        with patch("sentinel_app.signin_process.subprocess.Popen", return_value=process):
             with self.assertRaises(SignInCancelled):run_signin(["fake"], {}, cancel)
         process.kill.assert_not_called()
 
@@ -75,8 +75,8 @@ class SignInProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             session = backend.Session(Path(folder)); session.az_exe = "fake-az"
             result = subprocess.CompletedProcess([], 0, "[]", "")
-            with patch("desktop_backend.run_signin", return_value=result) as signin, \
-                 patch("desktop_backend.subprocess.run", return_value=result) as ordinary:
+            with patch("sentinel_app.desktop_backend.run_signin", return_value=result) as signin, \
+                 patch("sentinel_app.desktop_backend.subprocess.run", return_value=result) as ordinary:
                 session.execute("fake-az", ["deployment", "sub", "validate"])
                 ordinary.assert_called_once(); signin.assert_not_called()
                 session._signin_cancel = threading.Event()
@@ -87,7 +87,7 @@ class SignInProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             session = backend.Session(Path(folder)); session.az_exe = "fake-az"
             session._signin_cancel = threading.Event()
-            with patch("desktop_backend.run_signin") as signin:
+            with patch("sentinel_app.desktop_backend.run_signin") as signin:
                 with self.assertRaisesRegex(Stop, "Only authentication commands"):
                     session.execute("fake-az", ["deployment", "sub", "create"])
             signin.assert_not_called()

@@ -5,8 +5,10 @@ test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 script_dir="$(cd -- "$test_dir/.." && pwd)"
 fixture="$(mktemp -d)"
 mkdir -p "$fixture/fake-bin" "$fixture/package with spaces"
-cp "$script_dir/onboard-permissions.sh" "$script_dir/azuredeploy.json" "$fixture/package with spaces/"
-sut="$fixture/package with spaces/onboard-permissions.sh"
+mkdir -p "$fixture/package with spaces/scripts" "$fixture/package with spaces/templates"
+cp "$script_dir/scripts/onboard-permissions.sh" "$fixture/package with spaces/scripts/"
+cp "$script_dir/templates/azuredeploy.json" "$fixture/package with spaces/templates/"
+sut="$fixture/package with spaces/scripts/onboard-permissions.sh"
 cat > "$fixture/fake-bin/az" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail

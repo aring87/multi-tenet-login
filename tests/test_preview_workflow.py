@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from repository_catalog import GitHubReader, parse_yaml, CatalogError
-from repository_reviews import ReviewError
-from preview_workflow import PreviewService, WORKFLOW_PATH, input_batches, eligible_clients, api
+from sentinel_app.repository_catalog import GitHubReader, parse_yaml, CatalogError
+from sentinel_app.repository_reviews import ReviewError
+from sentinel_app.preview_workflow import PreviewService, WORKFLOW_PATH, input_batches, eligible_clients, api
 from test_repository_reviews import FakeGitHub, REPO, EXISTING
 
 
@@ -183,7 +183,7 @@ class PreviewTests(unittest.TestCase):
         self.assertNotIn("run_id", record["results"][0]); self.assertIn("unavailable", record["results"][0]["state"])
 
     def test_api_pins_version_and_preserves_json_arguments(self):
-        with patch("preview_workflow.shutil.which", return_value="gh"), patch("preview_workflow.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"workflow_run_id":8}', '')) as run:
+        with patch("sentinel_app.preview_workflow.shutil.which", return_value="gh"), patch("sentinel_app.preview_workflow.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"workflow_run_id":8}', '')) as run:
             self.assertEqual(api("POST", "repos/example/detections/actions/workflows/a/dispatches", {"ref": "main"})["workflow_run_id"], 8)
         self.assertIn("X-GitHub-Api-Version: 2026-03-10", run.call_args.args[0])
         self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"ref": "main"})

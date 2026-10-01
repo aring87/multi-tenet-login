@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 
 import yaml
-import lighthouse_onboarding as lh
-import full_onboarding as legacy
-from repository_catalog import catalog
+from sentinel_app import lighthouse_onboarding as lh
+from sentinel_app import full_onboarding as legacy
+from sentinel_app.repository_catalog import catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 

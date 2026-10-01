@@ -73,6 +73,52 @@ class DesignTests(unittest.TestCase):
         callbacks[0](dict(records=[dict(name="stale")],status="collected"))
         self.assertFalse(app.rules_page.rows)
 
+    def load_rules_for_export(self, status="collected"):
+        app=self.app; app.session=object(); app.workspace=dict(WORKSPACE)
+        result=dict(records=[dict(name="one",properties=dict(enabled=True)),
+                             dict(name="two",properties=dict(enabled=False))],status=status)
+        with patch.object(app,"work",side_effect=lambda title,task,done,**kw:done(result)):
+            app.rules_page.load()
+        return app.rules_page
+
+    def test_export_includes_hidden_rules_without_another_azure_call(self):
+        page=self.load_rules_for_export()
+        page.filter.set("Enabled"); page.search.set("missing")
+        self.assertFalse(page.tree.get_children())
+        with patch("rules_page.filedialog.asksaveasfilename",return_value="audit.zip"), \
+             patch("rules_page.export_rules",return_value=dict(complete=True,record_count=2)) as export, \
+             patch("rules_page.list_rules") as azure, \
+             patch.object(self.app,"work",side_effect=lambda title,task,done,**kw:done(task())):
+            page.export()
+        self.assertEqual(len(export.call_args.args[2]["records"]),2)
+        self.assertEqual(export.call_args.args[1],WORKSPACE)
+        azure.assert_not_called()
+        self.assertIn("Exported 2 rules",self.app.status.get())
+
+    def test_export_rejects_changed_workspace_session_and_reset(self):
+        for change in ("workspace", "session", "reset"):
+            page=self.load_rules_for_export()
+            if change=="workspace":self.app.workspace=dict(WORKSPACE,workspace_id="other")
+            elif change=="session":self.app.session=object()
+            else:page.reset()
+            with patch("rules_page.messagebox.showinfo") as info, \
+                 patch("rules_page.filedialog.asksaveasfilename") as dialog:
+                page.export()
+            info.assert_called_once(); dialog.assert_not_called()
+
+    def test_partial_export_requires_acknowledgment_and_cancel_writes_nothing(self):
+        page=self.load_rules_for_export("partial")
+        with patch("rules_page.messagebox.askyesno",return_value=False) as confirm, \
+             patch("rules_page.filedialog.asksaveasfilename") as dialog, \
+             patch("rules_page.export_rules") as export:
+            page.export()
+        confirm.assert_called_once(); dialog.assert_not_called(); export.assert_not_called()
+        with patch("rules_page.messagebox.askyesno",return_value=True), \
+             patch("rules_page.filedialog.asksaveasfilename",return_value=""), \
+             patch("rules_page.export_rules") as export:
+            page.export()
+        export.assert_not_called()
+
     def test_all_pages_fit_horizontally_at_minimum_size(self):
         for index in range(len(self.app.page_contents)):
             self.app.tabs.select(index);self.root.update()

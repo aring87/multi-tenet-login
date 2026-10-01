@@ -9,7 +9,8 @@ from pathlib import Path
 from rules import guid, load_yaml, validate, apply_overrides, template
 
 ROOT = Path(__file__).resolve().parents[1]
-SLUG = re.compile(r"^[a-z][a-z0-9-]{1,49}$")
+SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+SLUG_MAXIMUM = 64
 AZURE_FIELDS = {"tenant_id", "subscription_id", "resource_group", "workspace_name", "workspace_id"}
 
 
@@ -45,8 +46,11 @@ def load_catalog(root=ROOT):
         if not isinstance(target, dict) or set(target) != expected or target["version"] != 1:
             raise ValueError(str(path) + ": unexpected target schema")
         for field in ("target", "client"):
-            if not isinstance(target[field], str) or not SLUG.fullmatch(target[field]):
-                raise ValueError("Target/client must be lowercase slugs, 2..50 characters")
+            if (not isinstance(target[field], str) or not SLUG.fullmatch(target[field])
+                    or len(target[field]) > SLUG_MAXIMUM):
+                raise ValueError(f"{path}: {field} must be a string of 1..64 lowercase letters or digits, "
+                                 "separated by single hyphens; numeric-only names are allowed. "
+                                 f"Got {target[field]!r}. Quote numeric YAML values, e.g. client: '413'.")
         if target["target"] in result:
             raise ValueError("Duplicate target: " + target["target"])
         if path.parent.name != target["client"] or not target["target"].startswith(target["client"] + "-"):

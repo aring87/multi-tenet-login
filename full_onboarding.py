@@ -12,6 +12,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from urllib.parse import quote
+from yaml_identifiers import yaml_slug
 
 class Stop(RuntimeError):
     pass
@@ -405,7 +406,7 @@ class Onboard:
 
     def manifest(self):
         q = json.dumps
-        lines = ["version: 1", "target: " + self.c["target"], "client: " + self.c["client"],
+        lines = ["version: 1", "target: " + yaml_slug(self.c["target"]), "client: " + yaml_slug(self.c["client"]),
                  "enabled: " + str(bool(self.c["initial_rule_path"])).lower(), "allow_missing_mitre: " + str(self.c["allow_missing_mitre"]).lower(), "azure:"]
         for key in ("tenant_id", "subscription_id", "resource_group", "workspace_name"):
             lines.append("  " + key + ": " + q(self.c[key]))

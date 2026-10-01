@@ -1,13 +1,19 @@
 """Workspace-scoped analytics rule inventory view."""
 import json
+from copy import deepcopy
+from datetime import datetime, timezone
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
+from rule_export import export_rules
 from workspace_tools import list_rules, rule_values
 
 class RulesPage:
     def __init__(self, app, parent):
         self.app = app
         self.rows = []
+        self.collection = None
+        self.loaded_session = None
+        self.loaded_workspace = None
         card, body = app.card(parent, "Analytics rules", "All configured rules in the selected workspace, including disabled rules. Select a rule to inspect its configuration.")
         card.pack(fill="both", expand=True, pady=(0,16))
         bar = ttk.Frame(body, style="Card.TFrame"); bar.pack(fill="x")
@@ -18,6 +24,12 @@ class RulesPage:
         combo = ttk.Combobox(bar, textvariable=self.filter, values=("All states", "Enabled", "Disabled", "Not specified"), state="readonly", width=16)
         combo.pack(side="left", padx=(0,10))
         app.button(bar, "Refresh rules", self.load, "Primary.TButton").pack(side="right")
+        export_bar = ttk.Frame(body, style="Card.TFrame")
+        export_bar.pack(fill="x", pady=(10, 0))
+        app.button(export_bar, "Export all rules", self.export).pack(side="left", padx=(0, 10))
+        hint = ttk.Label(export_bar, text="ZIP with raw JSON, CSV and audit details. Includes all loaded rules.",
+                         style="Muted.TLabel", wraplength=380)
+        hint.pack(side="left", fill="x", expand=True)
         self.summary = tk.StringVar(value="Select a workspace to load its rules.")
         label = ttk.Label(body, textvariable=self.summary, style="Muted.TLabel", wraplength=650)
         label.pack(fill="x", pady=12); app.wrap_to_parent(label)
@@ -42,6 +54,7 @@ class RulesPage:
         self.details.insert("1.0",text); self.details.configure(state="disabled")
 
     def reset(self):
+        self.collection=None; self.loaded_session=None; self.loaded_workspace=None
         self.rows=[]; self.render(); self.summary.set("Select a workspace, then refresh its rules.")
 
     def render(self):
@@ -69,7 +82,10 @@ class RulesPage:
             except Exception as error:return dict(records=[],status="error",error=str(error))
         def done(result):
             if app.session is not session or app.workspace != workspace:return
-            self.rows=result["records"]; self.render()
+            self.collection=deepcopy(result)
+            self.collection.setdefault("collected_at_utc", datetime.now(timezone.utc).isoformat())
+            self.loaded_session=session; self.loaded_workspace=deepcopy(workspace)
+            self.rows=self.collection["records"]; self.render()
             enabled=sum(rule_values(r)[1]=="Enabled" for r in self.rows)
             disabled=sum(rule_values(r)[1]=="Disabled" for r in self.rows)
             text=f"{len(self.rows)} rules | {enabled} enabled | {disabled} disabled | {len(self.rows)-enabled-disabled} unspecified"
@@ -78,3 +94,29 @@ class RulesPage:
             elif not self.rows:text="No analytics rules returned for this workspace."
             self.summary.set(text); app.status.set("Rule inventory refreshed for " + workspace["workspace_name"] + ".")
         app.work("Reading workspace analytics rules...",task,done,page=4)
+
+    def export(self):
+        app=self.app
+        if app.busy:return
+        if (self.collection is None or app.session is not self.loaded_session
+                or not app.session or app.workspace != self.loaded_workspace):
+            messagebox.showinfo("Refresh rules", "Load rules for the current workspace before exporting.", parent=app.root)
+            return
+        complete=self.collection.get("status") in ("collected", "no_records")
+        if not complete:
+            if not self.rows:
+                messagebox.showinfo("No inventory", "The rule collection failed. Refresh rules before exporting.", parent=app.root)
+                return
+            if not messagebox.askyesno("Incomplete rule inventory",
+                    "Some rules could not be collected. Export the available rules as an explicitly incomplete audit?",
+                    parent=app.root):return
+        stamp=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        filename="analytics-rules-"+self.loaded_workspace["workspace_id"]+"-"+stamp+".zip"
+        path=filedialog.asksaveasfilename(parent=app.root, title="Export all workspace analytics rules",
+                initialfile=filename, defaultextension=".zip", filetypes=[("Rule audit ZIP", "*.zip")])
+        if not path:return
+        workspace, collection=deepcopy(self.loaded_workspace), deepcopy(self.collection)
+        def done(manifest):
+            status="complete collection" if manifest["complete"] else "INCOMPLETE collection"
+            app.status.set(f"Exported {manifest['record_count']} rules ({status}) to {path}")
+        app.work("Exporting the loaded rule inventory...", lambda:export_rules(path,workspace,collection),done,page=4)

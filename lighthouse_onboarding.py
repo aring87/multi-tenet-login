@@ -29,6 +29,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from urllib.parse import quote
+from yaml_identifiers import yaml_slug
 
 MANAGED_SERVICES = "Microsoft.ManagedServices"
 DELEGATION_WRITE = "Microsoft.Authorization/roleAssignments/write"
@@ -448,8 +449,8 @@ class Onboard:
         ID here makes az login fail in a way that does not point at the cause."""
         q = json.dumps
         lines = ["version: 1",
-                 "target: " + self.c["target"],
-                 "client: " + self.c["client"],
+                 "target: " + yaml_slug(self.c["target"]),
+                 "client: " + yaml_slug(self.c["client"]),
                  "enabled: " + str(bool(self.c["initial_rule_path"])).lower(),
                  "allow_missing_mitre: " + str(self.c["allow_missing_mitre"]).lower(),
                  "azure:",

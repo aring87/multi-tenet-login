@@ -245,3 +245,48 @@ state are not automatically repaired. Do not delete your state to bypass a misma
 
 This repair is part of the desktop application; it does not require another
 pipeline update or a replacement detection-repository ZIP.
+
+
+## Enable Azure resource access during first-time sign-in
+
+If you normally enable **Access management for Azure resources** in Microsoft
+Entra ID, you can request the same action in the app:
+
+1. Activate your approved Global Administrator access for the client.
+2. On **Connect**, enter the client's directory **tenant ID (GUID)**. This option
+   requires an explicit ID, even though normal discovery accepts a domain or blank field.
+3. Check **Review Azure access management after sign-in**, then select **Sign in & discover**.
+4. Complete Microsoft authentication. This optional flow requests Azure Resource Manager
+   authentication and can continue with a tenant-level account before subscriptions are visible.
+5. Review the signed-in account, user object ID, and client tenant, then confirm.
+6. After Azure accepts the change, the app refreshes subscriptions for that tenant and
+   continues workspace discovery. If propagation is delayed, refresh again or sign out
+   and back in. The app does not repeatedly submit the elevation request.
+
+Already signed in? Expand **Access & discovery tools** and select **Enable Azure access
+management**. This action does not require a workspace or subscription selection.
+
+The setting grants the current user **User Access Administrator at root scope `/`**,
+covering all subscriptions and management groups in the selected tenant. Azure checks
+that the account is an active Global Administrator. This is separate from the app's
+subscription-level **Check setup access / Contributor** action.
+
+The checkbox is off by default and applies to one sign-in attempt. It is not saved to
+client profiles or replayed after cancellation or MFA recovery. Declining confirmation
+continues normal discovery without elevating access. The app checks the tenant and
+user again immediately before sending the request. The elevation request keeps its
+bearer token in memory; it does not add it to plans, app logs, temporary files, or
+subprocess arguments. Azure CLI continues to use the existing isolated authentication cache.
+
+Signing out, closing the app, or ending CyberQP access does not remove the Azure grant.
+When finished, set **Microsoft Entra ID > Properties > Access management for Azure
+resources** back to **No** using your authorized account. The app does not turn it off
+automatically. This feature currently supports Azure public cloud; GCCH/Azure Government
+remains outside this flow. No private detection-repository changes are required.
+
+The local identity check requires a readable ARM user token; if its format cannot be
+confirmed, the app stops before sending the request. Offline checks exercise fake
+responses; actual tenant policy and permission behavior still needs an authorized pilot.
+
+Microsoft references: [Global Administrator access elevation](https://learn.microsoft.com/en-us/azure/role-based-access-control/elevate-access-global-admin)
+and the [elevateAccess API](https://learn.microsoft.com/en-us/rest/api/authorization/global-administrator/elevate-access?view=rest-authorization-2015-07-01).

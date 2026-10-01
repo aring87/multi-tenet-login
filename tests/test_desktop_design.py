@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import desktop_app as ui
+from sentinel_app import desktop_app as ui
 from test_desktop import WORKSPACE
 
 
@@ -85,9 +85,9 @@ class DesignTests(unittest.TestCase):
         page=self.load_rules_for_export()
         page.filter.set("Enabled"); page.search.set("missing")
         self.assertFalse(page.tree.get_children())
-        with patch("rules_page.filedialog.asksaveasfilename",return_value="audit.zip"), \
-             patch("rules_page.export_rules",return_value=dict(complete=True,record_count=2)) as export, \
-             patch("rules_page.list_rules") as azure, \
+        with patch("sentinel_app.rules_page.filedialog.asksaveasfilename",return_value="audit.zip"), \
+             patch("sentinel_app.rules_page.export_rules",return_value=dict(complete=True,record_count=2)) as export, \
+             patch("sentinel_app.rules_page.list_rules") as azure, \
              patch.object(self.app,"work",side_effect=lambda title,task,done,**kw:done(task())):
             page.export()
         self.assertEqual(len(export.call_args.args[2]["records"]),2)
@@ -101,21 +101,21 @@ class DesignTests(unittest.TestCase):
             if change=="workspace":self.app.workspace=dict(WORKSPACE,workspace_id="other")
             elif change=="session":self.app.session=object()
             else:page.reset()
-            with patch("rules_page.messagebox.showinfo") as info, \
-                 patch("rules_page.filedialog.asksaveasfilename") as dialog:
+            with patch("sentinel_app.rules_page.messagebox.showinfo") as info, \
+                 patch("sentinel_app.rules_page.filedialog.asksaveasfilename") as dialog:
                 page.export()
             info.assert_called_once(); dialog.assert_not_called()
 
     def test_partial_export_requires_acknowledgment_and_cancel_writes_nothing(self):
         page=self.load_rules_for_export("partial")
-        with patch("rules_page.messagebox.askyesno",return_value=False) as confirm, \
-             patch("rules_page.filedialog.asksaveasfilename") as dialog, \
-             patch("rules_page.export_rules") as export:
+        with patch("sentinel_app.rules_page.messagebox.askyesno",return_value=False) as confirm, \
+             patch("sentinel_app.rules_page.filedialog.asksaveasfilename") as dialog, \
+             patch("sentinel_app.rules_page.export_rules") as export:
             page.export()
         confirm.assert_called_once(); dialog.assert_not_called(); export.assert_not_called()
-        with patch("rules_page.messagebox.askyesno",return_value=True), \
-             patch("rules_page.filedialog.asksaveasfilename",return_value=""), \
-             patch("rules_page.export_rules") as export:
+        with patch("sentinel_app.rules_page.messagebox.askyesno",return_value=True), \
+             patch("sentinel_app.rules_page.filedialog.asksaveasfilename",return_value=""), \
+             patch("sentinel_app.rules_page.export_rules") as export:
             page.export()
         export.assert_not_called()
 

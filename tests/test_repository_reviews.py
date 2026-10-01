@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from repository_reviews import ReviewService, ReviewError, load_request, diff
-from repository_catalog import CatalogError
-import rule_drafts as drafts
+from sentinel_app.repository_reviews import ReviewService, ReviewError, load_request, diff
+from sentinel_app.repository_catalog import CatalogError
+from sentinel_app import rule_drafts as drafts
 from test_rule_drafts import valid_form
 from test_repository_catalog import fixtures
 
@@ -208,7 +208,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_failed_local_journal_prevents_remote_writes(self):
         record = self.new()
-        with patch("repository_reviews.save_request", side_effect=OSError("read only")):
+        with patch("sentinel_app.repository_reviews.save_request", side_effect=OSError("read only")):
             with self.assertRaises(OSError): self.service.submit(record, self.folder)
         self.assertFalse(self.remote.writes())
 

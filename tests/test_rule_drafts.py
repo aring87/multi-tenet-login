@@ -5,9 +5,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import rule_drafts as drafts
-import rule_schema
-from repository_catalog import parse_yaml
+from sentinel_app import rule_drafts as drafts
+from sentinel_app import rule_schema
+from sentinel_app.repository_catalog import parse_yaml
 
 
 def valid_form():
@@ -120,6 +120,6 @@ class RuleDraftTests(unittest.TestCase):
 
     def test_reviewed_schema_digest_matches_documented_version(self):
         root = Path(drafts.__file__).parent
-        expected = (root / "RULE-SCHEMA.md").read_text().split("SHA-256: `")[1].split("`")[0]
+        expected = (root.parent / "docs" / "RULE-SCHEMA.md").read_text().split("SHA-256: `")[1].split("`")[0]
         source = (root / "rule_schema.py").read_text(encoding="utf-8").encode("utf-8")
         self.assertEqual(hashlib.sha256(source).hexdigest(), expected)

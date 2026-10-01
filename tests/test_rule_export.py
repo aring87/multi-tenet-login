@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from rule_export import export_rules
+from sentinel_app.rule_export import export_rules
 
 
 class RuleExportTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class RuleExportTests(unittest.TestCase):
     def test_failed_write_preserves_existing_export_and_cleans_staging(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "audit.zip"; path.write_bytes(b"previous")
-            with patch("rule_export.zipfile.ZipFile.writestr", side_effect=OSError("disk full")):
+            with patch("sentinel_app.rule_export.zipfile.ZipFile.writestr", side_effect=OSError("disk full")):
                 with self.assertRaisesRegex(OSError, "disk full"):
                     export_rules(path, {}, dict(records=[], status="no_records"))
             self.assertEqual(path.read_bytes(), b"previous")

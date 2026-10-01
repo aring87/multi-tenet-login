@@ -3,8 +3,8 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-import desktop_app as ui
-from repository_catalog import catalog
+from sentinel_app import desktop_app as ui
+from sentinel_app.repository_catalog import catalog
 from test_repository_catalog import fixtures
 
 

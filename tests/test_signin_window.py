@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock
-from signin_window import WindowsSignIn, is_signin
+from sentinel_app.signin_window import WindowsSignIn, is_signin
 
 class SignInWindowTests(unittest.TestCase):
     def handoff(self, before, current):

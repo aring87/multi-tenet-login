@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
-from desktop_backend import Stop
-from workspace_tools import permits, access_plan, apply_contributor, rule_values, list_rules
+from sentinel_app.desktop_backend import Stop
+from sentinel_app.workspace_tools import permits, access_plan, apply_contributor, rule_values, list_rules
 
 TARGET=dict(tenant_id="11111111-1111-1111-1111-111111111111",subscription_id="22222222-2222-2222-2222-222222222222")
 USER="33333333-3333-3333-3333-333333333333"
@@ -49,7 +49,7 @@ class Tests(unittest.TestCase):
             self.assertEqual(rule_values(dict(properties=dict(enabled=value)))[1],expected)
     def test_rules_collection_verifies_workspace_and_keeps_disabled(self):
         result=dict(records=[dict(properties=dict(enabled=False))],status="collected")
-        with patch("workspace_tools.Collector") as cls:
+        with patch("sentinel_app.workspace_tools.Collector") as cls:
             collector=cls.return_value;collector.base="https://management.azure.com/workspace"
             collector.collect.return_value=result
             self.assertIs(list_rules(object(),{}),result)

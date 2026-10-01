@@ -8,9 +8,9 @@ from pathlib import Path
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import full_onboarding as full
-import lighthouse_onboarding as lighthouse
-from yaml_identifiers import matches_legacy_slug_manifest
+from sentinel_app import full_onboarding as full
+from sentinel_app import lighthouse_onboarding as lighthouse
+from sentinel_app.yaml_identifiers import matches_legacy_slug_manifest
 
 
 class GitHub:

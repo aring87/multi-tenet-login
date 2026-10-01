@@ -10,8 +10,8 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import audit_evidence as audit
-from desktop_backend import Session, Stop
+from sentinel_app import audit_evidence as audit
+from sentinel_app.desktop_backend import Session, Stop
 from test_desktop import WORKSPACE, ITEM
 
 
@@ -189,7 +189,7 @@ class AuditTests(unittest.TestCase):
         session=Session(self.folder/"session")
         session.az_exe="C:/Azure/wbin/az.cmd"
         url=self.url+"&skipToken=abc%20x"
-        with patch.object(Path,"is_file",return_value=True),patch("desktop_backend.subprocess.run",return_value=subprocess.CompletedProcess([],0,"{}","")) as run:
+        with patch.object(Path,"is_file",return_value=True),patch("sentinel_app.desktop_backend.subprocess.run",return_value=subprocess.CompletedProcess([],0,"{}","")) as run:
             session.az("rest","--method","get","--url",url)
         args=run.call_args.args[0]
         self.assertEqual(Path(args[0]).name,"python.exe")

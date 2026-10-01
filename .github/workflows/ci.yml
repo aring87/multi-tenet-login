@@ -18,3 +18,9 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run offline desktop and onboarding tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Check CLI launchers and permissions-only route
+        shell: bash
+        run: |
+          bash -n scripts/onboard-all.sh scripts/onboard-permissions.sh tests/run-tests.sh
+          bash scripts/onboard-all.sh --help
+          bash tests/run-tests.sh

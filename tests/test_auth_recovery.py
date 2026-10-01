@@ -8,10 +8,10 @@ from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
 
-import desktop_backend as backend
-import desktop_app as ui
-from auth_recovery import AuthenticationRequired, azure_error, recovery_scope
-from lighthouse_onboarding import Stop, CLI
+from sentinel_app import desktop_backend as backend
+from sentinel_app import desktop_app as ui
+from sentinel_app.auth_recovery import AuthenticationRequired, azure_error, recovery_scope
+from sentinel_app.lighthouse_onboarding import Stop, CLI
 from test_desktop import TENANT, SUB, WORKSPACE
 
 MFA = "AADSTS50076: You must use multi-factor authentication to access '797f4846-ba00-4fd7-ba43-dac1f8f63013'. Correlation ID: synthetic"
@@ -131,7 +131,7 @@ class AuthenticationBackendTests(unittest.TestCase):
 
     def test_standalone_cli_preserves_warning_setting(self):
         cli = object.__new__(CLI); cli.azure = "fake-az"; cli.apply = False
-        with patch("lighthouse_onboarding.subprocess.run", return_value=self.result(data={})) as run:
+        with patch("sentinel_app.lighthouse_onboarding.subprocess.run", return_value=self.result(data={})) as run:
             cli.az("deployment", "sub", "validate")
         self.assertNotIn("--only-show-errors", run.call_args.args[0])
         self.assertEqual(run.call_args.kwargs["env"]["AZURE_CORE_ONLY_SHOW_ERRORS"], "false")

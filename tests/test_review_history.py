@@ -5,10 +5,10 @@ import tkinter as tk
 import unittest
 from unittest.mock import patch
 
-import desktop_app as ui
-import rule_drafts as drafts
-from repository_reviews import ReviewService, save_request
-from review_history import ReviewHistoryDialog, list_requests
+from sentinel_app import desktop_app as ui
+from sentinel_app import rule_drafts as drafts
+from sentinel_app.repository_reviews import ReviewService, save_request
+from sentinel_app.review_history import ReviewHistoryDialog, list_requests
 from test_repository_reviews import FakeGitHub, REPO, NEW
 from test_rule_drafts import valid_form
 
@@ -32,7 +32,7 @@ class HistoryTests(unittest.TestCase):
         second["pull_request"] = "https://github.com/example/detections/pull/12"
         old = save_request(self.folder, first); new = save_request(self.folder, second)
         os.utime(old, (100, 100)); os.utime(new, (200, 200))
-        with patch("repository_reviews.api", side_effect=AssertionError("No network")):
+        with patch("sentinel_app.repository_reviews.api", side_effect=AssertionError("No network")):
             rows, issues = list_requests(self.folder)
         self.assertFalse(issues)
         self.assertEqual([row["name"] for row in rows], ["Later rule", "Earlier rule"])
@@ -57,14 +57,14 @@ class HistoryTests(unittest.TestCase):
     def test_limit_reports_incomplete_list_and_keeps_newest(self):
         older = save_request(self.folder, request("Older")); os.utime(older, (100, 100))
         save_request(self.folder, request("Newer"))
-        with patch("review_history.MAX_REQUESTS", 1): rows, issues = list_requests(self.folder)
+        with patch("sentinel_app.review_history.MAX_REQUESTS", 1): rows, issues = list_requests(self.folder)
         self.assertEqual([row["name"] for row in rows], ["Newer"])
         self.assertIn("newest 1", issues[0])
 
     def test_linked_file_is_not_read(self):
         save_request(self.folder, request())
-        with patch("review_history.linked", side_effect=lambda path: path.suffix == ".json"), \
-             patch("review_history.read_entry", side_effect=AssertionError("Must not read link")):
+        with patch("sentinel_app.review_history.linked", side_effect=lambda path: path.suffix == ".json"), \
+             patch("sentinel_app.review_history.read_entry", side_effect=AssertionError("Must not read link")):
             rows, issues = list_requests(self.folder)
         self.assertFalse(rows); self.assertEqual(len(issues), 1)
 
@@ -99,20 +99,20 @@ class HistoryDialogTests(unittest.TestCase):
     def test_open_reuses_saved_request_and_preserves_unsaved_draft(self):
         self.builder.vars["name"].set("Unsaved analyst work")
         before = self.builder.form(); self.select()
-        with patch("review_history.ReviewDialog") as open_dialog:
+        with patch("sentinel_app.review_history.ReviewDialog") as open_dialog:
             self.dialog.open_selected()
         self.assertEqual(open_dialog.call_args.args[1]["plan"]["request_id"], self.record["plan"]["request_id"])
         self.assertEqual(self.builder.form(), before)
 
     def test_changed_file_is_revalidated_before_opening(self):
         self.select(); self.path.write_text("{}", encoding="utf-8")
-        with patch("review_history.ReviewDialog") as open_dialog: self.dialog.open_selected()
+        with patch("sentinel_app.review_history.ReviewDialog") as open_dialog: self.dialog.open_selected()
         open_dialog.assert_not_called()
         self.assertIn("Could not open", self.dialog.notice.get())
 
     def test_busy_operation_blocks_reopen_and_close(self):
         self.select(); self.app.busy = True
-        with patch("review_history.ReviewDialog") as open_dialog:
+        with patch("sentinel_app.review_history.ReviewDialog") as open_dialog:
             self.dialog.open_selected(); self.dialog.close()
         open_dialog.assert_not_called(); self.assertTrue(self.dialog.window.winfo_exists())
 

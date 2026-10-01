@@ -4,13 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-import lighthouse_onboarding as lh
+from sentinel_app import lighthouse_onboarding as lh
 
 BASE = Path(__file__).resolve().parents[1]
 
 class TargetValidationTests(unittest.TestCase):
     def config(self, client="example", label="primary"):
-        config=json.loads((BASE/"lighthouse-onboarding.example.json").read_text(encoding="utf-8"))
+        config=json.loads((BASE/"examples/lighthouse-onboarding.example.json").read_text(encoding="utf-8"))
         config.update(client=client,workspace_label=label)
         return config
 
@@ -55,7 +55,7 @@ class TargetValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             cli=MagicMock();cli.apply=True
             cli.az.return_value={"properties":{"provisioningState":"Succeeded"}}
-            run=lh.Onboard(self.config("a"*62,"b"),cli,Path(folder)/"state.json",BASE/"lighthouse-onboard.json")
+            run=lh.Onboard(self.config("a"*62,"b"),cli,Path(folder)/"state.json",BASE/"templates/lighthouse-onboard.json")
             with patch.object(run,"verify_delegation"):
                 run.deploy_delegation()
             calls=cli.az.call_args_list
@@ -69,7 +69,7 @@ class TargetValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             cli=MagicMock();state=Path(folder)/"state.json"
             with self.assertRaises(lh.Stop):
-                lh.Onboard(self.config("a"*40,"b"*30),cli,state,BASE/"lighthouse-onboard.json")
+                lh.Onboard(self.config("a"*40,"b"*30),cli,state,BASE/"templates/lighthouse-onboard.json")
             cli.az.assert_not_called();cli.gh.assert_not_called()
             self.assertFalse(state.exists())
 
@@ -91,7 +91,7 @@ class TargetValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             config=self.config("explosive-countermeasures-international","workspace")
             cli=MagicMock();cli.apply=False
-            run=lh.Onboard(config,cli,Path(folder)/"state.json",BASE/"lighthouse-onboard.json")
+            run=lh.Onboard(config,cli,Path(folder)/"state.json",BASE/"templates/lighthouse-onboard.json")
             run.workspace={"customerId":"77777777-7777-4777-8777-777777777777"}
             self.assertIn("target: "+config["client"]+"-workspace",run.manifest())
             self.assertEqual(run.c["client"],config["client"])

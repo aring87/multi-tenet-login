@@ -3,7 +3,7 @@ import json
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
-import lighthouse_onboarding as lh
+from sentinel_app import lighthouse_onboarding as lh
 
 AUTHORIZATION_ERROR = ('{"code": "AuthorizationFailed", "message": "The client '
                        '\'a_jit@example.com\' with object id \'62651bcc\' does not have '

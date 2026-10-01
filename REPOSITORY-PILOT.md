@@ -1,6 +1,6 @@
 # Repository UI pilot
 
-This development branch includes the read-only catalog and local rule authoring. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. No commits, pull requests, workflow dispatches or Azure changes are made by the catalog.
+This development branch includes the read-only catalog and local rule authoring. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. Browsing the catalog makes no changes. The separate rule-review and client-preview dialogs require an explicit submission action.
 
 ## Start the development copy
 
@@ -59,7 +59,7 @@ All new test data is synthetic. GitHub API reads are mocked in offline tests. No
 
 The validator is a bundled, reviewed copy of your uploaded rules.py; see [schema provenance](RULE-SCHEMA.md).
 KQL still needs a workspace query check. Keep local drafts and private queries out of this
-public application repository. Guided draft PR submission is available below; client assignment and workflow execution are subsequent increments.
+public application repository. Guided draft PR submission is available below; client assignment and deployment controls are subsequent increments; selected-rule previews are available below.
 
 ## Submit a rule for repository review
 
@@ -113,3 +113,52 @@ it automatically. Use its explicit recovery button if needed.
 Unreadable files are reported and left unchanged. The list shows up to 200 recent files;
 use **Open request file** for older files. A new laptop has an empty list unless you copy
 its private review request files into that laptop's ignored app data folder.
+
+## Preview a rule for selected clients
+
+1. Load the **GitHub repository** catalog for the private detection repository.
+   Resolve any catalog issues first. Local working files cannot start workflow runs.
+2. Choose **Rules**, select a rule, and click **Preview selected rule for clients**.
+3. Click client rows (or press Space) to select them. Search by client, workspace or
+   target. **Select all eligible** selects all enabled targets that already reference
+   this rule, including those hidden by the search. Disabled or unassigned targets
+   show why they cannot be selected. This does not add assignments.
+4. Choose **Prepare request**. This reads GitHub and verifies the current catalog,
+   private repository, account, default branch and workflow inputs. Review the exact
+   clients, rule, revision and number of batches. Preparing starts no workflow.
+5. Choose **Start previews** to dispatch the private repository's configured workflow
+   with `mode: preview` on `main`. The app does not send deploy mode. The existing
+   workflow remains responsible for its Azure operations and preview artifacts.
+6. **Refresh status** reads the exact run IDs returned by GitHub. Select a run and
+   choose **Open GitHub** to inspect jobs, errors and artifacts. Submission is not a
+   successful preview. If GitHub returns no run ID, open the workflow's Actions page;
+   the app does not guess which recent run is yours.
+
+The adapter reads `.github/workflows/sentinel-multi-workspace.yml` at the reviewed
+revision. It supports the supplied `targets` string contract and the dropdown
+`target`, `target_2`, ... contract, together with `rule_path` and a `preview` mode
+choice. Unknown input contracts stop visibly instead of guessing. For dropdowns,
+the exact client IDs must already exist in the choices; run your existing dropdown
+sync workflow if needed. The app splits selections larger than the available slots
+into concrete batches. It never substitutes the workflow's **All enabled clients**
+value. Up to 100 workspaces can be selected per request.
+
+The default branch must be `main`. The app rechecks its revision and account before
+each batch, but GitHub resolves the branch when a run starts. This is not a pinned
+commit deployment mechanism. Status refresh flags a run using a different revision.
+
+Receipts in ignored `desktop-data/preview-requests/` record each batch before it is
+sent. If submission times out, it may still have started. Further batches stop and
+the same request cannot be dispatched again. Check Actions before creating another
+request. After an app restart, use Actions for existing runs; receipts retain their
+run IDs and URLs, but an in-app receipt browser is not implemented in this increment.
+
+GitHub CLI uses your existing authorized login; no new personal token is needed.
+GitHub must allow that identity to read the repository and write Actions. Azure
+permissions, environment approvals, and policies are still enforced by the workflow.
+Private-repository and live-workspace testing remain required; development tests
+use synthetic files and mocked dispatch responses.
+
+API contract: [GitHub workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
+using API version `2026-03-10` for returned run IDs. Deployment controls will follow
+successful preview testing against the private repository.

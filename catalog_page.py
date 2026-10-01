@@ -3,6 +3,7 @@ import json
 import tkinter as tk
 from tkinter import ttk, filedialog
 from repository_catalog import GitHubReader, load_local, state
+from preview_dialog import PreviewDialog
 
 
 class CatalogPage:
@@ -53,6 +54,7 @@ class CatalogPage:
         scroll.pack(side="right", fill="y"); self.details.pack(fill="both", expand=True)
         app.button(body, "Show catalog issues", self.issues).pack(anchor="w", pady=(10, 0))
         app.button(body, "Edit selected rule as draft", self.edit_selected).pack(anchor="w", pady=(8, 0))
+        app.button(body, "Preview selected rule for clients", self.preview_selected).pack(anchor="w", pady=(8, 0))
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.mode.trace_add("write", self.mode_changed)
         self.source.trace_add("write", self.invalidate)
@@ -71,6 +73,17 @@ class CatalogPage:
             source = {"repository": self.snapshot["repository"], "revision": self.snapshot["revision"], "path": row["path"]}
         if self.app.rule_builder.edit_rule(row["raw"], source=source):
             self.app.tabs.select(6)
+
+    def preview_selected(self):
+        if self.app.busy: return
+        selected = self.tree.selection()
+        if self.view.get() != "Rules" or not selected or not self.snapshot:
+            self.note.set("Choose Rules and select the rule to preview."); return
+        if not self.snapshot.get("repository") or not self.snapshot.get("private"):
+            self.note.set("Load the private GitHub repository catalog before starting previews."); return
+        if self.snapshot["issues"]:
+            self.note.set("Resolve the catalog issues before starting previews."); return
+        PreviewDialog(self.app, self.snapshot, self.visible[int(selected[0])])
 
     def mode_changed(self, *args):
         self.source_label.set("Detection repository folder" if self.mode.get() == "Local folder" else "GitHub repository — owner/name")

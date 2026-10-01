@@ -31,7 +31,7 @@ def category(path):
     return None
 
 
-def parse_yaml(raw):
+def parse_yaml(raw, *, yaml12=False):
     try:
         import yaml
     except ImportError as exc:
@@ -40,6 +40,12 @@ def parse_yaml(raw):
         raise CatalogError("File exceeds the 2 MB catalog limit.")
     class UniqueLoader(yaml.SafeLoader):
         pass
+    if yaml12:
+        # GitHub workflow keys such as "on" are strings, not YAML 1.1 booleans.
+        UniqueLoader.yaml_implicit_resolvers = {
+            key: [(tag, pattern) for tag, pattern in values if tag != "tag:yaml.org,2002:bool"]
+            for key, values in UniqueLoader.yaml_implicit_resolvers.items()}
+        UniqueLoader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|false)$", re.I), list("tTfF"))
     def mapping(loader, node, deep=False):
         result = {}
         for key_node, value_node in node.value:

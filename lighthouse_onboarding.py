@@ -29,7 +29,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from urllib.parse import quote
-from yaml_identifiers import yaml_slug
+from yaml_identifiers import yaml_slug, matches_legacy_slug_manifest
 
 MANAGED_SERVICES = "Microsoft.ManagedServices"
 DELEGATION_WRITE = "Microsoft.Authorization/roleAssignments/write"
@@ -484,9 +484,23 @@ class Onboard:
                 "Onboarding branch already exists outside this state file; review it first.")
         if branch:
             entry = self.io.gh("GET", path + "?ref=" + quote(self.branch, safe=""), missing=True)
-            require(entry is None
-                    or base64.b64decode(entry["content"]).decode().strip() == self.manifest().strip(),
-                    "Onboarding branch target changed; review manually.")
+            if self.branch_target_needs_repair(entry):
+                print("Plan: repair legacy client/target YAML quoting in " + self.target_path
+                      + " on " + self.branch + " when applying; client settings are unchanged.")
+
+    def branch_target_needs_repair(self, entry):
+        if entry is None:
+            return False
+        text = base64.b64decode(entry["content"]).decode("utf-8")
+        expected = self.manifest()
+        if text.strip() == expected.strip():
+            return False
+        require(matches_legacy_slug_manifest(text, expected,
+                    client=self.c["client"], target=self.c["target"]),
+                "Onboarding branch target changed; review manually: " + self.branch
+                + " / " + self.target_path + ". Compare it with the selected client settings. "
+                "Closing a pull request does not remove its branch. No target file was overwritten.")
+        return True
 
     def dropdown_eligible(self):
         """Whether detection-as-code will list this target in its client dropdown.
@@ -547,10 +561,19 @@ class Onboard:
             self.state["branch"] = self.branch
             self.save()
         path = self.repo_path + "/contents/" + self.target_path
-        if self.io.gh("GET", path + "?ref=" + quote(self.branch, safe=""), missing=True) is None:
-            self.io.gh("PUT", path, {"message": "Add Sentinel target " + self.c["target"],
-                                     "branch": self.branch,
-                                     "content": base64.b64encode(self.manifest().encode()).decode()})
+        require(self.state.get("branch") == self.branch,
+                "Onboarding branch already exists outside this state file; review it first.")
+        # Re-read after Azure operations; never overwrite an intervening settings edit.
+        entry = self.io.gh("GET", path + "?ref=" + quote(self.branch, safe=""), missing=True)
+        repair = self.branch_target_needs_repair(entry)
+        if entry is None or repair:
+            body = {"message": ("Quote YAML identifiers for " if repair else "Add Sentinel target ")
+                               + self.c["target"],
+                    "branch": self.branch,
+                    "content": base64.b64encode(self.manifest().encode("utf-8")).decode()}
+            if repair:
+                body["sha"] = entry["sha"]  # GitHub rejects concurrent file changes.
+            self.io.gh("PUT", path, body)
         dropdown = self.update_dropdowns()
         if dropdown:
             print("Client dropdown NOT updated on the branch:")

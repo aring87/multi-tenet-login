@@ -222,3 +222,26 @@ State lives in `desktop-data/runs/<target>/onboarding.state.json`. Correct the
 cause and rerun; the app resumes and does not roll back or delete. A stale
 `onboarding.lock` in the same folder blocks reruns — check no run is active
 before removing it.
+
+
+## Retrying a closed onboarding pull request for a numeric client
+
+Closing a pull request does not delete its onboarding branch. Keep the local
+onboarding state so the app can recognize the branch it created.
+
+Older versions wrote numeric client identifiers without YAML quotes. For example,
+`client: 413` now needs to be `client: "413"`; the generator also quotes
+`target: "413-workspace"`. If the only differences are these identifier quotes,
+**Preview setup** reports the repair without changing anything. **Apply reviewed
+setup** updates the existing branch with the correctly quoted manifest and opens
+a replacement PR if no open PR exists. Merge that PR after its checks pass.
+
+The app rechecks the file before updating it and supplies its GitHub blob SHA,
+so an intervening edit cannot be silently overwritten. A different tenant,
+workspace, subscription, rule selection, or other content still requires manual
+review. The error names the branch and file to compare with your selected client
+settings. Files already on main and branches not owned by the saved onboarding
+state are not automatically repaired. Do not delete your state to bypass a mismatch.
+
+This repair is part of the desktop application; it does not require another
+pipeline update or a replacement detection-repository ZIP.

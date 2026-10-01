@@ -467,8 +467,9 @@ class Onboard:
         return "\n".join(lines) + "\n"
 
     def inspect_target(self):
-        filename = ("workspace.yml" if self.c["workspace_label"] in ("primary", "workspace")
-                    else "workspace-" + self.c["workspace_label"] + ".yml")
+        # Target files are named after their target: clients/<client>/<client>-<label>.yml,
+        # e.g. clients/acme/acme-workspace-commercial.yml for label "workspace-commercial".
+        filename = self.c["target"] + ".yml"
         self.target_path = f"clients/{self.c['client']}/{filename}"
         self.branch = "onboard/" + self.c["target"]
         path = self.repo_path + "/contents/" + self.target_path

@@ -61,6 +61,14 @@ Discovery and permissions-only mode do not require GitHub or CyberQP. Full onboa
 
 This development app requires PyYAML. Run `py -m pip install -r requirements.txt` before launching it. The desktop uses the installed Azure CLI for Microsoft authentication.
 
+## Optional first-time Azure access
+
+Global Administrators can check **Review Azure access management after sign-in** on
+Connect, enter the client tenant GUID, and review the account and tenant before enabling
+the same setting normally used in Entra Properties. It also works before subscriptions
+are visible. The grant persists until removed; sign-out does not revoke it.
+See [the access-management steps](docs/APP-ONBOARDING.md#enable-azure-resource-access-during-first-time-sign-in).
+
 ## Two setup modes
 
 | Mode | Purpose |

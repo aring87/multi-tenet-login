@@ -123,7 +123,7 @@ class Session:
             self.log("Azure sign-in details: " + str(azure_error(details, self.login_tenant)))
         return json.loads(result.stdout) if result.stdout.strip() else None
 
-    def login(self, tenant_hint="", resource=None, claims=None):
+    def login(self, tenant_hint="", resource=None, claims=None, allow_empty=False):
         tenant_hint = validate_tenant_hint(tenant_hint) if tenant_hint.strip() else ""
         self.login_tenant = tenant_hint
         self.login_diagnostics = ""
@@ -140,7 +140,7 @@ class Session:
         accounts = self.az(*args) or []
         subscriptions = [x for x in accounts if x.get("id") != x.get("tenantId")]
         if re.fullmatch(r"[0-9a-fA-F-]{36}", tenant_hint):
-            require(all(x["tenantId"].lower() == tenant_hint.lower() for x in subscriptions),
+            require(all(x["tenantId"].lower() == tenant_hint.lower() for x in (accounts if allow_empty else subscriptions)),
                     "Sign-in returned a different tenant.")
         if not subscriptions:
             if self.login_diagnostics:
@@ -149,6 +149,10 @@ class Session:
                 problem = azure_error(self.login_diagnostics, tenant_hint)
                 if isinstance(problem, AuthenticationRequired):
                     raise problem
+            if allow_empty:
+                require(accounts, "Azure did not return a tenant account. Sign in to the client tenant again.")
+                self.log("Signed in without visible subscriptions. Review Azure access management to continue.")
+                return []
             raise Stop("Sign-in returned no accessible Azure subscriptions. This can mean the wrong "
                        "account/tenant, incomplete tenant authentication, or missing Azure access. "
                        "Enter the client tenant ID and sign in again. If sign-in succeeded, use "

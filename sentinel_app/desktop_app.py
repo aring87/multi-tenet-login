@@ -20,6 +20,7 @@ from .catalog_page import CatalogPage
 from .rule_builder_page import RuleBuilderPage
 from .signin_window import create_handoff
 from .workspace_tools import access_plan, apply_contributor
+from .tenant_access import access_management_plan, enable_access_management
 from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
                              config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
 from .lighthouse_onboarding import validate_config, validate_target, slug, CLIENT_MAXIMUM
@@ -269,6 +270,13 @@ class App:
         hint=ttk.Label(body,text="Leave blank to discover the directories available to your account.",style="Muted.TLabel",wraplength=300,justify="left")
         hint.pack(fill="x",pady=(0,14));self.wrap_to_parent(hint)
         self.form(body,"Sign-in method","login_method","Browser",["Browser","Windows account window"])
+        self.offer_access_management=tk.BooleanVar(value=False)
+        offer=ttk.Checkbutton(body,text="Review Azure access management after sign-in",
+                              variable=self.offer_access_management)
+        offer.pack(anchor="w",pady=(0,6)); self.controls.append((offer,"normal"))
+        access_hint=ttk.Label(body,text="Optional first-time setup for Global Administrators. Enter the client tenant ID above.",
+                              style="Muted.TLabel",wraplength=300)
+        access_hint.pack(fill="x",pady=(0,12));self.wrap_to_parent(access_hint)
         self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(fill="x",pady=(0,14))
         self.signin_button=ttk.Button(body,text="Bring sign-in window forward",command=self.bring_signin_forward,state="disabled")
         self.signin_button.pack(fill="x",pady=(0,8))
@@ -285,7 +293,7 @@ class App:
         self.form(tools,"CyberQP region · optional","cyberqp_region","US",list(CYBERQP_PORTALS))
         hint=ttk.Label(tools,text="Activate JIT access in your browser, then return to sign in here.",style="Muted.TLabel",wraplength=300,justify="left")
         hint.pack(fill="x",pady=(0,12));self.wrap_to_parent(hint)
-        for label,command in (("Check setup access / Contributor",self.setup_access),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
+        for label,command in (("Enable Azure access management",self.azure_access_management),("Check setup access / Contributor",self.setup_access),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
             self.button(tools,label,command).pack(fill="x",pady=(0,6))
         clientcard,body=self.card(connect,"Client profile","Optional. Save a familiar name and tenant for your next visit.")
         clientcard.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
@@ -661,6 +669,7 @@ class App:
             self.client_changed()
 
     def client_changed(self,event=None):
+        self.offer_access_management.set(False)
         self.clear_selection()
         for c in self.clients:
             if c["name"]==self.vars["client_name"].get():
@@ -806,12 +815,16 @@ class App:
     def login(self, recovery=None):
         if self.busy:return
         if recovery is None:self.auth_recovery_attempts.clear()
+        offer=bool(self.offer_access_management.get()) and recovery is None
         try:
             value=self.vars["tenant"].get().strip()
             hint=validate_tenant_hint(value) if value else ""
+            if offer:
+                hint=guid(hint,"client tenant ID for access management (use the directory GUID)")
         except Stop as error:
             messagebox.showerror("Tenant details",str(error),parent=self.root)
             return
+        self.offer_access_management.set(False)  # One attempt only; never replay on MFA recovery.
         self.vars["tenant"].set(hint)
         self.clear_selection()
         self.auth_hint=hint
@@ -840,6 +853,8 @@ class App:
                 session._signin_cancel=cancel
                 if recovery is not None:
                     rows=session.login(hint, resource=recovery.resource, claims=recovery.claims)
+                elif offer:
+                    rows=session.login(hint, resource="arm", allow_empty=True)
                 else:
                     rows=session.login(hint)
                 check_cancelled(cancel)
@@ -853,18 +868,28 @@ class App:
         def done(rows):
             if cancel.is_set():
                 self.discard_cancelled_signin(); return
-            rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
-            self.subscriptions=rows
-            self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+" | Tenant: "+r["tenantId"] for r in rows])
-            self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
-            self.subscription_changed()
+            self.display_subscriptions(rows, discover=not offer)
+            if offer:
+                self.azure_access_management(on_skip=lambda:self.display_subscriptions(rows))
         done._signin_cancel=cancel
         self.work("Waiting for Microsoft sign-in. Use Cancel sign-in to stop waiting.",task,done)
 
+    def display_subscriptions(self, rows, discover=True):
+        rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
+        self.subscriptions=rows
+        self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+" | Tenant: "+r["tenantId"] for r in rows])
+        if rows:
+            self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
+            if discover:self.subscription_changed()
+        else:
+            self.vars["subscription"].set("")
+            self.status.set("Signed in; no subscriptions visible yet. Review access or refresh after propagation.")
+
     def refresh_subscriptions(self):
-        if not self.session or not self.subscriptions:
+        if not self.session or not (self.subscriptions or getattr(self.session,"signed_in",False)):
             messagebox.showinfo("Sign in first","Complete Sign in & discover first."); return
-        current=self.subscriptions[self.subbox.current()]["id"]
+        index=self.subbox.current()
+        current=self.subscriptions[index]["id"] if 0 <= index < len(self.subscriptions) else ""
         def done(rows):
             self.clear_selection()
             rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
@@ -942,6 +967,42 @@ class App:
             "\n".join(label+": "+self.workspace[key] for key,label in
                       (("tenant_id","Tenant ID"),("subscription_id","Subscription ID"),("resource_group","Resource group"),
                        ("workspace_name","Workspace name"),("workspace_id","Workspace ID"))))
+
+    def azure_access_management(self, on_skip=None):
+        if self.busy:return
+        try:
+            require(self.session and self.session.signed_in, "Sign in to the client tenant first.")
+            tenant=guid(self.vars["tenant"].get().strip(), "client tenant ID (use the directory GUID)")
+            require(tenant == self.auth_hint, "The tenant selection changed. Sign in to this client tenant again.")
+        except Stop as error:
+            messagebox.showerror("Azure access management",str(error),parent=self.root);return
+        session=self.session
+        def reviewed(plan):
+            if self.session is not session or self.vars["tenant"].get().strip() != tenant:
+                self.status.set("Client session changed. Review Azure access management again.");return
+            text=("Enable Access management for Azure resources for this signed-in user?\n\n"
+                  "Account: " + plan["account"] + "\nUser object ID: " + plan["principal"] +
+                  "\nClient tenant: " + plan["tenant"] +
+                  "\n\nThis grants User Access Administrator at root scope (/), covering all subscriptions "
+                  "and management groups in this tenant. Azure requires an active Global Administrator role. "
+                  "It does not grant Contributor.\n\nThe grant remains until removed; signing out or ending "
+                  "CyberQP access does not remove it. Turn it off in Microsoft Entra ID > Properties when finished.")
+            if not messagebox.askokcancel("Review Azure access management",text,parent=self.root):
+                if on_skip:on_skip()
+                return
+            self.plan=None
+            def completed(result):
+                if self.session is not session:return
+                self.log(result)
+                messagebox.showinfo("Azure access management enabled",result,parent=self.root)
+                self.clear_selection()
+                self.work("Refreshing subscriptions after enabling access management...",
+                          lambda:[row for row in session.refresh_subscriptions() if row.get("tenantId", "").lower()==tenant],
+                          self.display_subscriptions,page=0)
+            self.work("Enabling reviewed Azure access management...",
+                      lambda:enable_access_management(session,plan),completed,page=0)
+        self.work("Checking the signed-in account and client tenant...",
+                  lambda:access_management_plan(session,tenant),reviewed,page=0)
 
     def setup_access(self):
         if self.busy:return

@@ -28,6 +28,7 @@ All the following modules live in `sentinel_app/`:
 | Desktop and sign-in UI | desktop_app, desktop_theme, signin_window, signin_process |
 | Analytics rule inventory and export | rules_page, rule_export |
 | Repository catalog | repository_catalog, catalog_page |
+| Reviewed client rule assignments | rule_assignments, assignment_dialog |
 | Guided rule builder | rule_builder_page, rule_drafts, rule_schema |
 | Rule reviews and history | repository_reviews, rule_review_dialog, review_history |
 | GitHub previews and deployments | preview_workflow, preview_dialog, deployment_workflow, deployment_dialog |

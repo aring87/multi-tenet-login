@@ -161,3 +161,18 @@ perform live authentication. Coverage includes existing-window exclusion, change
 browser titles, restoring minimized windows, focus denial, and success/failure
 cleanup. Live Azure sign-in foreground behavior remains to be verified on the
 user's Windows desktop.
+
+## Reviewed client rule assignments (2026-10-02)
+
+The catalog can prepare a multi-file client assignment review and publish one draft
+PR through the existing GitHub CLI identity. Synthetic tests cover selected-file
+isolation, override preservation, disabled targets, numeric quoted clients, BOM and
+CRLF formatting, invalid effective rules, stale revisions and identity changes,
+local journal failures, tampered saved requests, modified branches and recovery
+after lost branch/PR responses. GUI tests cover filtering, hidden selections,
+review invalidation, local/public/read-only catalog gates, saved review reopening
+and minimum-size controls. Existing single-rule publishing tests exercise the
+shared publisher alongside the new assignment tests.
+
+These tests do not access the private repository or Azure. A private CI pilot and
+an authorized disabled-rule deployment remain the live acceptance check.

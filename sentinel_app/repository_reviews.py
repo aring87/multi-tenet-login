@@ -146,6 +146,28 @@ class ReviewService:
         require(plan["repository_id"] is not None, "GitHub did not identify the repository.")
         return dict(version=1, plan=plan, fingerprint=fingerprint(plan), commit_sha=None, pull_request=None)
 
+    validate_record = staticmethod(check_record)
+    @staticmethod
+    def save_record(folder, record):
+        return save_request(folder, record)
+
+    def tree_entries(self, plan):
+        return [{"path": plan["path"], "mode": plan["mode"], "type": "blob", "content": plan["content"]}]
+
+    def branch_name(self, plan):
+        return "codex/rule-" + plan["request_id"]
+
+    def change_title(self, plan):
+        return "Review Sentinel rule: " + plan["name"][:180]
+
+    def pull_body(self, plan):
+        return ("Proposes a change to `" + plan["path"] + "` from the desktop rule builder.\n\n"
+                "Validated with the application's reviewed rule schema. Live KQL, repository checks, "
+                "and deployment approval remain required.\n\n"
+                "Existing target references: " + str(len(plan["impact"])) + ". No client manifests are changed.\n\n"
+                + ("Warnings: " + "; ".join(plan["warnings"]) + "\n\n" if plan["warnings"] else "")
+                + "Review request: `" + plan["request_id"] + "`\nBase commit: `" + plan["base_sha"] + "`")
+
     def verify_saved_commit(self, prefix, plan, commit_sha):
         # A saved request is input, not authority to publish an arbitrary commit.
         base = self.request("GET", prefix + "/git/commits/" + plan["base_sha"])
@@ -155,13 +177,12 @@ class ReviewService:
                 "Saved commit has a different base. It will not be published.")
         # Recreating a Git tree is deterministic and does not change any branch.
         expected = self.request("POST", prefix + "/git/trees", {
-            "base_tree": plan["tree_sha"], "tree": [{"path": plan["path"], "mode": plan["mode"],
-            "type": "blob", "content": plan["content"]}]})
+            "base_tree": plan["tree_sha"], "tree": self.tree_entries(plan)})
         require(commit["tree"]["sha"] == expected["sha"],
                 "Saved commit contains changes outside the reviewed diff. It will not be published.")
 
     def submit(self, record, folder):
-        plan = check_record(record)
+        plan = self.validate_record(record)
         prefix = "repos/" + plan["repository"]
         metadata = self.request("GET", prefix)
         identity = self.request("GET", "user")["login"]
@@ -170,7 +191,7 @@ class ReviewService:
         require(metadata.get("permissions", {}).get("push") is True, "GitHub write access is no longer available.")
         require(identity == plan["identity"], "GitHub account changed. Prepare a new review with the current account.")
         require(metadata["default_branch"] == plan["base_branch"], "Default branch changed. Prepare a new review.")
-        branch = "codex/rule-" + plan["request_id"]
+        branch = self.branch_name(plan)
         refs = self.request("GET", prefix + "/git/matching-refs/heads/" + quote(branch, safe=""))
         matches = [ref for ref in refs if ref["ref"] == "refs/heads/" + branch]
         require(len(matches) <= 1, "Ambiguous review branch.")
@@ -182,15 +203,14 @@ class ReviewService:
             require(not record.get("pull_request"), "The previous review branch was removed. Open the recorded pull request instead.")
             latest = self.request("GET", prefix + "/commits/" + quote(plan["base_branch"], safe=""))
             require(latest["sha"] == plan["base_sha"] and latest["commit"]["tree"]["sha"] == plan["tree_sha"], "The repository changed after preview. Prepare a fresh review before submitting.")
-            save_request(folder, record)  # Must succeed before any remote write.
+            self.save_record(folder, record)  # Must succeed before any remote write.
             if not record.get("commit_sha"):
                 tree = self.request("POST", prefix + "/git/trees", {
-                    "base_tree": plan["tree_sha"], "tree": [{"path": plan["path"], "mode": plan["mode"],
-                    "type": "blob", "content": plan["content"]}]})
+                    "base_tree": plan["tree_sha"], "tree": self.tree_entries(plan)})
                 commit = self.request("POST", prefix + "/git/commits", {
-                    "message": "Review Sentinel rule: " + plan["name"], "tree": tree["sha"], "parents": [plan["base_sha"]]})
+                    "message": self.change_title(plan), "tree": tree["sha"], "parents": [plan["base_sha"]]})
                 record["commit_sha"] = commit["sha"]
-                save_request(folder, record)
+                self.save_record(folder, record)
             else:
                 self.verify_saved_commit(prefix, plan, record["commit_sha"])
             self.request("POST", prefix + "/git/refs", {"ref": "refs/heads/" + branch, "sha": record["commit_sha"]})
@@ -204,16 +224,11 @@ class ReviewService:
                     and pull["base"]["ref"] == plan["base_branch"]
                     and pull["head"]["repo"]["id"] == plan["repository_id"], "The existing pull request differs from this review.")
         else:
-            body = ("Proposes a change to `" + plan["path"] + "` from the desktop rule builder.\n\n"
-                    "Validated with the application's reviewed rule schema. Live KQL, repository checks, "
-                    "and deployment approval remain required.\n\n"
-                    "Existing target references: " + str(len(plan["impact"])) + ". No client manifests are changed.\n\n"
-                    + ("Warnings: " + "; ".join(plan["warnings"]) + "\n\n" if plan["warnings"] else "")
-                    + "Review request: `" + plan["request_id"] + "`\nBase commit: `" + plan["base_sha"] + "`")
-            pull = self.request("POST", prefix + "/pulls", {"title": "Review Sentinel rule: " + plan["name"][:180],
+            body = self.pull_body(plan)
+            pull = self.request("POST", prefix + "/pulls", {"title": self.change_title(plan),
                 "head": branch, "base": plan["base_branch"], "body": body, "draft": True})
         url = pull["html_url"]
         require(re.fullmatch(r"https://github\.com/" + re.escape(plan["repository"]) + r"/pull/\d+", url, re.I), "Unexpected pull request URL.")
         record["pull_request"] = url
-        save_request(folder, record)
+        self.save_record(folder, record)
         return url

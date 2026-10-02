@@ -141,3 +141,35 @@ References: [Azure CLI interactive sign-in](https://learn.microsoft.com/en-us/cl
 [login scopes and claims challenges](https://learn.microsoft.com/en-us/cli/azure/reference-index#az-login).
 
 MFA challenge troubleshooting: [Microsoft guidance](https://learn.microsoft.com/en-us/cli/azure/use-azure-cli-successfully-troubleshooting#troubleshooting-multifactor-authentication-mfa).
+
+## Refreshing setup access and tracking Contributor setup
+
+Under **Workspaces > Access & discovery tools**, use **Refresh setup access** to
+read current subscription permissions and validate an empty subscription template.
+It keeps the selected workspace and changes no roles or resources. It checks
+provider registration and deployment actions; **Preview setup** still performs
+the complete onboarding check. **Refresh subscriptions** only reloads discovery.
+
+The selected subscription's access activity shows first/latest Contributor setup
+clicks, Azure's assignment acceptance time, and the latest access-check time and
+account. Times include the local timezone and persist in ignored
+`desktop-data/access-history.json`. A click is not proof a role was granted;
+timestamps begin with this version and cannot reconstruct earlier attempts.
+Saved results are historical, not a guarantee that another session has access.
+
+After a recent accepted assignment and a failed check, the app says propagation
+is possible, not confirmed. It does not assume every authorization denial is
+propagation or automatically retry grants. If access is still denied, check the
+account, subscription scope, and active CyberQP access.
+
+**Sign in again / refresh session** starts a fresh app session for the selected
+client and explicitly requests Azure management authentication. It avoids a
+separate Sign out action, but Microsoft may still require interactive sign-in or
+MFA. It clears the previous onboarding preview and never replays a deployment.
+It does not clear your browser's Microsoft cookies or Windows accounts.
+
+For `AADSTS50020`, `AADSTS50034`, or `AADSTS51004`, verify the saved tenant and the
+current CyberQP account. Select **Use another account** in Microsoft's window if
+it selected the wrong account. These are account/tenant failures, not RBAC
+propagation. The app preserves Microsoft's error code for troubleshooting and
+cannot create or reactivate an account missing from that tenant.

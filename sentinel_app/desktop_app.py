@@ -20,6 +20,7 @@ from .catalog_page import CatalogPage
 from .rule_builder_page import RuleBuilderPage
 from .signin_window import create_handoff
 from .workspace_tools import access_plan, apply_contributor
+from .access_readiness import AccessHistory, check_access, history_text
 from .tenant_access import access_management_plan, enable_access_management
 from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
                              config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
@@ -54,6 +55,7 @@ class App:
         self.extras = {}
         self.clientfile = DATA / "clients.json"
         self.settingsfile = DATA / "settings.json"
+        self.access_history = AccessHistory(DATA / "access-history.json")
         self.clients = self.read_clients()
         self.settings = self.read_settings()
         self.vars = {}
@@ -66,6 +68,7 @@ class App:
         self.signin_cancel = None
         self.auth_recovery_attempts = set()
         self.build()
+        self.vars["tenant"].trace_add("write",lambda *args:self.render_access_status())
         self.refresh_clients()
         self.root.after(100,self.poll)
         self.root.protocol("WM_DELETE_WINDOW",self.close)
@@ -294,8 +297,11 @@ class App:
         self.form(tools,"CyberQP region · optional","cyberqp_region","US",list(CYBERQP_PORTALS))
         hint=ttk.Label(tools,text="Activate JIT access in your browser, then return to sign in here.",style="Muted.TLabel",wraplength=300,justify="left")
         hint.pack(fill="x",pady=(0,12));self.wrap_to_parent(hint)
-        for label,command in (("Enable Azure access management",self.azure_access_management),("Check setup access / Contributor",self.setup_access),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
+        for label,command in (("Enable Azure access management",self.azure_access_management),("Check setup access / Contributor",self.setup_access),("Refresh setup access",self.refresh_setup_access),("Sign in again / refresh session",self.reconnect_azure),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
             self.button(tools,label,command).pack(fill="x",pady=(0,6))
+        self.access_summary=tk.StringVar(value="Select a subscription to view saved access activity.")
+        access_label=ttk.Label(body,textvariable=self.access_summary,style="Muted.TLabel",wraplength=300)
+        access_label.pack(fill="x",pady=(8,0));self.wrap_to_parent(access_label)
         clientcard,body=self.card(connect,"Client profile","Optional. Save a familiar name and tenant for your next visit.")
         clientcard.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
         self.clientbox=self.form(body,"Saved client","client_name",values=[])
@@ -498,6 +504,7 @@ class App:
                     self.set_busy(False)
                     if error:
                         self.plan=None
+                        self.render_access_status()
                         details=str(error)
                         self.status.set("Stopped - "+details[:160])
                         self.log(details); self.tabs.select(self.operation_page)
@@ -684,6 +691,7 @@ class App:
         self.subbox.configure(values=[]); self.wsbox.configure(values=[])
         self.vars["subscription"].set(""); self.vars["workspace"].set("")
         self.identity.set("No authenticated workspace selected.")
+        self.render_access_status()
         # The old session is not reused for another client's login.
 
     def add_client(self):
@@ -848,7 +856,11 @@ class App:
                 check_cancelled(cancel)
                 if old:
                     old._signin_cancel=cancel
-                    try:old.logout()
+                    try:
+                        try:old.logout()
+                        except Stop as error:
+                            if not re.search(r"no (?:active )?accounts|account.*(?:not found|does not exist)",str(error),re.I):raise
+                            self.log("The previous app session has no usable cached account. Continuing with a fresh sign-in.")
                     finally:old._signin_cancel=None
                 check_cancelled(cancel)
                 session._signin_cancel=cancel
@@ -929,6 +941,7 @@ class App:
         index=self.subbox.current()
         if index<0: return
         sub=self.subscriptions[index]
+        self.render_access_status()
         self.auth_hint=sub["tenantId"]
         self.vars["tenant"].set(self.auth_hint)
         self.identity.set("Tenant ID: "+sub["tenantId"]+"\nSubscription ID: "+sub["id"]+
@@ -1005,6 +1018,60 @@ class App:
         self.work("Checking the signed-in account and client tenant...",
                   lambda:access_management_plan(session,tenant),reviewed,page=0)
 
+    def access_target(self):
+        index=self.subbox.current()
+        if not self.session or not 0 <= index < len(self.subscriptions):return None
+        sub=self.subscriptions[index]
+        return dict(tenant_id=sub["tenantId"],subscription_id=sub["id"])
+
+    def render_access_status(self):
+        target=self.access_target()
+        try:
+            if target:
+                self.access_summary.set(history_text(self.access_history.get(target)));return
+            tenant=self.vars["tenant"].get().strip().lower()
+            rows=[(key,row) for key,row in self.access_history.read().items() if key.split("/")[0]==tenant]
+            if rows:
+                self.access_summary.set("Saved activity for this tenant (not a live access check):\n"+
+                    "\n\n".join("Subscription: "+key.split("/")[-1]+"\n"+history_text(row) for key,row in sorted(rows)[:5]))
+            else:self.access_summary.set("Select a subscription to view saved access activity.")
+        except Exception as error:self.access_summary.set("Access history unavailable: "+str(error))
+
+    def refresh_setup_access(self):
+        if self.busy:return
+        target=self.access_target()
+        if not target:
+            messagebox.showinfo("Select subscription","Sign in and select the client subscription first.",parent=self.root);return
+        session=self.session;location=self.vars["delegation_location"].get().strip() or "eastus"
+        self.plan=None
+        def task():
+            try:result=check_access(session,target,location)
+            except Exception:
+                self.access_history.record(target,"checked",status="Check could not complete; see the operation error.",ready=None)
+                raise
+            status=("Checked setup actions permitted. Run Preview setup to validate the full configuration."
+                    if result["ready"] else "Setup access not ready. "+result["detail"])
+            # Store a short status, never raw authentication responses or tokens.
+            self.access_history.record(target,"checked",account=result["account"],ready=result["ready"],
+                status="Checked setup actions permitted; run Preview setup." if result["ready"] else "Azure has not confirmed setup access.")
+            return result,status
+        def done(value):
+            if self.session is not session or self.access_target()!=target:return
+            result,status=value;self.render_access_status();self.status.set(status);self.log(status)
+            if result["missing"]:self.log("Actions not listed as permitted: "+", ".join(result["missing"]))
+        self.work("Rechecking setup permissions with Azure; no roles or resources are changed...",task,done,page=0)
+
+    def reconnect_azure(self):
+        if self.busy:return
+        target=self.access_target()
+        tenant=target["tenant_id"] if target else self.vars["tenant"].get().strip()
+        if not tenant:
+            messagebox.showinfo("Client tenant","Choose a saved client or enter its tenant ID before refreshing sign-in.",parent=self.root);return
+        self.vars["tenant"].set(tenant)
+        # Request ARM authentication explicitly. Microsoft can require interaction;
+        # never promise a silent refresh or replay an interrupted cloud operation.
+        self.login(recovery=AuthenticationRequired("User requested a fresh Azure management sign-in.",tenant))
+
     def setup_access(self):
         if self.busy:return
         index=self.subbox.current()
@@ -1013,18 +1080,30 @@ class App:
         session=self.session
         sub=self.subscriptions[index]
         target=dict(tenant_id=sub["tenantId"],subscription_id=sub["id"])
+        try:
+            self.access_history.record(target,"clicked")
+        except Exception as error:
+            messagebox.showerror("Access history",str(error),parent=self.root);return
+        self.render_access_status()
         def reviewed(plan):
             if self.session is not session:return
             if not plan["needs_role"]:
-                messagebox.showinfo("Setup access", "Your current session already permits Microsoft.ManagedServices registration. No additional Contributor role is needed. Preview setup will check the remaining onboarding permissions.",parent=self.root);return
+                messagebox.showinfo("Setup access", "Your current session lists provider registration and deployment actions as permitted. No additional Contributor role is needed. Use Refresh setup access to test deployment validation. Preview setup will check the remaining onboarding permissions.",parent=self.root);return
             text=("Assign active Contributor to the signed-in user?\n\nAccount: " + plan["account"] +
                   "\nUser object ID: " + plan["principal"] + "\nClient tenant: " + target["tenant_id"] +
                   "\nScope: " + plan["scope"] +
                   "\n\nThis permits management of resources throughout this subscription. It remains assigned until removed; CyberQP session expiry does not remove this Azure assignment. Azure policies and role conditions still apply.")
             if not messagebox.askokcancel("Review Contributor assignment",text,parent=self.root):return
             self.plan=None
-            self.work("Assigning reviewed Contributor access...",lambda:apply_contributor(session,plan),
-                      lambda result:(self.log(result),self.status.set(result)),page=0)
+            def assign():
+                result=apply_contributor(session,plan,details=True)
+                if result["assigned"]:
+                    self.access_history.record(target,"accepted",account=plan["account"],ready=False,
+                        status="Azure accepted the assignment. Effective access has not been checked yet.")
+                return result["message"]
+            def completed(result):
+                self.render_access_status();self.log(result);self.status.set(result)
+            self.work("Assigning reviewed Contributor access...",assign,completed,page=0)
         self.work("Checking current subscription access...",lambda:access_plan(session,target),reviewed,page=0)
 
     def payload(self):

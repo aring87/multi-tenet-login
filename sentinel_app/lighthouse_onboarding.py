@@ -182,7 +182,7 @@ def deployment_name(target):
     return DEPLOYMENT_PREFIX + target[:budget].rstrip("-") + "-" + suffix
 
 
-def validate_config(c):
+def validate_config(c, *, allow_same_tenant=False):
     required = {"tenant_id", "subscription_id", "resource_group", "workspace_name",
                 "client", "workspace_label", "github_owner", "github_repo",
                 "managing_tenant_id", "deploy_group_object_id", "read_group_object_id",
@@ -197,7 +197,7 @@ def validate_config(c):
                 "deploy_group_object_id", "read_group_object_id", "engineer_group_object_id"):
         c[key] = guid(c[key], key)
 
-    require(c["tenant_id"] != c["managing_tenant_id"],
+    require(allow_same_tenant or c["tenant_id"] != c["managing_tenant_id"],
             "Client tenant equals the managing tenant. A subscription cannot be delegated to "
             "the tenant it already lives in; use the in-tenant onboarding path instead.")
     require(len({c["deploy_group_object_id"], c["read_group_object_id"],
@@ -291,8 +291,10 @@ class CLI:
 
 
 class Onboard:
+    validate = staticmethod(validate_config)
+
     def __init__(self, config, cli, state_path, template_path):
-        self.c, self.io = validate_config(config), cli
+        self.c, self.io = self.validate(config), cli
         self.apply = cli.apply
         self.state_path, self.template = Path(state_path), Path(template_path)
         require(self.template.is_file(),
@@ -551,6 +553,11 @@ class Onboard:
         self.save()
         return problems
 
+    def access_description(self):
+        return ("Adds the client workspace target. Access is via an Azure Lighthouse "
+                "delegation, so no per-client identity, credential, environment or role "
+                "definition was created. ")
+
     def create_target_pr(self):
         if self.target_exists:
             print("Target already matches main; no pull request needed.")
@@ -589,9 +596,7 @@ class Onboard:
         pr = prs[0] if prs else self.io.gh("POST", self.repo_path + "/pulls", {
             "title": "Onboard Sentinel workspace " + self.c["target"],
             "head": self.branch, "base": "main",
-            "body": "Adds the client workspace target. Access is via an Azure Lighthouse "
-                    "delegation, so no per-client identity, credential, environment or role "
-                    "definition was created. tenant_id is the MANAGING tenant by design. "
+            "body": self.access_description() + "tenant_id is the MANAGING tenant by design. "
                     "Any initial rule is explicitly disabled. After merging, run preview on "
                     "main, review the what-if, then run an approved deployment."
                     + ("\n\nThe client dropdowns in " + " and ".join(DROPDOWN_WORKFLOWS)

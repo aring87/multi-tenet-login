@@ -50,6 +50,13 @@ class AuthenticationRequired(Stop):
 def azure_error(details, tenant=""):
     if re.search(r"unrecognized arguments:.*--claims-challenge", details, re.I):
         return Stop("This Azure CLI does not support claims-challenge sign-in. Update Azure CLI to 2.76.0 or later, restart the app, and sign in again.\n" + CLAIMS_ARGUMENT.sub("--claims-challenge [omitted]", details))
+    if re.search(r"\bAADSTS(?:50020|50034|51004)\b",details,re.I):
+        return Stop("Microsoft could not find this account in the requested tenant. "
+                    "This is an account/tenant sign-in failure, not Azure role propagation. "
+                    "Check the saved client tenant and the current account supplied by CyberQP. "
+                    "In Microsoft's sign-in window choose Use another account; a browser or Windows "
+                    "session may still have a different client selected. The app cannot create or reactivate "
+                    "a missing account. Requested tenant: "+(tenant or "automatic discovery")+"\n\n"+details)
     if CHALLENGE.search(details):
         return AuthenticationRequired(details, tenant)
     return Stop(details)

@@ -176,3 +176,14 @@ shared publisher alongside the new assignment tests.
 
 These tests do not access the private repository or Azure. A private CI pilot and
 an authorized disabled-rule deployment remain the live acceptance check.
+
+## Access refresh and setup timing (2026-10-02)
+
+Offline regression tests cover subscription permission checks plus an empty ARM
+validation probe, role records that disagree with effective access, incomplete
+setup permissions, MFA propagation, timestamp persistence and client isolation,
+cancelled Contributor review, saved history after a restart, unchanged workspace
+selection during refresh, explicit ARM reauthentication, and recovery from a
+missing old cached account. No live CyberQP or Azure account has been accessed.
+The reported new sign-in failure requires the original Microsoft error to
+establish its cause; these changes do not claim to repair a missing tenant user.

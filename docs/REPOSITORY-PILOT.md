@@ -224,8 +224,8 @@ flags revision mismatches. No automatic rollback or cancellation is performed.
 Deployment receipts are saved in ignored `desktop-data/deployment-requests/` as
 `.deployment.json`, including the original preview evidence. An uncertain response
 stops further batches and cannot be automatically retried; check Actions before
-starting a new request. After restarting the app, follow the saved run IDs in GitHub
-Actions. An in-app deployment history browser is a subsequent increment.
+starting a new request. After restarting the app, open **Preview / deployment history** in the repository
+catalog to inspect saved requests and refresh their GitHub run status.
 
 Development validation uses mocked GitHub APIs and synthetic tenants only. No
 private workflow or live Azure deployment is started by the development tests.
@@ -267,3 +267,30 @@ reuses the existing PR; it does not overwrite a branch changed elsewhere.
 No private pipeline or workflow file replacement is required for this feature.
 The existing version 1 client manifest schema and rule overrides are used. Validate
 one disabled test-rule assignment through your private CI before broader use.
+
+## Preview and deployment history
+
+Select **Repository catalog > Preview / deployment history**. No catalog or Azure
+sign-in is needed to browse receipts saved on this computer. Search by rule,
+client, workspace, repository or request ID, and filter Preview or Deploy requests.
+Select a request to inspect its intended workspaces, reviewed revision, each batch's
+inputs, saved run IDs, actual revisions and last-checked timestamps.
+
+**Reload saved history** reads ignored `desktop-data/preview-requests/` and
+`desktop-data/deployment-requests/`. **Open receipt file** also accepts an original
+app-created receipt copied from another authorized computer. Keep receipts private;
+they contain client configuration. Malformed, oversized or linked files are
+reported and left unchanged. The list shows the newest 200 receipts.
+
+**Refresh GitHub status** uses the current GitHub CLI account to read the saved
+repository and confirmed runs. It verifies repository/workflow/run identity,
+records current status and flags revision mismatches. This works after main moves
+on or the workflow is disabled, and does not require write access. Partial read
+failures preserve prior status and are marked as incomplete. The history screen
+cannot dispatch, retry, cancel, approve or merge anything.
+
+Select a batch and choose **Open selected run / Actions** for its jobs, artifacts
+and environment approvals. Without a confirmed run ID, this opens the workflow
+page; the app does not guess a matching run or resubmit an uncertain request.
+This is history of app-saved requests, not every run started directly in GitHub.
+Run success is the workflow result, not a fresh verification of live Sentinel state.

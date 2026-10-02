@@ -187,3 +187,13 @@ selection during refresh, explicit ARM reauthentication, and recovery from a
 missing old cached account. No live CyberQP or Azure account has been accessed.
 The reported new sign-in failure requires the original Microsoft error to
 establish its cause; these changes do not claim to repair a missing tenant user.
+
+## Preview and deployment history (2026-10-02)
+
+The history browser loads saved preview/deployment receipts locally and refreshes
+confirmed GitHub runs only when requested. Tests cover repository/workflow/run
+identity checks, moved main revisions, actual revision mismatches, unknown run IDs,
+partial refresh failures, malformed/oversized/linked files, concurrent file changes,
+canonical links, filtering, saved client details, error recovery and minimum-size
+controls. GitHub interactions are GET-only and mocked. A workflow's reported
+success is not a fresh verification of live Sentinel configuration.

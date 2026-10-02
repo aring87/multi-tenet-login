@@ -5,6 +5,7 @@ from tkinter import ttk, filedialog
 from .repository_catalog import GitHubReader, load_local, state
 from .preview_dialog import PreviewDialog
 from .assignment_dialog import AssignmentDialog
+from .workflow_history_dialog import WorkflowHistoryDialog
 from .rule_assignments import load_request as load_assignment_request
 
 
@@ -60,7 +61,8 @@ class CatalogPage:
                 ("Assign to clients", self.assign_selected),
                 ("Preview / deploy selected rule for clients", self.preview_selected),
                 ("Show catalog issues", self.issues),
-                ("Open assignment review", self.open_assignment_review))):
+                ("Open assignment review", self.open_assignment_review),
+                ("Preview / deployment history", self.open_workflow_history))):
             app.button(actions, label, callback).grid(row=index//3, column=index%3, sticky="w", padx=(0,8), pady=4)
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.mode.trace_add("write", self.mode_changed)
@@ -91,6 +93,9 @@ class CatalogPage:
         if self.snapshot["issues"]:
             self.note.set("Resolve the catalog issues before starting previews."); return
         PreviewDialog(self.app, self.snapshot, self.visible[int(selected[0])])
+
+    def open_workflow_history(self):
+        if not self.app.busy: WorkflowHistoryDialog(self.app)
 
     def assign_selected(self):
         if self.app.busy: return

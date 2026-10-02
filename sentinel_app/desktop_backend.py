@@ -12,7 +12,9 @@ import uuid
 from pathlib import Path
 from .auth_recovery import AuthenticationRequired, SignInCancelled, signin_was_cancelled, azure_error, recovery_scope
 from .signin_process import run_signin
-from .lighthouse_onboarding import CLI, Onboard, Stop, guid, require, validate_config
+from .lighthouse_onboarding import CLI, Onboard, Stop, guid, require
+
+from .same_tenant_onboarding import SameTenantOnboard, validate_app_config, onboarding_mode
 
 from .paths import ROOT as BASE, DATA
 
@@ -275,7 +277,7 @@ def config_from_workspace(workspace, client, label, fields, extras=None):
         if fields.get(key):
             config[key] = fields[key]
     # Validation derives target; do not include that internal field in exported configuration.
-    validate_config(config)
+    validate_app_config(config)
     return config
 
 def permission_run(session, workspace, target, principals, apply=False):
@@ -287,7 +289,7 @@ def permission_run(session, workspace, target, principals, apply=False):
         "delegation and opens the target pull request.")
 
 def full_run(session, config, apply=False):
-    validate_config(config)
+    validate_app_config(config)
     session.verify(config)
     target = config["client"] + "-" + config["workspace_label"]
     folder = DATA / "runs" / target
@@ -306,9 +308,13 @@ def full_run(session, config, apply=False):
         buffer = io.StringIO()
         try:
             with contextlib.redirect_stdout(buffer):
-                Onboard(config, DesktopCLI(session, apply), state, BASE / "templates" / "lighthouse-onboard.json").run()
+                runner = SameTenantOnboard if onboarding_mode(config) == "same-tenant" else Onboard
+                runner(config, DesktopCLI(session, apply), state, BASE / "templates" / "lighthouse-onboard.json").run()
         finally:
             session.log(buffer.getvalue())
+        if onboarding_mode(config) == "same-tenant":
+            return ("Same-tenant registration prepared; review the target pull request. No Azure resources changed."
+                    if apply else "Same-tenant setup plan completed; no resources changed.")
         return "Full onboarding completed." if apply else "Full onboarding plan completed; no cloud resources changed."
     finally:
         if acquired:

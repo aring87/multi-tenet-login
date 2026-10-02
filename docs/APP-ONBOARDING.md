@@ -1,12 +1,14 @@
 # Onboarding a client with the desktop app
 
-Covers the delegated (Azure Lighthouse) model. One delegation per client, one
-target file per client. No app registrations, federated credentials, GitHub
-environments or custom role definitions are created per client.
+The app chooses an onboarding path from the selected workspace tenant:
 
-Applies to clients whose Sentinel workspace lives in **their own tenant**. A
-workspace inside the managing tenant cannot be delegated to the tenant it
-already lives in, and the app will refuse it.
+- **Client tenant:** Azure Lighthouse delegation and a target-file pull request.
+- **Managing tenant:** verify existing direct group access and create the target-file
+  and dropdown pull request. No Azure resources or permissions are changed.
+
+No per-client app registrations, federated credentials, GitHub environments or
+custom role definitions are created. See [same-tenant registration](SAME-TENANT-ONBOARDING.md)
+for the direct-access prerequisites. The steps below describe client-tenant Lighthouse onboarding.
 
 ---
 

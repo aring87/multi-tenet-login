@@ -23,7 +23,8 @@ from .workspace_tools import access_plan, apply_contributor
 from .tenant_access import access_management_plan, enable_access_management
 from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
                              config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
-from .lighthouse_onboarding import validate_config, validate_target, slug, CLIENT_MAXIMUM
+from .lighthouse_onboarding import validate_target, slug, CLIENT_MAXIMUM
+from .same_tenant_onboarding import validate_app_config as validate_config, onboarding_mode, review_text
 from datetime import datetime, timedelta, timezone
 from .audit_evidence import (collect_evidence, date_range, validate_options, CONFIGURATIONS,
                             list_log_tables, preview_log_tables)
@@ -319,7 +320,7 @@ class App:
         self.button(actions,"Open Sentinel audit",lambda:self.tabs.select(3),"Primary.TButton").pack(side="right")
         self.button(connect,"Configure client onboarding →",lambda:self.tabs.select(1)).grid(row=2,column=1,sticky="e",pady=(0,16))
         top,body=self.card(settings,"Client configuration",
-            "Create an Azure Lighthouse delegation and prepare the client target-file pull request.")
+            "Add a workspace to the repository. The app selects direct registration or Lighthouse from its tenant.")
         top.pack(fill="x",pady=(0,16))
         self.form(body,"Workspace identity label","label","workspace-commercial")
         ttk.Label(body,text="Use workspace-commercial for commercial-cloud workspaces and workspace-gcc for GCC. The target becomes <client>-<label> and the file clients/<client>/<client>-<label>.yml.",
@@ -426,7 +427,7 @@ class App:
         index=self.tabs.index("current")
         titles=["Your client workspaces","Client onboarding","Review & apply","Sentinel audit","Analytics rules","Repository catalog","Rule builder"]
         subtitles=["Discover the right workspace without navigating the Azure portal.",
-                   "Deploy a Lighthouse delegation and open the client's target-file pull request.",
+                   "Register a workspace in your tenant or onboard a client through Lighthouse.",
                    "Confirm the destination, preview the setup, then apply.",
                    "Export selected Sentinel configuration and logs for this workspace.",
                    "Browse enabled and disabled analytics rules for the selected workspace.",
@@ -1038,20 +1039,14 @@ class App:
     def onboard(self,apply):
         try:
             config=self.payload()
-            token=fingerprint(config,"lighthouse-delegation",[])
+            token=fingerprint(config,onboarding_mode(config),[])
             if apply:
                 require(self.plan and self.plan[0]==token and time.time()-self.plan[1]<900,
                         "Preview this exact configuration first. Plans expire after 15 minutes.")
-            target=config["client"]+"-"+config["workspace_label"]
-            summary=("Lighthouse delegation onboarding\nTarget: "+target+
-                     "\nClient tenant: "+config["tenant_id"]+
-                     "\nManaging tenant: "+config["managing_tenant_id"]+
-                     "\nSubscription: "+config["subscription_id"]+"\nWorkspace: "+config["workspace_name"]+
-                     "\nResource group: "+config["resource_group"])
+            summary, action = review_text(config)
             self.summary.set(summary)
             if apply and not messagebox.askokcancel("Apply reviewed setup",summary+
-                    "\n\nThis delegates the client subscription to the managing tenant and opens a "
-                    "target-file pull request.\nProceed with this destination?",parent=self.root):
+                    "\n\n"+action+"\nProceed with this destination?",parent=self.root):
                 return
             self.tabs.select(2)
             self.plan=None

@@ -40,14 +40,14 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 - Discovers accessible subscriptions and Log Analytics workspace details.
 - Exports selected Sentinel configuration with a readable report and original JSON. Optional Sentinel activity and selected security source logs include samples or bounded period exports. See [Sentinel Configuration & Logs](docs/AUDIT-EVIDENCE.md).
 - Previews selected source-table counts and latest timestamps. Reports unavailable, denied and incomplete collections explicitly.
-- Previews and applies scoped permissions for existing preview/deployment service principals.
-- Onboards clients through Azure Lighthouse and opens a client-target pull request, including generated workflow dropdown updates where supported.
+- Verifies existing shared-group access for workspaces hosted in the managing tenant.
+- Onboards external tenants through Azure Lighthouse, or registers same-tenant workspaces using existing direct access. Both paths prepare a client-target pull request and generated dropdown updates.
 - Deletes saved client entries without deleting cloud resources.
 - Requires a successful matching preview before Apply.
 
 The app is independent of any employer, customer, or privileged-access provider. CyberQP is optional; activate access through your own provider if your organization requires it. The app starts with an empty client list and blank GitHub settings.
 
-Discovery and permissions-only mode do not require GitHub or CyberQP. Full onboarding requires a compatible private detection repository and GitHub plan supporting its environment policies.
+Discovery does not require GitHub or CyberQP. Full onboarding requires a compatible private detection repository and GitHub plan supporting its environment policies.
 
 ## Start on Windows
 
@@ -73,7 +73,7 @@ See [the access-management steps](docs/APP-ONBOARDING.md#enable-azure-resource-a
 
 | Mode | Purpose |
 |---|---|
-| Permissions only | Validate, preview, and apply the included Azure RBAC template to existing service principals |
+| Same-tenant registration | Verify existing group roles and pipeline membership, then open the client-target and dropdown PR without Azure changes |
 | Lighthouse onboarding | Delegate the client subscription to existing managing-tenant groups and open a client-target pull request |
 
 This application repository is separate from your private detection-rule repository. In full onboarding, configure the private repository that contains your existing Sentinel pipeline.
@@ -83,7 +83,8 @@ Desktop Lighthouse onboarding uses two existing shared GitHub environments, each
 ## Documentation
 
 - [Desktop guide](docs/DESKTOP-START-HERE.md)
-- [Current Lighthouse onboarding](docs/APP-ONBOARDING.md)
+- [Current onboarding](docs/APP-ONBOARDING.md)
+- [Same-tenant workspace registration](docs/SAME-TENANT-ONBOARDING.md)
 - [Legacy per-client identity onboarding](docs/FULL-ONBOARDING.md)
 - [Project file map](docs/PROJECT-MAP.md)
 - [Detection repository reference uploads](detection-as-code/README.md)
@@ -93,7 +94,7 @@ Desktop Lighthouse onboarding uses two existing shared GitHub environments, each
 
 ## Public examples
 
-Examples use fictional resource names and placeholder or synthetic identifiers. No actual client inventory is distributed. See [Privacy and publication notes](docs/PRIVACY.md).
+Application examples use fictional resource names and placeholder or synthetic identifiers. Reference uploads in `detection-as-code/` must be reviewed and sanitized separately before publication. See [Privacy and publication notes](docs/PRIVACY.md).
 
 ## Local data and access
 

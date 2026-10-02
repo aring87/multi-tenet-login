@@ -1,6 +1,6 @@
 # Repository UI pilot
 
-This development branch includes the read-only catalog and local rule authoring. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. Browsing the catalog makes no changes. The separate rule-review, client-preview and deployment dialogs require an explicit submission action.
+The app includes a repository catalog, local rule authoring, and reviewed client assignments. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. Browsing the catalog makes no changes. The separate rule-review, assignment, client-preview and deployment dialogs require an explicit submission action.
 
 ## Start the development copy
 
@@ -30,7 +30,7 @@ The catalog reads YAML workspace manifests recursively, including secondary work
 
 Snapshots stay in memory and are refreshed manually. No automatic fetch or local repository updates occur. Remote loads make one blob request per relevant file; large inventories should use local mode until caching is added. Trees truncated by GitHub fail visibly rather than producing a complete-looking inventory. Limits: 2 MB per file, 32 MB combined, 2,000 catalog files. Alias-based YAML is reported as unsupported.
 
-The builder schema was reviewed against the supplied source snapshot; live private-repository compatibility still requires a pilot. The existing automatic GitHub dropdown update remains in onboarding. Client assignment, authentication and workflow execution must be checked against the private repository before adding those actions to the new UI.
+The builder schema was reviewed against the supplied source snapshot; live private-repository compatibility still requires a pilot. The existing automatic GitHub dropdown update remains in onboarding. Client assignment, authentication and workflow execution require a pilot against the private repository; offline checks do not prove live permissions or workflow compatibility.
 
 Validation commands:
 
@@ -59,7 +59,7 @@ All new test data is synthetic. GitHub API reads are mocked in offline tests. No
 
 The validator is a bundled, reviewed copy of your uploaded rules.py; see [schema provenance](RULE-SCHEMA.md).
 KQL still needs a workspace query check. Keep local drafts and private queries out of this
-public application repository. Guided draft PR submission is available below; client assignment remains a subsequent increment; selected-rule previews and reviewed deployment controls are available below.
+public application repository. Guided draft PR submission, client assignment, selected-rule previews and reviewed deployment controls are available below.
 
 ## Submit a rule for repository review
 
@@ -229,3 +229,41 @@ Actions. An in-app deployment history browser is a subsequent increment.
 
 Development validation uses mocked GitHub APIs and synthetic tenants only. No
 private workflow or live Azure deployment is started by the development tests.
+
+## Assign a shared rule to client workspaces
+
+Install the updated requirements (`py -m pip install -r requirements.txt`); this
+feature uses ruamel.yaml to retain YAML comments and quoted numeric client names.
+
+1. Refresh the **GitHub repository** catalog for your private detection repository.
+2. Switch to **Rules**, select a rule, and choose **Assign to clients**.
+3. Search by client, workspace or target. Click rows to select workspaces, or use
+   **Select shown** to add the currently visible rows. Searching keeps earlier
+   selections; the counter tells you how many are hidden. **Clear selection** clears all.
+4. Choose **Enabled** or **Disabled** for this rule in the selected workspaces.
+   Disabled is the initial choice. Existing severity, query, ID and other overrides
+   stay intact. Assignment does not enable a disabled workspace target.
+5. Choose **Prepare review**. Check the repository, account, main revision, selected
+   destinations, warnings and full YAML diffs. This step only reads GitHub.
+6. Choose **Create / recover draft PR**. All changed client manifests go into one
+   commit and draft PR. The shared rule, Azure destinations, other rules and
+   unselected clients are unchanged. The app does not merge or dispatch deployments;
+   existing repository workflows may run when the branch or PR is created.
+7. Use **Open pull request** for review and CI. After merging, refresh the catalog,
+   then use **Preview / deploy selected rule for clients** with your normal approvals.
+
+This action adds missing assignments or changes the selected rule's enabled override.
+It does not remove assignments. Unchanged requests do not create an empty PR. Select
+up to 100 workspaces per review; requests are limited to 16 MB including original
+and updated file contents. Malformed catalogs, invalid effective rules, stale main
+revisions, changed GitHub identity or lost write access stop submission.
+
+If submission is interrupted, retry in the same dialog. After restarting, choose
+**Open assignment review** in the catalog and open the matching `.assignment.json`
+file in `desktop-data/assignment-requests/`. These ignored local files contain private
+client configuration. Recovery checks the reviewed base and branch contents and
+reuses the existing PR; it does not overwrite a branch changed elsewhere.
+
+No private pipeline or workflow file replacement is required for this feature.
+The existing version 1 client manifest schema and rule overrides are used. Validate
+one disabled test-rule assignment through your private CI before broader use.

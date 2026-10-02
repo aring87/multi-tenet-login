@@ -4,6 +4,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 from .repository_catalog import GitHubReader, load_local, state
 from .preview_dialog import PreviewDialog
+from .assignment_dialog import AssignmentDialog
+from .rule_assignments import load_request as load_assignment_request
 
 
 class CatalogPage:
@@ -52,9 +54,14 @@ class CatalogPage:
         scroll = ttk.Scrollbar(detailframe, command=self.details.yview)
         self.details.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y"); self.details.pack(fill="both", expand=True)
-        app.button(body, "Show catalog issues", self.issues).pack(anchor="w", pady=(10, 0))
-        app.button(body, "Edit selected rule as draft", self.edit_selected).pack(anchor="w", pady=(8, 0))
-        app.button(body, "Preview / deploy selected rule for clients", self.preview_selected).pack(anchor="w", pady=(8, 0))
+        actions = ttk.Frame(body, style="Card.TFrame"); actions.pack(fill="x", pady=(10,0))
+        for index, (label, callback) in enumerate((
+                ("Edit selected rule as draft", self.edit_selected),
+                ("Assign to clients", self.assign_selected),
+                ("Preview / deploy selected rule for clients", self.preview_selected),
+                ("Show catalog issues", self.issues),
+                ("Open assignment review", self.open_assignment_review))):
+            app.button(actions, label, callback).grid(row=index//3, column=index%3, sticky="w", padx=(0,8), pady=4)
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.mode.trace_add("write", self.mode_changed)
         self.source.trace_add("write", self.invalidate)
@@ -84,6 +91,28 @@ class CatalogPage:
         if self.snapshot["issues"]:
             self.note.set("Resolve the catalog issues before starting previews."); return
         PreviewDialog(self.app, self.snapshot, self.visible[int(selected[0])])
+
+    def assign_selected(self):
+        if self.app.busy: return
+        selected = self.tree.selection()
+        if self.view.get() != "Rules" or not selected or not self.snapshot:
+            self.note.set("Choose Rules and select a rule to assign to clients."); return
+        if not self.snapshot.get("repository") or not self.snapshot.get("private") or not self.snapshot.get("can_push"):
+            self.note.set("Load the private GitHub repository with write access before assigning rules."); return
+        if self.snapshot["issues"]:
+            self.note.set("Resolve catalog issues before assigning rules."); return
+        AssignmentDialog(self.app, self.snapshot, self.visible[int(selected[0])])
+
+    def open_assignment_review(self):
+        if self.app.busy: return
+        path = filedialog.askopenfilename(parent=self.app.root, title="Open saved assignment review",
+            initialdir=str(self.app.rule_builder.data_dir / "assignment-requests"),
+            filetypes=[("Assignment review", "*.assignment.json")])
+        if not path: return
+        try:
+            AssignmentDialog(self.app, record=load_assignment_request(path))
+        except Exception as error:
+            self.note.set("Assignment review unavailable: " + str(error))
 
     def mode_changed(self, *args):
         self.source_label.set("Detection repository folder" if self.mode.get() == "Local folder" else "GitHub repository — owner/name")

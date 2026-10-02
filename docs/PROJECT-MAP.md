@@ -31,6 +31,7 @@ All the following modules live in `sentinel_app/`:
 | Reviewed client rule assignments | rule_assignments, assignment_dialog |
 | Guided rule builder | rule_builder_page, rule_drafts, rule_schema |
 | Rule reviews and history | repository_reviews, rule_review_dialog, review_history |
+| Saved workflow history | workflow_history, workflow_history_dialog |
 | GitHub previews and deployments | preview_workflow, preview_dialog, deployment_workflow, deployment_dialog |
 | Azure sessions and workspace access | desktop_backend, auth_recovery, workspace_tools, tenant_access, access_readiness |
 | Current Lighthouse onboarding | lighthouse_onboarding, yaml_identifiers |

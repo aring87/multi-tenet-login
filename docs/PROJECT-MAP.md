@@ -25,7 +25,7 @@ All the following modules live in `sentinel_app/`:
 
 | Area | Modules |
 |---|---|
-| Desktop and sign-in UI | desktop_app, desktop_theme, signin_window, signin_process |
+| Desktop and sign-in UI | desktop_app, connection_page, desktop_theme, signin_window, signin_process |
 | Analytics rule inventory and export | rules_page, rule_export |
 | Repository catalog | repository_catalog, catalog_page |
 | Reviewed client rule assignments | rule_assignments, assignment_dialog |

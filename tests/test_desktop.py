@@ -374,7 +374,7 @@ class DesktopTests(unittest.TestCase):
         sidebar=app.nav[0][0].master
         rows=sorted(app.nav,key=lambda row:sidebar.pack_slaves().index(row[0]))
         self.assertEqual([row[1].cget("text") for row in rows],
-                         ["Workspaces","Analytics rules","Repository catalog","Rule builder","Onboarding","Review & apply","Sentinel audit"])
+                         ["Workspaces","Analytics rules","Repository catalog","Rule builder","Onboarding","Review onboarding","Sentinel audit"])
         root.deiconify();root.update()
         for row in rows:
             row[0].event_generate("<Button-1>")

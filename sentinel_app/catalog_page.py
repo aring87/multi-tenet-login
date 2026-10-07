@@ -55,15 +55,19 @@ class CatalogPage:
         scroll = ttk.Scrollbar(detailframe, command=self.details.yview)
         self.details.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y"); self.details.pack(fill="both", expand=True)
-        actions = ttk.Frame(body, style="Card.TFrame"); actions.pack(fill="x", pady=(10,0))
-        for index, (label, callback) in enumerate((
-                ("Edit selected rule as draft", self.edit_selected),
-                ("Assign to clients", self.assign_selected),
-                ("Preview / deploy selected rule for clients", self.preview_selected),
-                ("Show catalog issues", self.issues),
-                ("Open assignment review", self.open_assignment_review),
-                ("Preview / deployment history", self.open_workflow_history))):
-            app.button(actions, label, callback).grid(row=index//3, column=index%3, sticky="w", padx=(0,8), pady=4)
+        for title, entries in (
+                ("Actions for the selected rule", (
+                    ("Edit selected rule as draft", self.edit_selected),
+                    ("Assign to clients", self.assign_selected),
+                    ("Preview / deploy selected rule for clients", self.preview_selected))),
+                ("Saved activity & catalog checks", (
+                    ("Show catalog issues", self.issues),
+                    ("Open assignment review", self.open_assignment_review),
+                    ("Preview / deployment history", self.open_workflow_history)))):
+            ttk.Label(body,text=title,style="Section.TLabel").pack(anchor="w",pady=(14,6))
+            actions = ttk.Frame(body, style="Card.TFrame"); actions.pack(fill="x")
+            for index, (label, callback) in enumerate(entries):
+                app.button(actions,label,callback).grid(row=0,column=index,sticky="w",padx=(0,8),pady=4)
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.mode.trace_add("write", self.mode_changed)
         self.source.trace_add("write", self.invalidate)

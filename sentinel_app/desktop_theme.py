@@ -47,7 +47,7 @@ def configure_theme(root):
     style.layout("Hidden.TNotebook.Tab",[])
     style.configure("Horizontal.TProgressbar",background=c["accent"],troughcolor="#e3eaf0",borderwidth=0,thickness=3,
                     bordercolor=c["surface"],lightcolor=c["accent"],darkcolor=c["accent"])
-    style.configure("Treeview",background=c["card"],fieldbackground=c["card"],rowheight=32,borderwidth=0)
+    style.configure("Treeview",background=c["card"],fieldbackground=c["card"],rowheight=34,borderwidth=0)
     style.configure("Treeview.Heading",background="#eaf0f5",font=("Segoe UI",10,"bold"),padding=(10,9),relief="flat")
     style.map("Treeview",background=[("selected","#dbeeea")],foreground=[("selected",c["ink"])])
     style.configure("Vertical.TScrollbar",background="#c6d1dd",troughcolor=c["surface"],borderwidth=0,arrowsize=12)

@@ -197,3 +197,12 @@ partial refresh failures, malformed/oversized/linked files, concurrent file chan
 canonical links, filtering, saved client details, error recovery and minimum-size
 controls. GitHub interactions are GET-only and mocked. A workflow's reported
 success is not a fresh verification of live Sentinel configuration.
+
+## Connection-screen polish (2026-10-06)
+
+The connection layout separates client selection, authentication and workspace
+selection, with profile editing, access grants, diagnostics and raw identifiers
+behind labeled expandable sections. Automated checks cover workspace-action gating,
+state restoration after work, hidden sign-in controls, preserved full diagnostics,
+and horizontal fit. A separate synthetic-data app instance was visually inspected at the default size. Minimum-size widget measurements confirmed all navigation labels and the primary sign-in control fit at 1120x740; the final minimum-size screenshot check was unavailable because Windows refused to activate the preview.
+No real Microsoft sign-in or Azure permission changes were performed during QA.

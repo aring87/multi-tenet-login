@@ -51,6 +51,7 @@ class DesignTests(unittest.TestCase):
         self.app.set_busy(True)
         self.assertEqual(self.app.activity_badge.cget("text"),"WORKING")
         self.assertEqual(str(self.app.subbox.cget("state")),"disabled")
+        self.app.subscriptions=[{"id":"synthetic"}]
         self.app.set_busy(False)
         self.assertEqual(str(self.app.subbox.cget("state")),"readonly")
         self.assertEqual(self.app.activity_badge.cget("text"),"READY")

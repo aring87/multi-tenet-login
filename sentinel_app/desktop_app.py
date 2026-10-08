@@ -13,6 +13,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from .desktop_theme import configure_theme
+from .connection_page import build_connection
 from .auth_recovery import AuthenticationRequired, SignInCancelled
 from .signin_process import check_cancelled
 from .rules_page import RulesPage
@@ -39,7 +40,7 @@ SETTINGS_KEYS = ("github_owner", "github_repo", "managing_tenant_id", "deploy_gr
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Sentinel Workspace | Repository UI development")
+        root.title("Sentinel Workspace")
         root.geometry("1280x880")
         root.minsize(1120,740)
         root.configure(bg="#edf2f7")
@@ -185,6 +186,20 @@ class App:
             label.pack(fill="x",pady=(0,12));self.wrap_to_parent(label)
         return frame
 
+    def sync_connection(self):
+        if not hasattr(self,"connection_note"):return
+        active=bool(self.workspace)
+        for button in self.workspace_actions:
+            button.configure(state="normal" if active and not self.busy else "disabled")
+        self.subbox.configure(state="readonly" if self.subscriptions and not self.busy else "disabled")
+        self.wsbox.configure(state="readonly" if self.workspaces and not self.busy else "disabled")
+        if active:
+            account=(getattr(self.session,"account",None) or {}).get("user",{}).get("name","")
+            self.connection_note.set(("Signed in as "+account+". " if account else "")+
+                "Selected: "+self.workspace["workspace_name"]+". Choose what to do next.")
+        elif self.subscriptions:self.connection_note.set("Select a subscription and workspace to continue.")
+        else:self.connection_note.set("Sign in above to load your subscriptions and workspaces.")
+
     def update_workspace_context(self):
         if hasattr(self, "tabs") and self.tabs.index("current") in (5, 6):
             self.workspace_context.set("Repository configuration / Azure sign-in is not required")
@@ -195,58 +210,64 @@ class App:
 
     def build(self):
         configure_theme(self.root)
-        sidebar=tk.Frame(self.root,bg="#142638",width=248)
+        sidebar=tk.Frame(self.root,bg="#142638",width=224)
         sidebar.pack(side="left",fill="y");sidebar.pack_propagate(False)
-        tk.Label(sidebar,text="SENTINEL",bg="#142638",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(30,4))
-        tk.Label(sidebar,text="CLIENT OPERATIONS",bg="#142638",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,30))
+        tk.Label(sidebar,text="SENTINEL",bg="#142638",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(22,4))
+        tk.Label(sidebar,text="CLIENT OPERATIONS",bg="#142638",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,14))
         # Display order is independent of the notebook indices used by actions.
         navigation=[(0,"Workspaces","Connect & discover"),(4,"Analytics rules","Enabled & disabled"),
                     (5,"Repository catalog","Clients & rule library"),
                     (6,"Rule builder","Create & edit drafts"),
-                    (1,"Onboarding","Configure client access"),(2,"Review & apply","Preview deployment"),
+                    (1,"Onboarding","Configure client access"),(2,"Review onboarding","Preview & apply setup"),
                     (3,"Sentinel audit","Configuration & logs")]
         self.nav=[None]*len(navigation)
         for i,title,desc in navigation:
+            group={0:"CONNECT",4:"ANALYST",1:"ENGINEER & AUDITOR"}.get(i)
+            if group:
+                tk.Label(sidebar,text=group,bg="#142638",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w",padx=24,pady=(12,3))
             row=tk.Frame(sidebar,bg="#142638",cursor="hand2",takefocus=1,
                          highlightthickness=1,highlightbackground="#142638",highlightcolor="#86c8bd")
-            row.pack(fill="x",padx=12,pady=4)
+            row.pack(fill="x",padx=12,pady=2)
             name=tk.Label(row,text=title,bg="#142638",fg="#d8e5f5",
                           font=("Segoe UI",11,"bold"),anchor="w",cursor="hand2")
-            name.grid(row=0,column=0,sticky="ew",padx=(12,8),pady=(10,0))
+            name.grid(row=0,column=0,sticky="ew",padx=(12,8),pady=(7,0))
             description=tk.Label(row,text=desc,bg="#142638",fg="#9bb4d4",
                                  font=("Segoe UI",9),anchor="w",justify="left",wraplength=168,cursor="hand2")
-            description.grid(row=1,column=0,sticky="ew",padx=(12,8),pady=(2,11))
+            description.grid(row=1,column=0,sticky="ew",padx=(12,8),pady=(2,7))
             row.columnconfigure(0,weight=1)
             for part in (row,name,description):
                 part.bind("<Button-1>",lambda event,n=i:self.tabs.select(n))
             row.bind("<Return>",lambda event,n=i:self.tabs.select(n))
             row.bind("<space>",lambda event,n=i:self.tabs.select(n))
             self.nav[i]=(row,name,description)
-        bottom=tk.Frame(sidebar,bg="#142638");bottom.pack(side="bottom",fill="x",padx=22,pady=22)
-        tk.Label(bottom,text="LOCAL WORKSPACE",bg="#142638",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w")
-        tk.Label(bottom,text="Azure access • Local exports",bg="#142638",fg="#c2d2e5",font=("Segoe UI",9),wraplength=200,justify="left").pack(anchor="w",pady=(6,16))
+        bottom=tk.Frame(sidebar,bg="#142638");bottom.pack(side="bottom",fill="x",padx=22,pady=14)
         tk.Button(bottom,text="Help & prerequisites",command=lambda:os.startfile(str(BASE/"docs"/"DESKTOP-START-HERE.md")),
                   bg="#142638",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w")
         tk.Button(bottom,text="Open app data",command=lambda:os.startfile(str(DATA)),
                   bg="#142638",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w",pady=(8,0))
         main=ttk.Frame(self.root);main.pack(side="left",fill="both",expand=True)
-        head=ttk.Frame(main,padding=(30,26,30,18));head.pack(fill="x")
+        head=ttk.Frame(main,padding=(26,18,26,12));head.pack(fill="x")
         self.page_title=tk.StringVar(value="Connect your client")
         self.page_subtitle=tk.StringVar(value="Discover the right workspace without navigating the Azure portal.")
-        ttk.Label(head,textvariable=self.page_title,font=("Segoe UI",22,"bold"),foreground="#14263e").pack(anchor="w")
+        ttk.Label(head,textvariable=self.page_title,font=("Segoe UI",20,"bold"),foreground="#14263e").pack(anchor="w")
         subtitle=ttk.Label(head,textvariable=self.page_subtitle,style="Context.TLabel")
         subtitle.pack(anchor="w",pady=(6,0))
         self.wrap_to_parent(subtitle,60)
         self.workspace_context=tk.StringVar(value="No workspace selected  /  Connect an Azure account to begin")
         context=ttk.Label(head,textvariable=self.workspace_context,style="Context.TLabel")
-        context.pack(anchor="w",pady=(14,0))
+        context.pack(anchor="w",pady=(8,0))
         self.wrap_to_parent(context,60)
         self.status=tk.StringVar(value="Ready. Use an authorized Azure account to connect a client.")
         statusframe=ttk.Frame(main,padding=(30,10));statusframe.pack(side="bottom",fill="x")
         self.activity_badge=ttk.Label(statusframe,text="READY",style="Badge.TLabel",padding=(9,4))
         self.activity_badge.pack(side="left",anchor="n",padx=(0,12))
         statusbody=ttk.Frame(statusframe);statusbody.pack(fill="both",expand=True)
-        statuslabel=ttk.Label(statusbody,textvariable=self.status,style="Context.TLabel")
+        self.status_preview=tk.StringVar()
+        def show_status(*args):
+            text=" ".join(self.status.get().split())
+            self.status_preview.set(text if len(text)<=180 else text[:177]+"…")
+        self.status.trace_add("write",show_status);show_status()
+        statuslabel=ttk.Label(statusbody,textvariable=self.status_preview,style="Context.TLabel")
         statuslabel.pack(anchor="w");self.wrap_to_parent(statuslabel)
         self.progress=ttk.Progressbar(statusbody,mode="indeterminate",maximum=100)
         self.tabs=ttk.Notebook(main,style="Hidden.TNotebook");self.tabs.pack(fill="both",expand=True,padx=26,pady=(0,12))
@@ -267,64 +288,7 @@ class App:
         self.rule_builder=RuleBuilderPage(self,builder,DATA)
         self.catalog_page=CatalogPage(self,catalog)
         self.rules_page=RulesPage(self,rules)
-        connect.columnconfigure(0,weight=1,uniform="discovery");connect.columnconfigure(1,weight=1,uniform="discovery")
-        discovery,body=self.card(connect,"Connect to Azure","Sign in, then select the subscription and workspace you want to work with.")
-        discovery.grid(row=0,column=1,sticky="nsew",pady=(0,16))
-        self.form(body,"Tenant ID or domain · optional","tenant")
-        hint=ttk.Label(body,text="Leave blank to discover the directories available to your account.",style="Muted.TLabel",wraplength=300,justify="left")
-        hint.pack(fill="x",pady=(0,14));self.wrap_to_parent(hint)
-        self.form(body,"Sign-in method","login_method","Browser",["Browser","Windows account window"])
-        self.offer_access_management=tk.BooleanVar(value=False)
-        offer=ttk.Checkbutton(body,text="Review Azure access management after sign-in",
-                              variable=self.offer_access_management)
-        offer.pack(anchor="w",pady=(0,6)); self.controls.append((offer,"normal"))
-        access_hint=ttk.Label(body,text="Optional first-time setup for Global Administrators. Enter the client tenant ID above.",
-                              style="Muted.TLabel",wraplength=300)
-        access_hint.pack(fill="x",pady=(0,12));self.wrap_to_parent(access_hint)
-        self.button(body,"Sign in & discover",self.login,"Primary.TButton").pack(fill="x",pady=(0,14))
-        self.signin_button=ttk.Button(body,text="Bring sign-in window forward",command=self.bring_signin_forward,state="disabled")
-        self.signin_button.pack(fill="x",pady=(0,8))
-        self.cancel_signin_button=ttk.Button(body,text="Cancel sign-in",command=self.cancel_signin,state="disabled")
-        self.cancel_signin_button.pack(fill="x",pady=(0,6))
-        help_signin=ttk.Label(body,text="Closed the browser tab? Select Cancel sign-in here to stop waiting.",
-                             style="Muted.TLabel",wraplength=300)
-        help_signin.pack(fill="x",pady=(0,14)); self.wrap_to_parent(help_signin)
-        self.subbox=self.form(body,"Subscription","subscription",values=[])
-        self.subbox.bind("<<ComboboxSelected>>",self.subscription_changed)
-        self.wsbox=self.form(body,"Log Analytics workspace","workspace",values=[])
-        self.wsbox.bind("<<ComboboxSelected>>",self.workspace_changed)
-        tools=self.disclosure(body,"Access & discovery tools")
-        self.form(tools,"CyberQP region · optional","cyberqp_region","US",list(CYBERQP_PORTALS))
-        hint=ttk.Label(tools,text="Activate JIT access in your browser, then return to sign in here.",style="Muted.TLabel",wraplength=300,justify="left")
-        hint.pack(fill="x",pady=(0,12));self.wrap_to_parent(hint)
-        for label,command in (("Enable Azure access management",self.azure_access_management),("Check setup access / Contributor",self.setup_access),("Refresh setup access",self.refresh_setup_access),("Sign in again / refresh session",self.reconnect_azure),("Open Azure portal",self.open_azure_portal),("Refresh subscriptions",self.refresh_subscriptions),("Check missing subscription",self.check_subscription),("Refresh workspaces",self.discover)):
-            self.button(tools,label,command).pack(fill="x",pady=(0,6))
-        self.access_summary=tk.StringVar(value="Select a subscription to view saved access activity.")
-        access_label=ttk.Label(body,textvariable=self.access_summary,style="Muted.TLabel",wraplength=300)
-        access_label.pack(fill="x",pady=(8,0));self.wrap_to_parent(access_label)
-        clientcard,body=self.card(connect,"Client profile","Optional. Save a familiar name and tenant for your next visit.")
-        clientcard.grid(row=0,column=0,sticky="nsew",padx=(0,16),pady=(0,16))
-        self.clientbox=self.form(body,"Saved client","client_name",values=[])
-        self.clientbox.bind("<<ComboboxSelected>>",self.client_changed)
-        self.button(body,"+ Add client",self.add_client).pack(fill="x",pady=(0,14))
-        self.form(body,"Client slug","client_slug")
-        self.button(body,"Save client profile",self.save_client).pack(fill="x",pady=(0,8))
-        self.button(body,"Import configuration",self.import_config).pack(fill="x",pady=(0,8))
-        manage=self.disclosure(body,"Manage saved profile")
-        self.button(manage,"Delete saved client",self.delete_client,"Danger.TButton").pack(fill="x")
-        self.button(body,"Open CyberQP",self.open_cyberqp).pack(fill="x",pady=(0,8))
-        detailcard,body=self.card(connect,"Selected workspace","Confirm the destination before exporting evidence or configuring onboarding.")
-        detailcard.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(0,16))
-        self.identity=tk.StringVar(value="No workspace selected. Use Workspaces to sign in and select a destination.")
-        self.details=tk.Text(body,width=1,height=7,wrap="word",font=("Consolas",10),
-                             bg="#f4f7fa",fg="#233248",relief="flat",padx=14,pady=12)
-        self.details.pack(fill="x",pady=(0,14))
-        self.identity.trace_add("write",lambda *args:(self.render_details(),self.update_workspace_context()))
-        self.render_details()
-        actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
-        self.button(actions,"Copy details",self.copy_workspace).pack(side="left")
-        self.button(actions,"Open Sentinel audit",lambda:self.tabs.select(3),"Primary.TButton").pack(side="right")
-        self.button(connect,"Configure client onboarding →",lambda:self.tabs.select(1)).grid(row=2,column=1,sticky="e",pady=(0,16))
+        build_connection(self,connect)
         top,body=self.card(settings,"Client configuration",
             "Add a workspace to the repository. The app selects direct registration or Lighthouse from its tenant.")
         top.pack(fill="x",pady=(0,16))
@@ -394,7 +358,7 @@ class App:
         checkbox(logs,"audit","Sentinel configuration-change logs (SentinelAudit)")
         checkbox(logs,"health","Sentinel operational health logs (SentinelHealth)")
         today=datetime.now(timezone.utc).date()
-        dates=ttk.Frame(logs,style="Card.TFrame");dates.pack(fill="x",pady=(10,0))
+        dates=ttk.Frame(logs,style="Card.TFrame");dates.pack(fill="x",pady=(7,0))
         left=ttk.Frame(dates,style="Card.TFrame");left.pack(side="left",fill="x",expand=True,padx=(0,16))
         right=ttk.Frame(dates,style="Card.TFrame");right.pack(side="left",fill="x",expand=True)
         self.form(left,"Log start date (UTC, YYYY-MM-DD)","audit_start",(today-timedelta(days=6)).isoformat())
@@ -431,8 +395,8 @@ class App:
 
     def page_changed(self,event=None):
         index=self.tabs.index("current")
-        titles=["Your client workspaces","Client onboarding","Review & apply","Sentinel audit","Analytics rules","Repository catalog","Rule builder"]
-        subtitles=["Discover the right workspace without navigating the Azure portal.",
+        titles=["Connect a client","Client onboarding","Review onboarding setup","Sentinel audit","Analytics rules","Repository catalog","Rule builder"]
+        subtitles=["Choose a client, sign in, then select the workspace you need.",
                    "Register a workspace in your tenant or onboard a client through Lighthouse.",
                    "Confirm the destination, preview the setup, then apply.",
                    "Export selected Sentinel configuration and logs for this workspace.",
@@ -531,6 +495,7 @@ class App:
             self.progress.stop();self.progress.pack_forget()
         for widget,state in self.controls:
             widget.configure(state="disabled" if busy else state)
+        self.sync_connection()
 
     def work(self,title,task,done=None,page=2):
         if self.busy: return
@@ -784,6 +749,7 @@ class App:
         self.signin_handoff=None
         self.signin_button.configure(state="disabled")
         self.cancel_signin_button.configure(state="disabled")
+        self.signin_progress.pack_forget()
         self.signin_cancel=None
 
     def recover_authentication(self, error):
@@ -847,6 +813,7 @@ class App:
         session=self.session
         self.signin_handoff=create_handoff()
         self.signin_active=True
+        self.signin_progress.pack(fill="x",pady=(6,0))
         self.cancel_signin_button.configure(state="normal")
         self.signin_deadline=time.monotonic()+90
         self.signin_button.configure(state="normal" if self.signin_handoff else "disabled")
@@ -890,6 +857,7 @@ class App:
     def display_subscriptions(self, rows, discover=True):
         rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
         self.subscriptions=rows
+        self.sync_connection()
         self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+" | Tenant: "+r["tenantId"] for r in rows])
         if rows:
             self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
@@ -907,6 +875,7 @@ class App:
             self.clear_selection()
             rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
             self.subscriptions=rows
+            self.sync_connection()
             self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+
                                           " | Tenant: "+r["tenantId"] for r in rows])
             if rows:
@@ -958,6 +927,7 @@ class App:
         self.wsbox.configure(values=[]); self.vars["workspace"].set("")
         def done(rows):
             self.workspaces=rows
+            self.sync_connection()
             self.wsbox.configure(values=[r["workspace_name"]+" | "+r["resource_group"] for r in rows])
             if rows:
                 self.wsbox.current(0); self.workspace_changed()

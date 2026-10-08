@@ -1,26 +1,38 @@
 # Sentinel Workspace — desktop guide
 
 Double-click Start-Sentinel.cmd. Python 3.10+ with Tkinter and Azure CLI 2.76+
-are required. GitHub CLI is needed only for client onboarding.
+are required. GitHub CLI is needed for onboarding and GitHub repository actions.
 
 ## Workspaces
 
-1. Enter an optional tenant ID/domain, or leave it blank to discover available
-   directories. Choose Browser or Windows account window for authentication.
-2. Select Sign in & discover and complete Microsoft sign-in and MFA.
-3. Select the subscription and Log Analytics workspace. Workspaces refresh when
-   the subscription changes. Review the Selected workspace details.
-4. Copy details, open Sentinel audit, or continue to client onboarding.
+1. In **Choose a client**, select a saved client on the left, or use **Add client**.
+   **Open CyberQP** stays below **Manage saved profile** for temporary-access activation.
+2. In **Connect to Azure** on the right, confirm the tenant and select **Sign in &
+   discover**. Browser sign-in is the default; **Sign-in options** also offers the
+   Windows account window. The tenant can be blank for directory discovery.
+3. Complete Microsoft sign-in and MFA. **Show Microsoft sign-in** and **Cancel
+   sign-in** appear only while sign-in is running.
+4. In **Choose a workspace**, select the subscription and Log Analytics workspace.
+   Then choose **View analytics rules**, **Export audit evidence**, or **Onboard
+   workspace**. These actions become available after a workspace is selected.
 
-Client profiles are optional. Add a client, enter its slug, and save the profile
-for future visits. The tenant field belongs to the selected profile; clear it
-when connecting to a different client. Manage saved profile contains Delete saved
-client, which removes only the local profile.
+**Manage saved profile** contains the client slug, Save profile changes, Import
+configuration and Delete saved client. Deleting removes only the local profile.
+**Workspace identifiers** expands the full account, tenant and resource details
+with a copy button.
 
-Access & discovery tools contains CyberQP, Azure portal, refresh actions, and the
-missing-subscription diagnostic. Activate JIT access through your organization's
-normal process before connecting. Browser shortcuts do not authenticate the app.
-The app uses Azure CLI and never collects your password.
+The **Access & support** card contains three expandable sections:
+
+- **First-time access setup**: optional access-management review after sign-in,
+  Azure access-management elevation and reviewed Contributor setup.
+- **Connection troubleshooting**: access/session refresh, subscription/workspace
+  refresh, missing-subscription checks, Azure portal, Sign out and CyberQP region.
+- **Saved access activity**: persistent setup timestamps and last recorded results.
+
+Activate JIT access through your organization's normal process before connecting.
+Browser shortcuts do not authenticate the app. The app never collects your password.
+Sidebar sections group connection, analyst tasks, and engineer/auditor tasks; they
+are navigation groups, not permission roles or access enforcement.
 
 ## Onboarding
 
@@ -33,7 +45,7 @@ Onboarding prepares an Azure Lighthouse delegation and a target-file pull reques
 Use groups from the managing tenant and existing GitHub environments. Review the
 current onboarding documentation and authorization requirements before applying.
 
-## Review & apply
+## Review onboarding
 
 Run Preview setup. Inspect the destination summary and Operation activity before
 choosing Apply reviewed setup. Apply requires a successful matching preview less
@@ -71,7 +83,7 @@ client evidence in your approved storage location.
 
 Select a client subscription and workspace. **Analytics rules** automatically reads its configured Sentinel rules, including enabled and disabled rules. Search by name/type/severity/ID, filter by state, and select a row to inspect raw configuration. Refresh rules reads Azure again. Missing enabled flags are shown as Not specified; incomplete or denied reads are explicitly labeled. This page does not list generated security alerts or modify rules. Azure public cloud only.
 
-Under **Workspaces > Access & discovery tools > Check setup access / Contributor**, the app checks the signed-in user's subscription permissions. If provider registration is already permitted, no role is added. Otherwise, an account with role-assignment rights can review and create an active Contributor assignment for itself on that selected client subscription. Azure enforces conditions and policies. Contributor does not grant permission to assign roles or replace Lighthouse onboarding permissions.
+Under **Workspaces > Access & support > First-time access setup > Check setup access / Contributor**, the app checks the signed-in user's subscription permissions. If provider registration is already permitted, no role is added. Otherwise, an account with role-assignment rights can review and create an active Contributor assignment for itself on that selected client subscription. Azure enforces conditions and policies. Contributor does not grant permission to assign roles or replace Lighthouse onboarding permissions.
 
 CyberQP activation remains in CyberQP. The Contributor assignment is persistent, not a CyberQP-managed timed activation; remove it through Azure IAM when no longer needed. Allow Azure permission propagation before retrying Preview setup. The app does not grant access automatically during sign-in.
 
@@ -144,7 +156,7 @@ MFA challenge troubleshooting: [Microsoft guidance](https://learn.microsoft.com/
 
 ## Refreshing setup access and tracking Contributor setup
 
-Under **Workspaces > Access & discovery tools**, use **Refresh setup access** to
+Under **Workspaces > Access & support > Connection troubleshooting**, use **Refresh setup access** to
 read current subscription permissions and validate an empty subscription template.
 It keeps the selected workspace and changes no roles or resources. It checks
 provider registration and deployment actions; **Preview setup** still performs
@@ -173,3 +185,7 @@ current CyberQP account. Select **Use another account** in Microsoft's window if
 it selected the wrong account. These are account/tenant failures, not RBAC
 propagation. The app preserves Microsoft's error code for troubleshooting and
 cannot create or reactivate an account missing from that tenant.
+
+The footer shows a compact status so a long diagnostic cannot push the workspace
+offscreen. Full operation errors remain in their dialogs and Operation activity.
+Repository catalog actions are grouped into selected-rule actions and saved activity.

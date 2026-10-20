@@ -1,18 +1,18 @@
 ## Repository UI development pilot
 
-The Repository catalog, guided Rule builder, reviewed draft pull request submission, a searchable saved-review list, and client selection for GitHub previews are available in this development branch. See [pilot setup and limits](docs/REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
+The desktop app has three sections: **Connect** (Microsoft sign-in and workspace discovery), **Rules** (live workspace rules and the team's rule library) and **Rule builder**. The Sentinel audit export and onboarding screens are not in the desktop app at present; onboarding remains available from the command line. See [pilot setup and limits](docs/REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
 
 # Sentinel Workspace
 
 ## Discover workspace details without a tenant ID
 
-1. Start the desktop app. Azure CLI and Python must be installed; no terminal commands are needed during use. GitHub CLI is only needed for full onboarding.
-2. Use **Sign in to CyberQP** if applicable and activate the client's JIT account there.
-3. Leave **Tenant ID or domain (optional)** blank. Clear a previously selected client's tenant when connecting to another client. Creating a saved client is optional.
-4. Click **Sign in & discover**. Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one.
+1. Start the desktop app. Azure CLI and Python must be installed; no terminal commands are needed during use. GitHub CLI is only needed for the rule library and for submitting rules for approval.
+2. Use **Open CyberQP** if applicable and activate the client's JIT account there.
+3. Leave the tenant blank (select **Change** beside the saved tenant to edit it). Creating a saved client is optional.
+4. Click **Sign in with Microsoft**. Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one.
 5. The app automatically selects the default accessible subscription and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which includes the tenant ID. Selecting another subscription automatically reloads its workspaces.
-6. Select the intended workspace if several are available. The **Workspace details** text box shows **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**. Workspace ID is the Log Analytics customer GUID, not the ARM resource path.
-7. Click **Copy workspace details** to copy the displayed text. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
+6. Select the intended workspace if several are available. The **Workspace** card shows **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**. Workspace ID is the Log Analytics customer GUID, not the ARM resource path.
+7. Click **Copy details** to copy the displayed values. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
 
 **Cancel sign-in** stays available while Microsoft authentication is pending. If you
 close the browser tab or abandon sign-in, click this button in the app to stop its
@@ -26,7 +26,7 @@ responses are also handled as cancellation, without starting MFA recovery.
 Microsoft's [MSAL callback implementation](https://github.com/AzureAD/microsoft-authentication-library-for-python/blob/dev/msal/oauth2cli/authcode.py)
 waits for an authentication response, rather than tracking browser-tab lifetime.
 
-**Open Azure portal** is a separate browser shortcut. A portal-only sign-in cannot populate this app's authenticated session; use **Sign in & discover** to authorize discovery. The app never collects your password. Windows account window remains available for organizations that require broker-based authentication.
+A sign-in to the Azure portal in your browser does not sign this app in; use **Sign in with Microsoft** to authorize discovery. The app never collects your password. Windows account window remains available for organizations that require broker-based authentication.
 
 Only resources accessible to the signed-in account are returned. No subscriptions means the account needs appropriate subscription access or the correct directory; no workspaces means check the selected subscription and workspace read access. Discovery lists Log Analytics workspaces and does not assert that Sentinel is enabled on each. Advanced permission/onboarding tools remain separate and require explicit review and apply.
 
@@ -38,12 +38,11 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 - Saves client names and tenant IDs/domains in a local dropdown.
 - Opens Microsoft sign-in for an authorized Azure account, including JIT accounts.
 - Discovers accessible subscriptions and Log Analytics workspace details.
-- Exports selected Sentinel configuration with a readable report and original JSON. Optional Sentinel activity and selected security source logs include samples or bounded period exports. See [Sentinel Configuration & Logs](docs/AUDIT-EVIDENCE.md).
-- Previews selected source-table counts and latest timestamps. Reports unavailable, denied and incomplete collections explicitly.
-- Verifies existing shared-group access for workspaces hosted in the managing tenant.
-- Onboards external tenants through Azure Lighthouse, or registers same-tenant workspaces using existing direct access. Both paths prepare a client-target pull request and generated dropdown updates.
+- Lists every analytics rule in the selected workspace, enabled or disabled, with search, state filters, rule details and a ZIP export.
+- Browses clients, rules and assignments in your team's rule library, and opens library rules in the Rule builder.
+- Builds, checks and exports detection rules, and submits them for a teammate's approval as pull requests.
 - Deletes saved client entries without deleting cloud resources.
-- Requires a successful matching preview before Apply.
+- Command-line onboarding (`py -m sentinel_app.lighthouse_onboarding`) onboards external tenants through Azure Lighthouse. It requires a successful matching preview before Apply.
 
 The app is independent of any employer, customer, or privileged-access provider. CyberQP is optional; activate access through your own provider if your organization requires it. The app starts with an empty client list and blank GitHub settings.
 
@@ -55,7 +54,7 @@ Discovery does not require GitHub or CyberQP. Full onboarding requires a compati
 2. Install Python 3.10 or newer with Tkinter, and Azure CLI 2.76 or newer.
 3. Install GitHub CLI if you want full Azure + GitHub onboarding.
 4. Double-click **Start-Sentinel.cmd**.
-5. Select **Add client**, optionally save a display name and client slug; the tenant GUID/domain can be left blank.
+5. Select **+ New client** and enter its name; the tenant GUID/domain can be left blank.
 6. Activate JIT access through your organization's normal process, then select **Sign in with Microsoft**.
 7. Workspaces load automatically after sign-in or changing the subscription. Use **Refresh workspaces** to reload them.
 
@@ -63,11 +62,10 @@ This development app requires PyYAML. Run `py -m pip install -r requirements.txt
 
 ## Optional first-time Azure access
 
-Global Administrators can check **Review Azure access management after sign-in** on
-Connect, enter the client tenant GUID, and review the account and tenant before enabling
-the same setting normally used in Entra Properties. It also works before subscriptions
-are visible. The grant persists until removed; sign-out does not revoke it.
-See [the access-management steps](docs/APP-ONBOARDING.md#enable-azure-resource-access-during-first-time-sign-in).
+Azure access management (elevating a Global Administrator) and Contributor setup are
+onboarding steps and are no longer in the desktop app. Follow
+[the access-management steps](docs/APP-ONBOARDING.md#enable-azure-resource-access-during-first-time-sign-in)
+in Microsoft Entra ID when a client needs them.
 
 ## Two setup modes
 
@@ -145,4 +143,4 @@ Licensed under the [MIT License](LICENSE).
 
 ## Missing subscription troubleshooting
 
-After sign-in, use **Refresh subscriptions** to request a fresh list including non-Enabled states. If a subscription is still absent, choose **Check missing subscription** and paste its subscription ID from Azure portal. The read-only diagnostic shows the app account, authentication tenant, cloud, subscription state, and workspace details or the Azure error. **Copy results** copies the diagnostic text. This does not grant permissions, change the selected deployment destination, or bypass access checks. Diagnostic results may contain client identifiers; share only with authorized recipients.
+After sign-in, use **↻ Refresh** beside the subscription list to request a fresh list including non-Enabled states. If a subscription is still absent, choose **Can't see a subscription?** and paste its subscription ID from Azure portal. The read-only diagnostic shows the app account, authentication tenant, cloud, subscription state, and workspace details or the Azure error. **Copy results** copies the diagnostic text. This does not grant permissions, change the selected deployment destination, or bypass access checks. Diagnostic results may contain client identifiers; share only with authorized recipients.

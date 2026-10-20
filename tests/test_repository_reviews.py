@@ -62,7 +62,7 @@ class FakeGitHub:
             elif endpoint.endswith("/pulls"):
                 result = {"html_url": "https://github.com/" + REPO + "/pull/12", "state": "open",
                           "head": {"sha": "d" * 40, "ref": body["head"], "repo": {"id": 42}},
-                          "base": {"ref": body["base"]}}
+                          "base": {"ref": body["base"]}, "body": body.get("body", ""), "draft": body.get("draft")}
                 self.pulls.append(copy.deepcopy(result))
             else: raise AssertionError(endpoint)
             if self.fail_after and endpoint.endswith(self.fail_after):
@@ -111,7 +111,7 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual([entry["path"] for entry in tree["tree"]], [NEW])
         self.assertEqual(commit["parents"], ["a" * 40])
         self.assertTrue(ref["ref"].startswith("refs/heads/codex/rule-"))
-        self.assertTrue(pull["draft"]); self.assertEqual(pull["base"], "main")
+        self.assertFalse(pull["draft"]); self.assertEqual(pull["base"], "main")
         self.assertEqual(url, "https://github.com/example/detections/pull/12")
         saved = load_request(next(self.folder.glob("*.review.json")))
         self.assertEqual(saved["pull_request"], url)

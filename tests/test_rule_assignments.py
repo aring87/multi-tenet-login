@@ -84,7 +84,7 @@ class AssignmentTests(unittest.TestCase):
         self.assertEqual(len(writes[0][2]['tree']),2)
         self.assertTrue(all(f['path'].startswith('clients/') for f in writes[0][2]['tree']))
         self.assertTrue(writes[2][2]['ref'].startswith('refs/heads/codex/assign-'))
-        self.assertTrue(writes[-1][2]['draft']);self.assertNotIn('/dispatches',str(writes))
+        self.assertFalse(writes[-1][2]['draft']);self.assertNotIn('/dispatches',str(writes))
         self.assertEqual(self.remote.head,'a'*40)
         saved=assignments.load_request(next(self.folder.glob('*.assignment.json')))
         self.assertEqual(saved['pull_request'],url)

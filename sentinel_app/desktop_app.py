@@ -1,50 +1,74 @@
-"""Sentinel Client Onboarding: local Windows desktop interface."""
+"""Sentinel Workspace: local Windows desktop interface."""
 import json
 import os
 import queue
 import re
 import subprocess
-import sys
 import threading
 import time
 import tkinter as tk
-import traceback
 import webbrowser
-from pathlib import Path
-from tkinter import ttk, messagebox, filedialog, simpledialog
-from .desktop_theme import configure_theme
-from .connection_page import build_connection
+from datetime import datetime
+from tkinter import ttk, messagebox
+from . import __version__
+from .desktop_theme import configure_theme, app_icon, COLORS, FONTS, TONES, px
+from . import ui_kit as kit
 from .auth_recovery import AuthenticationRequired, SignInCancelled
 from .signin_process import check_cancelled
 from .rules_page import RulesPage
 from .catalog_page import CatalogPage
 from .rule_builder_page import RuleBuilderPage
 from .signin_window import create_handoff
-from .workspace_tools import access_plan, apply_contributor
-from .access_readiness import AccessHistory, check_access, history_text
-from .tenant_access import access_management_plan, enable_access_management
-from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, fingerprint,
-                             config_from_workspace, full_run, validate_tenant_hint, CYBERQP_PORTALS)
-from .lighthouse_onboarding import validate_target, slug, CLIENT_MAXIMUM
-from .same_tenant_onboarding import validate_app_config as validate_config, onboarding_mode, review_text
-from datetime import datetime, timedelta, timezone
-from .audit_evidence import (collect_evidence, date_range, validate_options, CONFIGURATIONS,
-                            list_log_tables, preview_log_tables)
+from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, validate_tenant_hint, CYBERQP_PORTALS)
 
-# Constants that are identical for every client under the delegated model. They are
-# entered once and persisted locally, rather than retyped per onboarding.
-SETTINGS_KEYS = ("github_owner", "github_repo", "managing_tenant_id", "deploy_group_object_id",
-                 "read_group_object_id", "engineer_group_object_id", "preview_environment",
-                 "production_environment", "msp_offer_name", "delegation_location")
+# Only the GitHub repository is edited here. Any other keys found in an existing
+# settings.json (the command-line onboarding tools keep theirs there) are preserved verbatim.
+SETTINGS_KEYS = ("github_owner", "github_repo")
+
+# Page keys in notebook order, with navigation and header copy.
+PAGES = ("connect", "rules", "builder")
+NAVIGATION = dict(
+    connect=("Connect", "Pick a client and sign in", "connect",
+             "Connect", "Sign in with your Microsoft account, then choose the client's workspace."),
+    rules=("Rules", "Live rules and the library", "rules",
+           "Rules", "Browse the live rules in the selected workspace, or the rule library."),
+    builder=("Rule builder", "Create and edit rules", "builder",
+             "Rule builder", "Create or edit a rule and submit it for a teammate's approval."))
+
+EVENT_POLL_MS = 100
+SIGNIN_FOCUS_SECONDS = 90
+SIGNIN_FOCUS_POLL_MS = 750
+GITHUB_LOGIN_TIMEOUT_SECONDS = 900
+STATUS_PREVIEW_CHARS = 180
+CONTENT_MAX_WIDTH = 1320
+SCROLL_TARGET_OFFSET = 140
+PROGRESS_REPORT_EVERY = 5
+FLASH_SECONDS = 8
+
+
+def write_json(path, value):
+    """Write JSON through a temporary file so a failure never truncates the original."""
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(value, indent=2), encoding="utf-8")
+    temp.replace(path)
+
+
+def set_aside(path):
+    """Rename an unreadable file out of the way instead of overwriting it later."""
+    target = path.with_name(path.name + ".corrupt-" + datetime.now().strftime("%Y%m%d%H%M%S"))
+    try: path.replace(target); return target
+    except OSError: return None
+
 
 class App:
     def __init__(self, root):
         self.root = root
         root.title("Sentinel Workspace")
-        root.geometry("1280x880")
-        root.minsize(1120,740)
-        root.configure(bg="#edf2f7")
+        configure_theme(root)
+        self.state_file = DATA / "ui-state.json"
         DATA.mkdir(exist_ok=True)
+        self.ui_state = self.read_state()
+        self.apply_geometry(self.ui_state.get("geometry"))
         self.events = queue.Queue()
         self.busy = False
         self.session = None
@@ -52,1158 +76,1240 @@ class App:
         self.subscriptions = []
         self.workspaces = []
         self.workspace = None
-        self.plan = None
-        self.extras = {}
         self.clientfile = DATA / "clients.json"
         self.settingsfile = DATA / "settings.json"
-        self.access_history = AccessHistory(DATA / "access-history.json")
+        self.startup_notes = []
         self.clients = self.read_clients()
         self.settings = self.read_settings()
         self.vars = {}
         self.controls = []
-        self.evidence_folder = None
-        self.operation_page = 2
+        self.operation_page = "connect"
+        self.operation_title = ""
+        self.flash_timer = None
         self.signin_handoff = None
         self.signin_timer = None
         self.signin_active = False
         self.signin_cancel = None
         self.auth_recovery_attempts = set()
         self.build()
-        self.vars["tenant"].trace_add("write",lambda *args:self.render_access_status())
+        remembered = self.ui_state.get("client")
+        if isinstance(remembered, str) and any(c["name"] == remembered for c in self.clients):
+            self.vars["client_name"].set(remembered)
         self.refresh_clients()
-        self.root.after(100,self.poll)
-        self.root.protocol("WM_DELETE_WINDOW",self.close)
+        self.refresh_first_run()
+        for note in self.startup_notes: self.log(note)
+        if self.startup_notes: self.status.set(self.startup_notes[-1])
+        if "/" in self.github_repository():
+            self.root.after(300, self.rule_builder.check_github)
+        self.root.after(EVENT_POLL_MS, self.poll)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    # ---------------------------------------------------------------- storage
+    def read_state(self):
+        try:
+            value = json.loads(self.state_file.read_text(encoding="utf-8")) if self.state_file.exists() else {}
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def save_state(self):
+        state = dict(self.ui_state)
+        try:
+            if self.root.state() == "normal": state["geometry"] = self.root.geometry()
+            state["client"] = self.vars["client_name"].get()
+            state["rule_view"] = self.rule_view.get()
+            write_json(self.state_file, state)
+        except (OSError, tk.TclError):
+            pass
+
+    def apply_geometry(self, remembered):
+        width, height = px(1360), px(900)
+        screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        x = y = None
+        match = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", str(remembered or ""))
+        if match:
+            width, height = int(match.group(1)), int(match.group(2))
+            x, y = int(match.group(3)), int(match.group(4))
+        width = max(px(1120), min(width, screen_w - px(16)))
+        height = max(px(740), min(height, screen_h - px(80)))
+        if x is None or not (0 <= x <= screen_w - px(200)) or not (0 <= y <= screen_h - px(200)):
+            x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 2 - px(20))
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.minsize(min(px(1120), screen_w), min(px(740), screen_h))
 
     def read_clients(self):
-        if self.clientfile.exists():
-            try:
-                clients=json.loads(self.clientfile.read_text(encoding="utf-8"))
-                require(isinstance(clients,list), "Invalid saved client inventory.")
-                for c in clients:
-                    require(set(c)=={"name","slug","tenant"} and all(isinstance(v,str) for v in c.values()),
-                            "Invalid saved client entry.")
-                return clients
-            except Exception as error:
-                messagebox.showerror("Client inventory",str(error))
-                return []
-        return []
+        if not self.clientfile.exists(): return []
+        try:
+            clients = json.loads(self.clientfile.read_text(encoding="utf-8"))
+            require(isinstance(clients, list), "The saved client list is not a list.")
+            for c in clients:
+                require(isinstance(c, dict) and {"name", "tenant"} <= set(c) <= {"name", "tenant", "slug"}
+                        and all(isinstance(v, str) for v in c.values()), "A saved client entry is incomplete.")
+            return [dict(name=c["name"], tenant=c["tenant"]) for c in clients]
+        except Exception as error:
+            kept = set_aside(self.clientfile)
+            self.startup_notes.append("The saved client list couldn't be read" +
+                                      (f"; it was kept as {kept.name}" if kept else "") + ". Add your clients again.")
+            self.log(str(error))
+            return []
 
     def read_settings(self):
-        if self.settingsfile.exists():
-            try:
-                value=json.loads(self.settingsfile.read_text(encoding="utf-8"))
-                require(isinstance(value,dict), "Invalid saved settings.")
-                require(not (value.keys()-set(SETTINGS_KEYS)), "Saved settings contain unknown fields.")
-                require(all(isinstance(v,str) for v in value.values()), "Saved settings must be strings.")
-                return value
-            except Exception as error:
-                messagebox.showerror("Settings",str(error))
-                return {}
-        return {}
+        if not self.settingsfile.exists(): return {}
+        try:
+            value = json.loads(self.settingsfile.read_text(encoding="utf-8"))
+            require(isinstance(value, dict), "Saved settings are not an object.")
+        except Exception as error:
+            kept = set_aside(self.settingsfile)
+            self.startup_notes.append("Saved settings couldn't be read" +
+                                      (f"; they were kept as {kept.name}" if kept else "") + ". Set the rule library again.")
+            self.log(str(error))
+            return {}
+        skipped = [k for k, v in value.items() if not isinstance(v, str)]
+        if skipped: self.startup_notes.append("Ignored settings that aren't text: " + ", ".join(skipped) + ".")
+        return {k: v for k, v in value.items() if isinstance(v, str)}
 
     def save_settings(self):
-        value={k:self.vars[k].get().strip() for k in SETTINGS_KEYS if k in self.vars}
-        for key in ("managing_tenant_id","deploy_group_object_id","read_group_object_id",
-                    "engineer_group_object_id"):
-            if value.get(key):
-                try:
-                    value[key]=guid(value[key],key.replace("_"," "))
-                except Stop as error:
-                    messagebox.showerror("Settings",str(error),parent=self.root)
-                    return
+        value = dict(self.settings)
+        value.update({k: self.vars[k].get().strip() for k in SETTINGS_KEYS if k in self.vars})
         try:
-            temp=self.settingsfile.with_suffix(".tmp")
-            temp.write_text(json.dumps(value,indent=2),encoding="utf-8")
-            temp.replace(self.settingsfile)
+            write_json(self.settingsfile, value)
         except OSError as error:
-            messagebox.showerror("Settings",str(error),parent=self.root)
+            messagebox.showerror("Save rule library", "The settings couldn't be saved.\n\n" + str(error), parent=self.root)
             return
-        self.settings=value
-        for key,current in value.items():
+        self.settings = value
+        for key, current in value.items():
             if key in self.vars:
                 self.vars[key].set(current)
-        self.status.set("Managing-tenant settings saved locally. They apply to every client onboarding.")
+        self.flash("Rule library saved.")
+        self.refresh_first_run()
+        self.rule_builder.github_user = None
+        if "/" in self.github_repository():
+            self.github_status.set("Checking GitHub sign-in…")
+            self.rule_builder.check_github(force=True)
+        else:
+            self.github_status.set("Enter the organization and repository, then select Save.")
+            self.github_pill.set("Not set")
 
-    def var(self,name,default=""):
-        self.vars[name]=tk.StringVar(value=default)
+    def github_repository(self):
+        return "/".join(self.vars[k].get().strip() for k in ("github_owner", "github_repo")).strip("/")
+
+    # ---------------------------------------------------------------- helpers
+    def var(self, name, default=""):
+        self.vars[name] = tk.StringVar(value=default)
         return self.vars[name]
 
     def button(self, parent, text, command, style="Secondary.TButton"):
-        w=ttk.Button(parent,text=text,command=command,style=style)
-        self.controls.append((w,"normal"))
+        w = ttk.Button(parent, text=text, command=command, style=style)
+        self.controls.append((w, "normal"))
         return w
 
-    def form(self, parent, label, name, default="", values=None):
-        box=ttk.Frame(parent,style="Card.TFrame")
-        box.pack(fill="x",pady=(0,14))
-        caption=ttk.Label(box,text=label,style="Field.TLabel",wraplength=600)
-        caption.pack(anchor="w",pady=(0,6));self.wrap_to_parent(caption)
-        v=self.var(name,default)
+    def form(self, parent, label, name, default="", values=None, hint=None, pady=14):
+        box = ttk.Frame(parent, style="Card.TFrame")
+        box.pack(fill="x", pady=(0, px(pady)))
+        kit.field_label(box, label, hint)
+        v = self.var(name, default)
         if values is None:
-            w=ttk.Entry(box,textvariable=v)
+            w = ttk.Entry(box, textvariable=v)
         else:
-            w=ttk.Combobox(box,textvariable=v,values=values,state="readonly")
+            w = ttk.Combobox(box, textvariable=v, values=values, state="readonly")
         w.pack(fill="x")
-        self.controls.append((w,"readonly" if values is not None else "normal"))
+        self.controls.append((w, "readonly" if values is not None else "normal"))
         return w
 
-    def wrap_to_parent(self,label,margin=0):
-        label.master.bind("<Configure>",lambda event,w=label,m=margin:w.configure(wraplength=max(180,event.width-m)),add="+")
-
-    def card(self, parent, title, subtitle=""):
-        outer=ttk.Frame(parent,style="Card.TFrame",padding=22)
-        ttk.Label(outer,text=title,style="CardTitle.TLabel").pack(anchor="w")
-        if subtitle:
-            label=ttk.Label(outer,text=subtitle,style="Muted.TLabel",justify="left",wraplength=600)
-            label.pack(fill="x",pady=(6,18));self.wrap_to_parent(label,44)
-        else:ttk.Frame(outer,style="Card.TFrame",height=16).pack()
-        body=ttk.Frame(outer,style="Card.TFrame");body.pack(fill="both",expand=True)
-        return outer,body
-
-    def disclosure(self,parent,title,expanded=False):
-        outer=ttk.Frame(parent,style="Card.TFrame");outer.pack(fill="x",pady=(4,12))
-        body=ttk.Frame(outer,style="Card.TFrame",padding=(0,12,0,0))
-        def toggle():
-            if body.winfo_manager():body.pack_forget();button.configure(text="+  "+title)
-            else:body.pack(fill="x");button.configure(text="−  "+title)
-        button=self.button(outer,("−  " if expanded else "+  ")+title,toggle,"Disclosure.TButton")
-        button.pack(fill="x")
-        if expanded:body.pack(fill="x")
-        return body
-
-    def form_pair(self,parent,fields):
-        row=ttk.Frame(parent,style="Card.TFrame");row.pack(fill="x")
-        for index,field in enumerate(fields):
-            column=ttk.Frame(row,style="Card.TFrame");column.pack(side="left",fill="both",expand=True,padx=(0,16) if index==0 else 0)
-            self.form(column,*field)
+    def form_pair(self, parent, fields, weights=(1, 1)):
+        row = ttk.Frame(parent, style="Card.TFrame"); row.pack(fill="x")
+        for index, (field, weight) in enumerate(zip(fields, weights)):
+            row.columnconfigure(index, weight=weight, uniform="pair" if weights[0] == weights[1] else "")
+            column = ttk.Frame(row, style="Card.TFrame")
+            column.grid(row=0, column=index, sticky="new", padx=(0, px(12)) if index == 0 else 0)
+            self.form(column, *field)
         return row
 
-    def section(self,parent,title,description=""):
-        frame=ttk.Frame(parent,style="Card.TFrame");frame.pack(fill="x",pady=(6,12))
-        ttk.Label(frame,text=title,style="Section.TLabel").pack(anchor="w",pady=(0,10))
-        if description:
-            label=ttk.Label(frame,text=description,style="Muted.TLabel",wraplength=600,justify="left")
-            label.pack(fill="x",pady=(0,12));self.wrap_to_parent(label)
-        return frame
+    def hint(self, parent, text, pady=(0, 14)):
+        label = kit.wrap_to_parent(ttk.Label(parent, text=text, style="Hint.TLabel", justify="left", wraplength=px(320)))
+        label.pack(fill="x", pady=tuple(px(p) for p in pady))
+        return label
 
-    def sync_connection(self):
-        if not hasattr(self,"connection_note"):return
-        active=bool(self.workspace)
-        for button in self.workspace_actions:
-            button.configure(state="normal" if active and not self.busy else "disabled")
-        self.subbox.configure(state="readonly" if self.subscriptions and not self.busy else "disabled")
-        self.wsbox.configure(state="readonly" if self.workspaces and not self.busy else "disabled")
-        if active:
-            account=(getattr(self.session,"account",None) or {}).get("user",{}).get("name","")
-            self.connection_note.set(("Signed in as "+account+". " if account else "")+
-                "Selected: "+self.workspace["workspace_name"]+". Choose what to do next.")
-        elif self.subscriptions:self.connection_note.set("Select a subscription and workspace to continue.")
-        else:self.connection_note.set("Sign in above to load your subscriptions and workspaces.")
+    def current_page(self):
+        return PAGES[self.tabs.index("current")] if hasattr(self, "tabs") else PAGES[0]
+
+    def show_page(self, name):
+        self.tabs.select(PAGES.index(name))
+
+    def flash(self, text, tone="success", seconds=FLASH_SECONDS):
+        """Confirm something in the status bar, then return to Ready."""
+        if self.flash_timer is not None:
+            self.root.after_cancel(self.flash_timer); self.flash_timer = None
+        self.status.set(text)
+        self.activity_badge.set("Done" if tone == "success" else "Note", tone)
+        def revert():
+            self.flash_timer = None
+            if not self.busy:
+                self.status.set("Ready."); self.activity_badge.set("Ready", "success")
+        self.flash_timer = self.root.after(int(seconds * 1000), revert)
+
+    # ------------------------------------------------------------------ shell
+    def build(self):
+        self.icon = app_icon(self.root)
+        self.root.iconphoto(True, self.icon)
+        self.build_sidebar()
+        main = tk.Frame(self.root, bg=COLORS["canvas"]); main.pack(side="left", fill="both", expand=True)
+        self.build_header(main)
+        self.build_statusbar(main)
+        # Pages may pin a footer here so their primary actions stay visible while the page scrolls.
+        self.footer_slot = tk.Frame(main, bg=COLORS["canvas"]); self.footer_slot.pack(side="bottom", fill="x")
+        self.tabs = ttk.Notebook(main, style="Hidden.TNotebook", takefocus=0); self.tabs.pack(fill="both", expand=True)
+        self.page_contents, self.page_canvases = [], []
+        for name in PAGES:
+            page = ttk.Frame(self.tabs); self.tabs.add(page, text=NAVIGATION[name][0])
+            canvas = tk.Canvas(page, bg=COLORS["canvas"], highlightthickness=0, bd=0)
+            scroll = ttk.Scrollbar(page, orient="vertical", command=canvas.yview, style="Canvas.Vertical.TScrollbar")
+            canvas.pack(side="left", fill="both", expand=True)
+            canvas.configure(yscrollcommand=kit.autohide(scroll, lambda s=scroll, c=canvas: s.pack(side="right", fill="y", before=c)))
+            content = ttk.Frame(canvas, padding=(kit.space("page"), kit.space("xl"), kit.space("page"), kit.space("page")))
+            window = canvas.create_window((0, 0), window=content, anchor="nw")
+            content.bind("<Configure>", lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
+            canvas.bind("<Configure>", lambda e, c=canvas, w=window: self.fit_page(c, w, e.width))
+            self.page_canvases.append(canvas); self.page_contents.append(content)
+        connect, rules, builder = self.page_contents
+        self.build_connect(connect)
+        self.build_rules(rules)
+        self.rule_builder = RuleBuilderPage(self, builder, DATA)
+        self.last_page = None
+        self.tabs.bind("<<NotebookTabChanged>>", self.page_changed)
+        self.page_changed()
+        self.root.bind("<MouseWheel>", self.scroll_page)
+        self.bind_shortcuts()
+
+    @staticmethod
+    def fit_page(canvas, window, width):
+        # Keep line lengths readable on wide monitors by centring a capped column.
+        column = min(width, px(CONTENT_MAX_WIDTH))
+        canvas.itemconfigure(window, width=column)
+        canvas.coords(window, max(0, (width - column) // 2), 0)
+
+    def bind_shortcuts(self):
+        """Windows-conventional shortcuts; dialogs have their own bindings and are unaffected."""
+        for index, name in enumerate(PAGES, start=1):
+            self.root.bind(f"<Control-Key-{index}>", lambda event, n=name: self.show_page(n))
+        self.root.bind("<F5>", lambda event: self.refresh_current())
+        self.root.bind("<Control-n>", lambda event: (self.show_page("builder"), self.rule_builder.new()))
+        self.root.bind("<Control-s>", lambda event: self.rule_builder.save() if self.current_page() == "builder" else None)
+        self.root.bind("<Control-f>", lambda event: self.focus_search())
+
+    def refresh_current(self):
+        if self.busy: return
+        page = self.current_page()
+        if page == "connect":
+            if self.session is not None: self.refresh_subscriptions()
+        elif page == "rules":
+            (self.rules_page.load if self.rule_view.get() == "workspace" else self.catalog_page.load)()
+        else:
+            self.rule_builder.check_github(force=True)
+
+    def focus_search(self):
+        if self.current_page() == "rules":
+            page = self.rules_page if self.rule_view.get() == "workspace" else self.catalog_page
+            page.search_entry.focus_set(); page.search_entry.select_range(0, "end")
+        elif self.current_page() == "connect":
+            self.clientbox.focus_set()
+        return "break"
+
+    def build_sidebar(self):
+        c = COLORS
+        side = tk.Frame(self.root, bg=c["sidebar"], width=px(244))
+        side.pack(side="left", fill="y"); side.pack_propagate(False)
+        brand = tk.Frame(side, bg=c["sidebar"]); brand.pack(fill="x", padx=px(16), pady=(px(26), px(28)))
+        logo = tk.Frame(brand, bg=c["accent"], width=px(36), height=px(36)); logo.pack(side="left")
+        logo.pack_propagate(False)
+        glyph = kit.icon_label(logo, "shield", c["accent"], "#FFFFFF", "icon_large")
+        if glyph: glyph.pack(expand=True)
+        words = tk.Frame(brand, bg=c["sidebar"]); words.pack(side="left", padx=(px(12), 0))
+        tk.Label(words, text="Sentinel Workspace", font=FONTS["brand"], bg=c["sidebar"], fg="#FFFFFF", bd=0).pack(anchor="w")
+        tk.Label(words, text="Version " + __version__, font=FONTS["small"], bg=c["sidebar"], fg=c["sidebar_muted"],
+                 bd=0).pack(anchor="w")
+
+        footer = tk.Frame(side, bg=c["sidebar"]); footer.pack(side="bottom", fill="x", padx=px(20), pady=(0, px(20)))
+        for text, command, tip in (("Help & prerequisites", self.open_help, "Open the desktop guide"),
+                                   ("Open app data folder", lambda: os.startfile(str(DATA)), "Clients, drafts and submissions saved on this PC")):
+            item = kit.link(footer, text, command, c["sidebar_muted"], c["sidebar_ink"], c["sidebar"],
+                            focus_color=c["sidebar_accent"])
+            item.pack(fill="x", pady=(px(6), 0))
+            kit.tooltip(item, tip)
+        session = tk.Frame(side, bg=c["sidebar_hover"], bd=0, highlightthickness=1,
+                           highlightbackground=c["sidebar_line"], highlightcolor=c["sidebar_line"])
+        session.pack(side="bottom", fill="x", padx=px(14), pady=(0, px(14)))
+        top = tk.Frame(session, bg=c["sidebar_hover"]); top.pack(fill="x", padx=px(12), pady=(px(10), 0))
+        self.session_dot = tk.Label(top, text="●", font=FONTS["small"], bg=c["sidebar_hover"], fg=c["subtle"], bd=0)
+        self.session_dot.pack(side="left")
+        self.session_title = tk.Label(top, text="Not signed in", font=FONTS["strong_small"], bg=c["sidebar_hover"],
+                                      fg=c["sidebar_ink"], bd=0)
+        self.session_title.pack(side="left", padx=(px(6), 0))
+        self.session_detail = tk.Label(session, text="", font=FONTS["small"], bg=c["sidebar_hover"],
+                                       fg=c["sidebar_muted"], bd=0, justify="left", anchor="w", wraplength=px(196))
+        self.session_detail.pack(fill="x", padx=px(12), pady=(px(3), px(10)))
+        kit.wrap_to_parent(self.session_detail, minimum=px(120))
+        self.signout_link = kit.link(session, "Sign out", lambda: self.logout(), c["sidebar_accent"], "#FFFFFF", c["sidebar_hover"],
+                                     font=FONTS["strong_small"], focus_color=c["sidebar_accent"])
+
+        self.nav = []
+        for index, name in enumerate(PAGES):
+            title, description, icon = NAVIGATION[name][:3]
+            row = tk.Frame(side, bg=c["sidebar"], cursor="hand2", takefocus=1, bd=0,
+                           highlightthickness=1, highlightbackground=c["sidebar"], highlightcolor=c["sidebar_accent"])
+            row.pack(fill="x", padx=px(12), pady=px(2))
+            marker = tk.Frame(row, bg=c["sidebar"], width=px(3)); marker.pack(side="left", fill="y")
+            glyph = kit.icon_label(row, icon, c["sidebar"], c["sidebar_muted"])
+            if glyph: glyph.pack(side="left", padx=(px(12), 0))
+            text = tk.Frame(row, bg=c["sidebar"], cursor="hand2"); text.pack(side="left", fill="x", padx=px(12), pady=px(9))
+            label = tk.Label(text, text=title, font=FONTS["strong"], bg=c["sidebar"], fg=c["sidebar_ink"],
+                             anchor="w", cursor="hand2", bd=0)
+            label.pack(anchor="w")
+            detail = tk.Label(text, text=description, font=FONTS["small"], bg=c["sidebar"], fg=c["sidebar_muted"],
+                              anchor="w", cursor="hand2", bd=0)
+            detail.pack(anchor="w")
+            parts = [row, marker, text, label, detail] + ([glyph] if glyph else [])
+            for part in parts:
+                part.bind("<Button-1>", lambda event, n=name: self.show_page(n))
+                part.bind("<Enter>", lambda event, i=index: self.paint_nav(i, hover=True))
+                part.bind("<Leave>", lambda event, i=index: self.paint_nav(i))
+            row.bind("<Return>", lambda event, n=name: self.show_page(n))
+            row.bind("<space>", lambda event, n=name: self.show_page(n))
+            kit.tooltip(row, f"{title}  (Ctrl+{index + 1})")
+            self.nav.append(dict(row=row, title=label, description=detail, marker=marker, parts=parts, icon=glyph))
+
+    @staticmethod
+    def open_help():
+        os.startfile(str(BASE / "docs" / "DESKTOP-START-HERE.md"))
+
+    def paint_nav(self, index, hover=False):
+        c = COLORS
+        item = self.nav[index]
+        selected = hasattr(self, "tabs") and index == self.tabs.index("current")
+        background = c["sidebar_active"] if selected else c["sidebar_hover"] if hover else c["sidebar"]
+        for part in item["parts"]:
+            if part is not item["marker"]:
+                part.configure(bg=background)
+        item["row"].configure(highlightbackground=background)
+        item["marker"].configure(bg=c["sidebar_accent"] if selected else background)
+        item["title"].configure(fg="#FFFFFF" if selected else c["sidebar_ink"])
+        if item["icon"]:
+            item["icon"].configure(fg=c["sidebar_accent"] if selected else c["sidebar_muted"])
+
+    def build_header(self, main):
+        c = COLORS
+        header = tk.Frame(main, bg=c["card"]); header.pack(fill="x")
+        inner = ttk.Frame(header, style="Card.TFrame", padding=(kit.space("page"), px(20), kit.space("page"), px(18)))
+        inner.pack(fill="x")
+        inner.columnconfigure(0, weight=1)
+        titles = ttk.Frame(inner, style="Card.TFrame"); titles.grid(row=0, column=0, sticky="ew")
+        self.page_title = tk.StringVar(); self.page_subtitle = tk.StringVar()
+        ttk.Label(titles, textvariable=self.page_title, style="PageTitle.TLabel").pack(anchor="w")
+        kit.wrap_to_parent(ttk.Label(titles, textvariable=self.page_subtitle, style="PageSubtitle.TLabel", width=1,
+                                     justify="left"), minimum=px(160)).pack(anchor="w", fill="x", pady=(px(3), 0))
+        chip = tk.Frame(inner, bg=c["raised"], bd=0, highlightthickness=1,
+                        highlightbackground=c["line"], highlightcolor=c["line"])
+        chip.grid(row=0, column=1, sticky="ne", padx=(kit.space("xl"), 0))
+        self.context_dot = tk.Label(chip, text="●", font=FONTS["small"], bg=c["raised"], fg=c["subtle"], bd=0)
+        self.context_dot.pack(side="left", padx=(px(12), px(6)), pady=px(7))
+        self.workspace_context = tk.StringVar(value="No workspace selected  ·  Sign in to begin")
+        tk.Label(chip, textvariable=self.workspace_context, font=FONTS["small"], bg=c["raised"], fg=c["ink_2"],
+                 bd=0, wraplength=px(300), justify="left").pack(side="left", padx=(0, px(12)), pady=px(7))
+        tk.Frame(main, bg=c["line"], height=1).pack(fill="x")
+        holder = tk.Frame(main, bg=c["canvas"], height=px(3)); holder.pack(fill="x"); holder.pack_propagate(False)
+        self.progress = ttk.Progressbar(holder, mode="indeterminate", maximum=100)
+
+    def build_statusbar(self, main):
+        c = COLORS
+        bar = tk.Frame(main, bg=c["card"]); bar.pack(side="bottom", fill="x")
+        tk.Frame(bar, bg=c["line"], height=1).pack(fill="x")
+        row = ttk.Frame(bar, style="Card.TFrame", padding=(kit.space("xl"), kit.space("sm"))); row.pack(fill="x")
+        self.activity_badge = kit.Pill(row, "Ready", "success")
+        self.activity_badge.pack(side="left", anchor="n")
+        self.status = tk.StringVar(value="Ready.")
+        self.status_preview = tk.StringVar()
+        def show_status(*args):
+            # A long diagnostic must not grow the footer; the full text stays in status and the log.
+            text = " ".join(self.status.get().split())
+            self.status_preview.set(text if len(text) <= STATUS_PREVIEW_CHARS else text[:STATUS_PREVIEW_CHARS - 3] + "…")
+        self.status.trace_add("write", show_status); show_status()
+        status = ttk.Label(row, textvariable=self.status_preview, style="Muted.TLabel")
+        status.pack(side="left", fill="x", expand=True, padx=(px(12), 0))
+        kit.wrap_to_parent(status, 0)
+
+    # --------------------------------------------------------------- connect
+    def build_connect(self, page):
+        c = COLORS
+        page.columnconfigure((0, 1), weight=1, uniform="connect")
+        gap = kit.space("sm")
+        self.first_run_text = tk.StringVar()
+        self.first_run_banner = kit.Banner(page, self.first_run_text, "info")
+        # Two independent columns, so a tall card on one side leaves no gap on the other.
+        left, right = ttk.Frame(page), ttk.Frame(page)
+        left.grid(row=1, column=0, sticky="new", padx=(0, gap)); right.grid(row=1, column=1, sticky="new", padx=(gap, 0))
+
+        signin = kit.Card(left, "Sign in", "Choose the client, then sign in with Microsoft.", icon="key")
+        signin.frame.pack(fill="x", pady=(0, kit.space("lg")))
+        body = signin.body
+        head = kit.field_label(body, "Client")
+        self.button(head, "+ New client…", self.add_client, "Small.Ghost.TButton").pack(side="right")
+        row = ttk.Frame(body, style="Card.TFrame"); row.pack(fill="x", pady=(0, px(14)))
+        self.clientbox = ttk.Combobox(row, textvariable=self.var("client_name"), values=[], state="readonly", width=12)
+        self.clientbox.pack(side="left", fill="x", expand=True)
+        self.controls.append((self.clientbox, "readonly"))
+        self.clientbox.bind("<<ComboboxSelected>>", self.client_changed)
+        self.client_menu = tk.Menu(self.root, tearoff=0, font=FONTS["body"], bg=c["card"], fg=c["ink"], bd=0,
+                                   activebackground=c["accent_soft"], activeforeground=c["ink"])
+        self.client_menu.add_command(label="Save this tenant to the client", command=self.save_client)
+        self.client_menu.add_separator()
+        self.client_menu.add_command(label="Remove client…", command=self.delete_client)
+        more = self.button(row, "⋯", lambda: self.show_menu(self.client_menu, more))
+        more.configure(width=3); more.pack(side="left", padx=(px(8), 0))
+        kit.tooltip(more, "More client actions")
+        # The tenant is filled in from the client; the field only opens when it needs attention.
+        self.tenant_row = ttk.Frame(body, style="Card.TFrame"); self.tenant_row.pack(fill="x", pady=(0, px(14)))
+        self.tenant_summary = tk.StringVar()
+        kit.wrap_to_parent(ttk.Label(self.tenant_row, textvariable=self.tenant_summary, style="Hint.TLabel",
+                                     justify="left", width=1), minimum=px(120)).pack(side="left", fill="x", expand=True)
+        self.tenant_change = ttk.Button(self.tenant_row, text="Change", style="Small.Ghost.TButton",
+                                        command=lambda: self.toggle_tenant(True))
+        self.tenant_change.pack(side="right"); self.controls.append((self.tenant_change, "normal"))
+        self.tenant_box = ttk.Frame(body, style="Card.TFrame")
+        tenant = self.form(self.tenant_box, "Tenant ID or domain", "tenant", hint="Optional", pady=6)
+        tenant.bind("<Return>", lambda event: self.login())
+        self.tenant_entry = tenant
+        self.hint(self.tenant_box, "Leave it blank to discover every directory your account can access.")
+        self.vars["tenant"].trace_add("write", lambda *args: self.render_tenant())
+        kit.field_label(body, "Sign-in method")
+        self.var("login_method", "Browser")
+        kit.Segmented(body, self.vars["login_method"], [("Browser", "Browser"), ("Windows account window", "Windows account")],
+                      enabled=lambda: not self.busy).pack(anchor="w", pady=(0, kit.space("lg")))
+        self.signin_main = self.button(body, "Sign in with Microsoft", self.login, "Primary.TButton")
+        self.signin_main.pack(fill="x")
+        self.signin_panel = tk.Frame(body, bg=c["accent_soft"], bd=0, highlightthickness=1,
+                                     highlightbackground=c["accent_line"], highlightcolor=c["accent_line"])
+        panel = tk.Frame(self.signin_panel, bg=c["accent_soft"]); panel.pack(fill="x", padx=px(14), pady=px(12))
+        tk.Label(panel, text="Waiting for Microsoft sign-in", font=FONTS["strong"], bg=c["accent_soft"],
+                 fg=c["ink"], bd=0, anchor="w").pack(fill="x")
+        waiting = tk.Label(panel, text="Finish signing in in the browser window. If you closed it, select Cancel sign-in.",
+                           font=FONTS["small"], bg=c["accent_soft"], fg=c["ink_2"], bd=0, anchor="w", justify="left",
+                           width=1)  # width=1: the wrapped text must not feed its width back into the layout.
+        waiting.pack(fill="x", pady=(px(2), px(10))); kit.wrap_to_parent(waiting)
+        actions = tk.Frame(panel, bg=c["accent_soft"]); actions.pack(fill="x")
+        self.signin_button = ttk.Button(actions, text="Bring window forward", command=self.bring_signin_forward,
+                                        state="disabled", style="Small.Secondary.TButton")
+        self.signin_button.pack(side="left")
+        self.cancel_signin_button = ttk.Button(actions, text="Cancel sign-in", command=self.cancel_signin,
+                                               state="disabled", style="Small.Secondary.TButton")
+        self.cancel_signin_button.pack(side="left", padx=(px(8), 0))
+        kit.divider(body, 14)
+        access = ttk.Frame(body, style="Card.TFrame"); access.pack(fill="x")
+        self.button(access, "Open CyberQP", self.open_cyberqp, "Small.Secondary.TButton").pack(side="right", anchor="center")
+        words = ttk.Frame(access, style="Card.TFrame"); words.pack(side="left", fill="x", expand=True)
+        ttk.Label(words, text="Need temporary access?", style="Field.TLabel").pack(anchor="w")
+        ttk.Label(words, text="Activate it in CyberQP before signing in.", style="Hint.TLabel").pack(anchor="w", pady=(px(2), 0))
+
+        workspace = kit.Card(right, "Workspace", "Choose the subscription and Log Analytics workspace to work in.",
+                             icon="cloud")
+        workspace.frame.pack(fill="x", pady=(0, kit.space("lg")))
+        self.connection_pill = kit.Pill(workspace.actions, "Not connected")
+        self.connection_pill.pack()
+        body = workspace.body
+        self.connection_note = tk.StringVar()
+        kit.wrap_to_parent(ttk.Label(body, textvariable=self.connection_note, style="Body.TLabel",
+                                     justify="left", wraplength=px(320))).pack(fill="x", pady=(0, px(14)))
+        self.subbox, self.sub_refresh = self.picker(body, "Subscription", "subscription", self.refresh_subscriptions,
+                                                    "Reload subscriptions from Azure (F5)")
+        self.subbox.bind("<<ComboboxSelected>>", self.subscription_changed)
+        self.missing_link = ttk.Button(body, text="Can't see a subscription?", style="Small.Ghost.TButton",
+                                       command=self.check_subscription)
+        self.wsbox, self.ws_refresh = self.picker(body, "Log Analytics workspace", "workspace", self.discover,
+                                                  "Reload the workspaces in this subscription")
+        self.wsbox.bind("<<ComboboxSelected>>", self.workspace_changed)
+        for combo in (self.clientbox, self.subbox, self.wsbox):
+            combo.bind("<MouseWheel>", lambda event: "break")  # Scrolling the page must not change a selection.
+        details = tk.Frame(body, bg=c["raised"], bd=0, highlightthickness=1,
+                           highlightbackground=c["line"], highlightcolor=c["line"])
+        details.pack(fill="x", pady=(px(2), kit.space("lg")))
+        inner = ttk.Frame(details, style="Raised.TFrame", padding=(px(16), px(14))); inner.pack(fill="x")
+        self.details = kit.KeyValues(inner, surface="Raised", stacked=True)
+        self.details_empty = ttk.Label(inner, style="RaisedMuted.TLabel", justify="left", wraplength=px(320))
+        kit.wrap_to_parent(self.details_empty)
+        self.identity = tk.StringVar(value="No workspace selected yet. Sign in to discover subscriptions and workspaces.")
+        self.identity.trace_add("write", lambda *args: (self.render_details(), self.update_workspace_context(),
+                                                        self.sync_connection()))
+        actions = ttk.Frame(body, style="Card.TFrame"); actions.pack(fill="x")
+        # Not in self.controls: sync_connection enables these only once a workspace is selected.
+        self.copy_button = ttk.Button(actions, text="Copy details", command=self.copy_workspace, style="Secondary.TButton")
+        self.workspace_actions = [
+            self.copy_button,
+            ttk.Button(actions, text="View analytics rules", command=lambda: self.show_page("rules"), style="Primary.TButton")]
+        self.workspace_actions[0].pack(side="left"); self.workspace_actions[1].pack(side="right")
+
+        github = kit.Card(right, "Rule library", "The GitHub repository where rules are stored and approved.",
+                          icon="library", tone="neutral")
+        github.frame.pack(fill="x")
+        self.github_card = github
+        self.github_pill = kit.Pill(github.actions, "Not set"); self.github_pill.pack()
+        self.form_pair(github.body, [("Organization", "github_owner", self.settings.get("github_owner", ""), None, None, 10),
+                                     ("Repository", "github_repo", self.settings.get("github_repo", ""), None, None, 10)])
+        self.github_status = tk.StringVar(value="Checking GitHub sign-in…" if "/" in self.github_repository()
+                                          else "Enter the organization and repository, then select Save.")
+        kit.wrap_to_parent(ttk.Label(github.body, textvariable=self.github_status, style="Hint.TLabel",
+                                     justify="left", width=1)).pack(fill="x", pady=(0, px(14)))
+        row = ttk.Frame(github.body, style="Card.TFrame"); row.pack(fill="x")
+        self.button(row, "Save", self.save_settings).pack(side="left")
+        self.button(row, "Sign in to GitHub", self.github_login).pack(side="left", padx=(px(8), 0))
+
+        log = kit.Card(left, "Session activity", "Sign-in progress and GitHub one-time codes.", icon="activity",
+                       tone="neutral")
+        log.frame.pack(fill="x")
+        clear = ttk.Button(log.actions, text="Clear", style="Small.Ghost.TButton",
+                           command=lambda: kit.set_text(self.logbox, ""))
+        clear.pack(); kit.tooltip(clear, "Clear the activity log")
+        frame, self.logbox = kit.text_area(log.body, 7, readonly=True)
+        frame.pack(fill="both", expand=True)
+        self.render_tenant()
+        self.render_details()
+        self.sync_connection()
+
+    def picker(self, parent, label, name, refresh, tip):
+        """A labelled read-only dropdown with a small refresh action beside its label."""
+        box = ttk.Frame(parent, style="Card.TFrame"); box.pack(fill="x", pady=(0, px(14)))
+        head = kit.field_label(box, label)
+        button = ttk.Button(head, text="↻  Refresh", style="Small.Ghost.TButton", command=refresh)
+        button.pack(side="right"); kit.tooltip(button, tip)
+        combo = ttk.Combobox(box, textvariable=self.var(name), values=[], state="readonly")
+        combo.pack(fill="x")
+        self.controls.append((combo, "readonly"))
+        return combo, button
+
+    def show_menu(self, menu, widget):
+        if self.busy: return
+        has_client = bool(self.vars["client_name"].get())
+        for index in (0, 2):
+            menu.entryconfigure(index, state="normal" if has_client else "disabled")
+        try: menu.tk_popup(widget.winfo_rootx(), widget.winfo_rooty() + widget.winfo_height())
+        finally: menu.grab_release()
+
+    def toggle_tenant(self, show):
+        if show and not self.tenant_box.winfo_manager():
+            self.tenant_box.pack(fill="x", after=self.tenant_row); self.tenant_row.pack_forget()
+            self.tenant_entry.focus_set()
+        elif not show and self.tenant_box.winfo_manager():
+            self.tenant_box.pack_forget(); self.tenant_row.pack(fill="x", pady=(0, px(14)), before=self.tenant_box)
+
+    def render_tenant(self):
+        value = self.vars["tenant"].get().strip()
+        self.tenant_summary.set("Tenant  " + value if value else
+                                "No tenant set — every directory your account can access will be discovered.")
+
+    def refresh_first_run(self):
+        """Point a new analyst at the two things to set up; hide once either exists."""
+        if not hasattr(self, "first_run_banner"): return
+        if self.clients or "/" in self.github_repository():
+            self.first_run_banner.grid_forget(); return
+        self.first_run_text.set("Welcome. Add a client and sign in with Microsoft to open its workspace. To submit "
+                                "rules for approval, also set your team's rule library.")
+        self.first_run_banner.set_action("Set up rule library", self.show_github_settings)
+        self.first_run_banner.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, kit.space("lg")))
+
+    def show_github_settings(self):
+        """Open Connect at the rule library card, ready to type."""
+        self.show_page("connect")
+        self.root.after_idle(lambda: (self.scroll_into_view(self.github_card.frame),
+                                      next(w for w, _ in self.controls if str(w.cget("textvariable")) == str(self.vars["github_owner"])).focus_set()))
+
+    # ----------------------------------------------------------------- rules
+    def build_rules(self, page):
+        bar = ttk.Frame(page); bar.pack(fill="x", pady=(0, kit.space("lg")))
+        self.rule_view = tk.StringVar(value="workspace")
+        kit.Segmented(bar, self.rule_view, [("workspace", "Workspace rules"), ("repository", "Rule library")]).pack(side="left")
+        self.rule_views = dict(workspace=ttk.Frame(page), repository=ttk.Frame(page))
+        self.rules_page = RulesPage(self, self.rule_views["workspace"])
+        self.catalog_page = CatalogPage(self, self.rule_views["repository"])
+        if self.ui_state.get("rule_view") in self.rule_views: self.rule_view.set(self.ui_state["rule_view"])
+        self.rule_view.trace_add("write", lambda *args: self.rule_view_changed())
+        self.rule_view_changed()
+
+    def open_rule_library(self):
+        """Jump to the GitHub rule library, ready to pick a rule to edit."""
+        if self.busy: return
+        self.show_page("rules"); self.rule_view.set("repository")
+        self.catalog_page.open_github_rules()
+
+    def rule_view_changed(self):
+        view = self.rule_view.get()
+        for name, frame in self.rule_views.items():
+            if name == view: frame.pack(fill="both", expand=True)
+            else: frame.pack_forget()
+        self.page_canvases[PAGES.index("rules")].yview_moveto(0)
+        self.update_workspace_context()
+        if view == "repository": self.catalog_page.auto_load()
+
+    # ------------------------------------------------------------ navigation
+    def scroll_into_view(self, widget):
+        """Scroll the current page so ``widget`` sits near the top of the view."""
+        index = self.tabs.index("current")
+        canvas, content = self.page_canvases[index], self.page_contents[index]
+        self.root.update_idletasks()
+        height = content.winfo_height()
+        if height > canvas.winfo_height():
+            canvas.yview_moveto(max(0, (widget.winfo_rooty() - content.winfo_rooty() - px(SCROLL_TARGET_OFFSET)) / height))
+
+    def scroll_page(self, event):
+        widget = event.widget
+        if widget.winfo_toplevel() != self.root or widget.winfo_class() == "TCombobox":
+            return
+        if widget.winfo_class() in ("Text", "Treeview"):
+            # Let a scrollable inner widget scroll itself; pass the wheel through once it hits an edge.
+            first, last = widget.yview()
+            if not ((first <= 0 and event.delta > 0) or (last >= 1 and event.delta < 0)):
+                return
+        canvas = self.page_canvases[self.tabs.index("current")]
+        if canvas.yview() != (0.0, 1.0): canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def page_changed(self, event=None):
+        name = self.current_page()
+        self.page_title.set(NAVIGATION[name][3]); self.page_subtitle.set(NAVIGATION[name][4])
+        self.update_workspace_context()
+        for index in range(len(self.nav)):
+            self.paint_nav(index)
+        if hasattr(self, "rule_builder"):
+            self.rule_builder.set_footer_visible(name == "builder")
+            if name == "builder": self.rule_builder.check_github()
+        if getattr(self, "last_page", None) not in (None, name):
+            self.focus_page_default(name)
+        self.last_page = name
+
+    def focus_page_default(self, name):
+        try:
+            if name == "connect": self.clientbox.focus_set()
+            elif name == "rules": self.focus_search()
+            elif name == "builder": self.rule_builder.widgets["name"].focus_set()
+        except (tk.TclError, KeyError, AttributeError):
+            pass
 
     def update_workspace_context(self):
-        if hasattr(self, "tabs") and self.tabs.index("current") in (5, 6):
-            self.workspace_context.set("Repository configuration / Azure sign-in is not required")
+        if not hasattr(self, "tabs") or not hasattr(self, "rule_view"):
             return
-        if self.workspace:
-            self.workspace_context.set(self.workspace["workspace_name"]+"  /  Tenant "+self.workspace["tenant_id"])
-        else:self.workspace_context.set("No workspace selected  /  Connect an Azure account to begin")
+        page = self.current_page()
+        tone = "neutral"
+        if page == "builder":
+            text, tone = "Local drafts  ·  Azure sign-in is not required", "info"
+        elif page == "rules" and self.rule_view.get() == "repository":
+            text, tone = "Rule library  ·  Azure sign-in is not required", "info"
+        elif self.workspace:
+            tenant = self.workspace["tenant_id"]
+            text, tone = self.workspace["workspace_name"] + "  ·  Tenant " + tenant.split("-")[0] + "…", "success"
+        else:
+            text = "No workspace selected  ·  Sign in to begin"
+        self.workspace_context.set(text)
+        self.context_dot.configure(fg=TONES[tone][0] if tone != "neutral" else COLORS["subtle"])
 
-    def build(self):
-        configure_theme(self.root)
-        sidebar=tk.Frame(self.root,bg="#142638",width=224)
-        sidebar.pack(side="left",fill="y");sidebar.pack_propagate(False)
-        tk.Label(sidebar,text="SENTINEL",bg="#142638",fg="#ffffff",font=("Segoe UI",18,"bold")).pack(anchor="w",padx=22,pady=(22,4))
-        tk.Label(sidebar,text="CLIENT OPERATIONS",bg="#142638",fg="#9bb4d4",font=("Segoe UI",9,"bold")).pack(anchor="w",padx=22,pady=(0,14))
-        # Display order is independent of the notebook indices used by actions.
-        navigation=[(0,"Workspaces","Connect & discover"),(4,"Analytics rules","Enabled & disabled"),
-                    (5,"Repository catalog","Clients & rule library"),
-                    (6,"Rule builder","Create & edit drafts"),
-                    (1,"Onboarding","Configure client access"),(2,"Review onboarding","Preview & apply setup"),
-                    (3,"Sentinel audit","Configuration & logs")]
-        self.nav=[None]*len(navigation)
-        for i,title,desc in navigation:
-            group={0:"CONNECT",4:"ANALYST",1:"ENGINEER & AUDITOR"}.get(i)
-            if group:
-                tk.Label(sidebar,text=group,bg="#142638",fg="#8ba4c5",font=("Segoe UI",8,"bold")).pack(anchor="w",padx=24,pady=(12,3))
-            row=tk.Frame(sidebar,bg="#142638",cursor="hand2",takefocus=1,
-                         highlightthickness=1,highlightbackground="#142638",highlightcolor="#86c8bd")
-            row.pack(fill="x",padx=12,pady=2)
-            name=tk.Label(row,text=title,bg="#142638",fg="#d8e5f5",
-                          font=("Segoe UI",11,"bold"),anchor="w",cursor="hand2")
-            name.grid(row=0,column=0,sticky="ew",padx=(12,8),pady=(7,0))
-            description=tk.Label(row,text=desc,bg="#142638",fg="#9bb4d4",
-                                 font=("Segoe UI",9),anchor="w",justify="left",wraplength=168,cursor="hand2")
-            description.grid(row=1,column=0,sticky="ew",padx=(12,8),pady=(2,7))
-            row.columnconfigure(0,weight=1)
-            for part in (row,name,description):
-                part.bind("<Button-1>",lambda event,n=i:self.tabs.select(n))
-            row.bind("<Return>",lambda event,n=i:self.tabs.select(n))
-            row.bind("<space>",lambda event,n=i:self.tabs.select(n))
-            self.nav[i]=(row,name,description)
-        bottom=tk.Frame(sidebar,bg="#142638");bottom.pack(side="bottom",fill="x",padx=22,pady=14)
-        tk.Button(bottom,text="Help & prerequisites",command=lambda:os.startfile(str(BASE/"docs"/"DESKTOP-START-HERE.md")),
-                  bg="#142638",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w")
-        tk.Button(bottom,text="Open app data",command=lambda:os.startfile(str(DATA)),
-                  bg="#142638",fg="#a9c5ff",activebackground="#203b60",relief="flat",anchor="w",bd=0).pack(anchor="w",pady=(8,0))
-        main=ttk.Frame(self.root);main.pack(side="left",fill="both",expand=True)
-        head=ttk.Frame(main,padding=(26,18,26,12));head.pack(fill="x")
-        self.page_title=tk.StringVar(value="Connect your client")
-        self.page_subtitle=tk.StringVar(value="Discover the right workspace without navigating the Azure portal.")
-        ttk.Label(head,textvariable=self.page_title,font=("Segoe UI",20,"bold"),foreground="#14263e").pack(anchor="w")
-        subtitle=ttk.Label(head,textvariable=self.page_subtitle,style="Context.TLabel")
-        subtitle.pack(anchor="w",pady=(6,0))
-        self.wrap_to_parent(subtitle,60)
-        self.workspace_context=tk.StringVar(value="No workspace selected  /  Connect an Azure account to begin")
-        context=ttk.Label(head,textvariable=self.workspace_context,style="Context.TLabel")
-        context.pack(anchor="w",pady=(8,0))
-        self.wrap_to_parent(context,60)
-        self.status=tk.StringVar(value="Ready. Use an authorized Azure account to connect a client.")
-        statusframe=ttk.Frame(main,padding=(30,10));statusframe.pack(side="bottom",fill="x")
-        self.activity_badge=ttk.Label(statusframe,text="READY",style="Badge.TLabel",padding=(9,4))
-        self.activity_badge.pack(side="left",anchor="n",padx=(0,12))
-        statusbody=ttk.Frame(statusframe);statusbody.pack(fill="both",expand=True)
-        self.status_preview=tk.StringVar()
-        def show_status(*args):
-            text=" ".join(self.status.get().split())
-            self.status_preview.set(text if len(text)<=180 else text[:177]+"…")
-        self.status.trace_add("write",show_status);show_status()
-        statuslabel=ttk.Label(statusbody,textvariable=self.status_preview,style="Context.TLabel")
-        statuslabel.pack(anchor="w");self.wrap_to_parent(statuslabel)
-        self.progress=ttk.Progressbar(statusbody,mode="indeterminate",maximum=100)
-        self.tabs=ttk.Notebook(main,style="Hidden.TNotebook");self.tabs.pack(fill="both",expand=True,padx=26,pady=(0,12))
-        self.page_contents=[]
-        self.page_canvases=[]
-        for name in ("Connect","Configure","Review","Sentinel Audit","Analytics Rules","Repository Catalog","Rule Builder"):
-            page=ttk.Frame(self.tabs);self.tabs.add(page,text=name)
-            canvas=tk.Canvas(page,bg="#f2f5f8",highlightthickness=0,bd=0)
-            scroll=ttk.Scrollbar(page,orient="vertical",command=canvas.yview)
-            scroll.pack(side="right",fill="y");canvas.pack(side="left",fill="both",expand=True)
-            canvas.configure(yscrollcommand=scroll.set)
-            self.page_canvases.append(canvas)
-            content=ttk.Frame(canvas);window=canvas.create_window((0,0),window=content,anchor="nw")
-            content.bind("<Configure>",lambda e,c=canvas:c.configure(scrollregion=c.bbox("all")))
-            canvas.bind("<Configure>",lambda e,c=canvas,w=window:c.itemconfigure(w,width=e.width))
-            self.page_contents.append(content)
-        connect,settings,review,audit,rules,catalog,builder=self.page_contents
-        self.rule_builder=RuleBuilderPage(self,builder,DATA)
-        self.catalog_page=CatalogPage(self,catalog)
-        self.rules_page=RulesPage(self,rules)
-        build_connection(self,connect)
-        top,body=self.card(settings,"Client configuration",
-            "Add a workspace to the repository. The app selects direct registration or Lighthouse from its tenant.")
-        top.pack(fill="x",pady=(0,16))
-        self.form(body,"Workspace identity label","label","workspace-commercial")
-        ttk.Label(body,text="Use workspace-commercial for commercial-cloud workspaces and workspace-gcc for GCC. The target becomes <client>-<label> and the file clients/<client>/<client>-<label>.yml.",
-                  style="Muted.TLabel",wraplength=650).pack(anchor="w",pady=(0,14))
-        self.form(body,"Initial rule path - optional","rule_path")
-        self.vars["allow_missing_mitre"]=tk.BooleanVar(value=False)
-        cb=ttk.Checkbutton(body,text="Allow missing MITRE metadata (approved exception)",variable=self.vars["allow_missing_mitre"])
-        cb.pack(anchor="w",pady=(0,8));self.controls.append((cb,"normal"))
-        ttk.Label(body,text="An initial rule is committed disabled. Leave blank to create the target with no rules selected.",
-                  style="Muted.TLabel",wraplength=650).pack(anchor="w")
-        self.constantscard,body=self.card(settings,"Managing tenant defaults",
-            "Set these once and reuse them for each client. Values are saved locally.")
-        self.constantscard.pack(fill="x",pady=(0,16))
-        group=self.section(body,"REPOSITORY","The private repository that receives the client's target-file pull request.")
-        self.form_pair(group,[("GitHub organization","github_owner",self.settings.get("github_owner","")),("Repository","github_repo",self.settings.get("github_repo",""))])
-        self.button(group,"Sign in to GitHub",self.github_login).pack(anchor="w")
-        group=self.section(body,"DELEGATED ACCESS","Use the managing tenant and its groups. Azure Lighthouse grants the groups built-in roles in the client's subscription.")
-        self.form(group,"Managing tenant ID","managing_tenant_id",self.settings.get("managing_tenant_id",""))
-        self.form(group,"Deploy group Object ID","deploy_group_object_id",self.settings.get("deploy_group_object_id",""))
-        self.form_pair(group,[("Preview group Object ID","read_group_object_id",self.settings.get("read_group_object_id","")),("Engineers group Object ID","engineer_group_object_id",self.settings.get("engineer_group_object_id",""))])
-        group=self.section(body,"SHARED ENVIRONMENTS","Use existing GitHub environments with AZURE_CLIENT_ID and required reviewers. Onboarding verifies these environments.")
-        self.form_pair(group,[("Preview environment","preview_environment",self.settings.get("preview_environment","")),("Production environment","production_environment",self.settings.get("production_environment",""))])
-        optional=self.disclosure(body,"Optional delegation details",bool(self.settings.get("msp_offer_name") or self.settings.get("delegation_location")))
-        self.form_pair(optional,[("Offer name","msp_offer_name",self.settings.get("msp_offer_name","")),("Delegation location","delegation_location",self.settings.get("delegation_location",""))])
-        row=ttk.Frame(body,style="Card.TFrame");row.pack(fill="x",pady=(4,0))
-        self.button(row,"Save defaults",self.save_settings,"Primary.TButton").pack(side="left",padx=(0,10))
-        self.button(row,"Export configuration",self.export_config).pack(side="left")
-        self.configfooter=ttk.Frame(settings)
-        self.configfooter.pack(fill="x",pady=(0,16))
-        self.button(self.configfooter,"Continue to review →",lambda:self.tabs.select(2),"Primary.TButton").pack(side="right")
-        reviewcard,body=self.card(review,"Review the destination","Run a preview, review its results, then apply the same configuration.")
-        reviewcard.pack(fill="x",pady=(0,16))
-        self.summary=tk.StringVar(value="Select a workspace and configure the setup to create a preview.")
-        ttk.Label(body,textvariable=self.summary,style="Muted.TLabel",wraplength=640,justify="left").pack(anchor="w",pady=(0,20))
-        actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
-        self.button(actions,"Preview setup",lambda:self.onboard(False),"Primary.TButton").pack(side="left",padx=(0,10))
-        self.button(actions,"Apply reviewed setup",lambda:self.onboard(True)).pack(side="left",padx=(0,10))
-        self.button(actions,"Sign out",self.logout).pack(side="right")
-        logcard,body=self.card(review,"Operation activity","Preview checks, deployment results, and next steps appear here.")
-        logcard.pack(fill="both",expand=True,pady=(0,16))
-        logframe=ttk.Frame(body,style="Card.TFrame");logframe.pack(fill="both",expand=True)
-        self.logbox=tk.Text(logframe,wrap="word",font=("Consolas",10),bg="#f6f8fc",fg="#354863",
-                            height=16,state="disabled",bd=0,padx=14,pady=14,highlightthickness=0)
-        logscroll=ttk.Scrollbar(logframe,orient="vertical",command=self.logbox.yview)
-        logscroll.pack(side="right",fill="y");self.logbox.pack(fill="both",expand=True)
-        self.logbox.configure(yscrollcommand=logscroll.set)
-        auditcard,body=self.card(audit,"Build your evidence export",
-            "Start with current configuration. Add only the logs your reviewer needs.")
-        auditcard.pack(fill="x",pady=(0,16))
-        ttk.Label(body,textvariable=self.identity,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,12))
-        self.audit_flags={}
-        def checkbox(parent,key,label,default=False):
-            var=tk.BooleanVar(value=default);self.audit_flags[key]=var
-            cb=ttk.Checkbutton(parent,text=label,variable=var)
-            cb.pack(anchor="w",pady=3);self.controls.append((cb,"normal"))
-        configs=ttk.LabelFrame(body,text="Current configuration",style="Card.TLabelframe",padding=16)
-        configs.pack(fill="x",pady=(0,12))
-        choices=ttk.Frame(configs,style="Card.TFrame");choices.pack(fill="x")
-        choices.columnconfigure((0,1),weight=1,uniform="categories")
-        for index,(key,(title,_,_)) in enumerate(CONFIGURATIONS.items()):
-            cell=ttk.Frame(choices,style="Card.TFrame");cell.grid(row=index//2,column=index%2,sticky="ew")
-            checkbox(cell,key,title,True)
-        ttk.Label(configs,text="Snapshot taken now; available API settings may not cover every portal screen.",style="Muted.TLabel",wraplength=650).pack(anchor="w",pady=(8,0))
-        logs=self.disclosure(body,"Add logs · optional")
-        checkbox(logs,"audit","Sentinel configuration-change logs (SentinelAudit)")
-        checkbox(logs,"health","Sentinel operational health logs (SentinelHealth)")
-        today=datetime.now(timezone.utc).date()
-        dates=ttk.Frame(logs,style="Card.TFrame");dates.pack(fill="x",pady=(7,0))
-        left=ttk.Frame(dates,style="Card.TFrame");left.pack(side="left",fill="x",expand=True,padx=(0,16))
-        right=ttk.Frame(dates,style="Card.TFrame");right.pack(side="left",fill="x",expand=True)
-        self.form(left,"Log start date (UTC, YYYY-MM-DD)","audit_start",(today-timedelta(days=6)).isoformat())
-        self.form(right,"Log end date (UTC, inclusive)","audit_end",today.isoformat())
-        self.button(logs,"Choose security source logs…",self.choose_source_logs).pack(anchor="w")
-        self.audit_source_tables=[]
-        self.audit_source_summary=tk.StringVar(value="No source tables selected.")
-        ttk.Label(logs,textvariable=self.audit_source_summary,style="Muted.TLabel",wraplength=650).pack(anchor="w",pady=8)
-        self.form_pair(logs,[("Source export mode","audit_source_mode","sample",["sample","period"]),("Sample size per table (1–1000)","audit_sample_limit","100")])
-        ttk.Label(logs,text="Sample: most recent records in the dates above. Period: collect selected dates, capped at 100,000 records per table; limits and failures are reported. Dates are ignored for configuration-only exports.",style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,8))
-        self.audit_scope_summary=tk.StringVar()
-        scope=ttk.Label(body,textvariable=self.audit_scope_summary,style="Muted.TLabel",wraplength=600)
-        scope.pack(fill="x",pady=(0,12));self.wrap_to_parent(scope)
-        for var in self.audit_flags.values():var.trace_add("write",lambda *args:self.update_audit_scope_summary())
-        self.audit_source_summary.trace_add("write",lambda *args:self.update_audit_scope_summary())
-        self.update_audit_scope_summary()
-        self.button(body,"Export evidence",self.collect_audit,"Primary.TButton").pack(anchor="w")
-        resultcard,body=self.card(audit,"Export results","Readable configuration report, raw JSON, selected log CSVs, and collection status.")
-        resultcard.pack(fill="x",pady=(0,16))
-        self.audit_summary=tk.StringVar(value="No export collected yet.")
-        ttk.Label(body,textvariable=self.audit_summary,style="Muted.TLabel",wraplength=650,justify="left").pack(anchor="w",pady=(0,16))
-        actions=ttk.Frame(body,style="Card.TFrame");actions.pack(fill="x")
-        self.button(actions,"Open report",lambda:self.open_evidence(True)).pack(side="left",padx=(0,10))
-        self.button(actions,"Open export folder",self.open_evidence).pack(side="left")
-        self.tabs.bind("<<NotebookTabChanged>>",self.page_changed)
-        self.page_changed()
-        self.root.bind("<MouseWheel>",self.scroll_page)
+    def render_session(self):
+        c = COLORS
+        session = self.session
+        signed_in = session is not None and getattr(session, "signed_in", False) is True
+        account = getattr(session, "account", None)
+        user = account.get("user", {}).get("name", "") if isinstance(account, dict) else ""
+        if self.signin_active:
+            title, detail, color, pill = "Signing in…", "Finish signing in in your browser.", c["warning"], ("Signing in", "warning")
+        elif signed_in and self.workspace:
+            title, detail, color, pill = "Signed in", "\n".join(filter(None, (user, self.workspace["workspace_name"]))), \
+                c["sidebar_success"], ("Connected", "success")
+        elif signed_in:
+            title, detail, color, pill = "Signed in", user or "Choose a subscription and workspace.", \
+                c["sidebar_accent"], ("Signed in", "info")
+        else:
+            title, detail, color, pill = "Not signed in", "Sign in to load workspaces.", c["subtle"], ("Not connected", "neutral")
+        self.session_title.configure(text=title); self.session_detail.configure(text=detail)
+        self.session_dot.configure(fg=color)
+        self.connection_pill.set(*pill)
+        if signed_in and not self.signin_active: self.signout_link.pack(fill="x", padx=px(12), pady=(0, px(10)))
+        else: self.signout_link.pack_forget()
 
-    def scroll_page(self,event):
-        if event.widget.winfo_toplevel()!=self.root or event.widget.winfo_class() in ("Text","TCombobox","Treeview"):
-            return
-        canvas=self.page_canvases[self.tabs.index("current")]
-        if canvas.yview()!=(0.0,1.0):canvas.yview_scroll(int(-event.delta/120),"units")
-
-    def page_changed(self,event=None):
-        index=self.tabs.index("current")
-        titles=["Connect a client","Client onboarding","Review onboarding setup","Sentinel audit","Analytics rules","Repository catalog","Rule builder"]
-        subtitles=["Choose a client, sign in, then select the workspace you need.",
-                   "Register a workspace in your tenant or onboard a client through Lighthouse.",
-                   "Confirm the destination, preview the setup, then apply.",
-                   "Export selected Sentinel configuration and logs for this workspace.",
-                   "Browse enabled and disabled analytics rules for the selected workspace.",
-                   "Read configured clients, rules and assignments from your detection repository.",
-                   "Create, validate and export a rule draft for repository review."]
-        self.page_title.set(titles[index]);self.page_subtitle.set(subtitles[index])
-        self.update_workspace_context()
-        for i,(row,name,description) in enumerate(self.nav):
-            selected=i==index
-            background="#254655" if selected else "#142638"
-            row.configure(bg=background)
-            name.configure(bg=background,fg="#ffffff" if selected else "#d8e5f5")
-            description.configure(bg=background,fg="#d5e5fb" if selected else "#9bb4d4")
-
+    # --------------------------------------------------------------- clients
     def delete_client(self):
         if self.busy:
             return
-        name=self.vars["client_name"].get()
-        match=next((c for c in self.clients if c["name"]==name),None)
+        name = self.vars["client_name"].get()
+        match = next((c for c in self.clients if c["name"] == name), None)
         if match is None:
-            messagebox.showinfo("Delete client","Choose a saved client first.",parent=self.root)
+            messagebox.showinfo("Remove client", "Choose a client first.", parent=self.root)
             return
-        if not messagebox.askyesno("Delete saved client",
-                f"Remove {name} from this app's saved clients?\n\n"
-                "Azure, GitHub and CyberQP resources will not be deleted. Local onboarding state is retained.",
+        if not messagebox.askyesno("Remove client",
+                f"Remove {name} from the client list?\n\nThis only removes it from this PC. Nothing in Azure or GitHub changes.",
                 parent=self.root):
             return
-        remaining=[c for c in self.clients if c["name"]!=name]
+        remaining = [c for c in self.clients if c["name"] != name]
         try:
-            temp=self.clientfile.with_suffix(".tmp")
-            temp.write_text(json.dumps(remaining,indent=2),encoding="utf-8")
-            temp.replace(self.clientfile)
+            write_json(self.clientfile, remaining)
         except OSError as error:
-            messagebox.showerror("Could not delete client",str(error),parent=self.root)
+            messagebox.showerror("Remove client", "The client list couldn't be saved.\n\n" + str(error), parent=self.root)
             return
-        self.clients=remaining
-        self.auth_hint=None
+        self.clients = remaining
+        self.auth_hint = None
         self.clear_selection()
-        for key in ("client_name","tenant","client_slug"):
+        for key in ("client_name", "tenant"):
             self.vars[key].set("")
-        self.extras={}
         self.refresh_clients()
-        self.summary.set("Select a workspace and create a new preview.")
-        self.status.set(f"Removed {name} from saved clients. Cloud resources and onboarding state were retained.")
+        self.refresh_first_run()
+        self.flash(f"Removed {name} from the client list.")
 
-    def log(self,message):
-        self.events.put(("log",str(message)))
+    def refresh_clients(self):
+        selected = self.vars["client_name"].get()
+        self.clients.sort(key=lambda c: (c["name"].casefold(), c["name"]))
+        self.clientbox.configure(values=[c["name"] for c in self.clients])
+        if self.clients:
+            names = [c["name"] for c in self.clients]
+            self.vars["client_name"].set(selected if selected in names else names[0])
+            self.client_changed()
+        self.last_client = self.vars["client_name"].get()
+
+    def client_changed(self, event=None):
+        name = self.vars["client_name"].get()
+        previous = getattr(self, "last_client", "")
+        if event is not None and name != previous and (self.workspace or self.subscriptions):
+            current = self.workspace["workspace_name"] if self.workspace else "this subscription"
+            if not messagebox.askyesno("Switch client?",
+                    f"You are connected to {current}. Switching to {name} clears that selection, and you will need to sign in again.",
+                    parent=self.root):
+                self.vars["client_name"].set(previous); return
+        self.last_client = name
+        self.clear_selection()
+        for c in self.clients:
+            if c["name"] == name:
+                self.vars["tenant"].set(c["tenant"])
+                break
+        self.toggle_tenant(not self.vars["tenant"].get().strip())
+
+    def clear_selection(self):
+        # The old session is not reused for another client's login.
+        self.rules_page.reset()
+        self.subscriptions = []; self.workspaces = []; self.workspace = None
+        self.subbox.configure(values=[]); self.wsbox.configure(values=[])
+        self.vars["subscription"].set(""); self.vars["workspace"].set("")
+        self.identity.set("No workspace selected yet. Sign in to discover subscriptions and workspaces.")
+
+    def add_client(self):
+        if self.busy:
+            return
+        def validate(values):
+            require(values["name"], "Enter a client name.")
+            values["tenant"] = validate_tenant_hint(values["tenant"]) if values["tenant"] else ""
+            return values
+        values = kit.FormDialog(self.root, "New client",
+            "Clients are saved on this PC only. They never contain credentials.",
+            [("name", "Client name", "", "Shown in the client list."),
+             ("tenant", "Tenant ID or verified domain", "", "Optional. Leave blank to discover after sign-in.")],
+            submit="Add client", validate=validate).show()
+        if not values:
+            return
+        self.vars["client_name"].set(values["name"]); self.vars["tenant"].set(values["tenant"])
+        self.last_client = values["name"]
+        self.clear_selection(); self.save_client()
+
+    def save_client(self):
+        v = self.values()
+        try:
+            v["tenant"] = validate_tenant_hint(v["tenant"]) if v["tenant"] else ""
+            require(v["client_name"], "Enter a client name.")
+        except Stop as error:
+            messagebox.showerror("Save client", str(error), parent=self.root)
+            return
+        self.vars["tenant"].set(v["tenant"])
+        entry = dict(name=v["client_name"], tenant=v["tenant"])
+        clients = [c for c in self.clients if c["name"] != entry["name"]] + [entry]
+        clients.sort(key=lambda c: (c["name"].casefold(), c["name"]))
+        try:
+            write_json(self.clientfile, clients)
+        except OSError as error:
+            messagebox.showerror("Save client", "The client list couldn't be saved.\n\n" + str(error), parent=self.root)
+            return
+        self.clients = clients
+        self.clientbox.configure(values=[c["name"] for c in self.clients])
+        self.toggle_tenant(not v["tenant"])
+        self.refresh_first_run()
+        self.flash("Client saved.")
+
+    def values(self):
+        return {k: v.get().strip() if isinstance(v.get(), str) else v.get() for k, v in self.vars.items()}
+
+    # ---------------------------------------------------------------- worker
+    def log(self, message):
+        self.events.put(("log", str(message)))
+
+    def call_soon(self, callback):
+        """Run ``callback`` on the UI thread; safe to call from worker threads."""
+        self.events.put(("ui", callback))
+
+    def file_progress(self, show):
+        """A thread-safe ``progress(done, total)`` that passes a readable message to ``show``."""
+        def progress(done, total):
+            if done == total or done % PROGRESS_REPORT_EVERY == 0:
+                # Ignore late updates once the operation has finished.
+                self.call_soon(lambda: self.busy and show(f"Reading the rule library: {done} of {total} files…"))
+        return progress
 
     def poll(self):
         try:
             while True:
-                kind,data=self.events.get_nowait()
-                if kind=="log":
-                    if self.busy and self.operation_page==3:
-                        self.status.set(data[:220])
-                    self.logbox.configure(state="normal")
-                    self.logbox.insert("end",data+"\n"); self.logbox.see("end")
-                    self.logbox.configure(state="disabled")
-                elif kind=="signin_finished":
-                    self.finish_signin()
-                elif kind=="done":
-                    callback,result,error=data
-                    # The callback retains its event after the worker has finished.
-                    # Cancellation also wins over an error already queued for the UI.
-                    cancel=getattr(callback,"_signin_cancel",None)
-                    if isinstance(cancel,threading.Event) and cancel.is_set():
-                        error=SignInCancelled()
-                    self.set_busy(False)
-                    if error:
-                        self.plan=None
-                        self.render_access_status()
-                        details=str(error)
-                        self.status.set("Stopped - "+details[:160])
-                        self.log(details); self.tabs.select(self.operation_page)
-                        if self.operation_page==3:
-                            self.audit_summary.set("Collection stopped: "+details)
-                        if isinstance(error, SignInCancelled):
-                            self.discard_cancelled_signin()
-                        elif isinstance(error, AuthenticationRequired):
-                            self.recover_authentication(error)
-                        else:
-                            messagebox.showerror("Operation stopped",details)
-                    else:
-                        self.status.set("Ready")
-                        if callback: callback(result)
-        except queue.Empty: pass
-        self.root.after(100,self.poll)
+                kind, data = self.events.get_nowait()
+                try:
+                    self.dispatch(kind, data)
+                except Exception as error:  # One bad callback must not stop every later result.
+                    self.log(repr(error))
+                    self.status.set("Something went wrong. Details are in Session activity on the Connect page.")
+        except queue.Empty:
+            pass
+        finally:
+            if self.root.winfo_exists():
+                self.root.after(EVENT_POLL_MS, self.poll)
 
-    def set_busy(self,busy):
-        self.busy=busy
-        self.activity_badge.configure(text="WORKING" if busy else "READY")
+    def dispatch(self, kind, data):
+        if kind == "log":
+            if not hasattr(self, "logbox"): return
+            self.logbox.configure(state="normal")
+            self.logbox.insert("end", data + "\n"); self.logbox.see("end")
+            self.logbox.configure(state="disabled")
+        elif kind == "signin_finished":
+            self.finish_signin()
+        elif kind == "ui":
+            data()
+        elif kind == "done":
+            callback, result, error = data
+            # The callback retains its event after the worker has finished.
+            # Cancellation also wins over an error already queued for the UI.
+            cancel = getattr(callback, "_signin_cancel", None)
+            if isinstance(cancel, threading.Event) and cancel.is_set():
+                error = SignInCancelled()
+            title = self.operation_title
+            self.set_busy(False)
+            if error:
+                details = str(error)
+                self.log(details); self.show_page(self.operation_page)
+                if isinstance(error, SignInCancelled):
+                    self.discard_cancelled_signin()
+                elif isinstance(error, AuthenticationRequired):
+                    self.status.set("Couldn't finish: " + details[:160])
+                    self.recover_authentication(error)
+                else:
+                    self.status.set("Couldn't finish: " + details[:160])
+                    self.activity_badge.set("Stopped", "danger")
+                    messagebox.showerror(title.rstrip("….") or "Operation stopped",
+                                         "This didn't finish.\n\n" + details +
+                                         "\n\nThe full message is in Session activity on the Connect page.", parent=self.root)
+            elif callback:
+                callback(result)
+
+    def set_busy(self, busy):
+        self.busy = busy
         if busy:
-            self.progress.pack(fill="x",pady=(8,0));self.progress.start(12)
+            if self.flash_timer is not None:
+                self.root.after_cancel(self.flash_timer); self.flash_timer = None
+            self.activity_badge.set("Working", "info")
+            self.progress.pack(fill="both", expand=True); self.progress.start(12)
         else:
-            self.progress.stop();self.progress.pack_forget()
-        for widget,state in self.controls:
+            self.activity_badge.set("Ready", "success"); self.status.set("Ready.")
+            self.progress.stop(); self.progress.pack_forget()
+        for widget, state in self.controls:
             widget.configure(state="disabled" if busy else state)
+        kit.refresh_all()
+        self.signout_link.configure(fg=COLORS["sidebar_muted"] if busy else COLORS["sidebar_accent"],
+                                    cursor="arrow" if busy else "hand2")
         self.sync_connection()
+        if hasattr(self, "catalog_page"): self.catalog_page.sync_actions()
+        if hasattr(self, "rules_page"): self.rules_page.sync()
 
-    def work(self,title,task,done=None,page=2):
-        if self.busy: return
-        self.operation_page=page
+    def sync_connection(self):
+        """Enable selectors and workspace actions only when there is something to act on."""
+        if not hasattr(self, "workspace_actions"): return
+        for button in self.workspace_actions:
+            button.configure(state="normal" if self.workspace and not self.busy else "disabled")
+        self.subbox.configure(state="readonly" if self.subscriptions and not self.busy else "disabled")
+        self.wsbox.configure(state="readonly" if self.workspaces and not self.busy else "disabled")
+        signed_in = self.session is not None and (bool(self.subscriptions) or getattr(self.session, "signed_in", False) is True)
+        self.sub_refresh.configure(state="normal" if signed_in and not self.busy else "disabled")
+        self.ws_refresh.configure(state="normal" if self.subscriptions and not self.busy else "disabled")
+        if signed_in and not self.missing_link.winfo_manager():
+            self.missing_link.pack(anchor="w", pady=(0, px(10)), after=self.subbox.master)
+        elif not signed_in and self.missing_link.winfo_manager():
+            self.missing_link.pack_forget()
+        if self.workspace:
+            account = (getattr(self.session, "account", None) or {}).get("user", {}).get("name", "")
+            self.connection_note.set(("Signed in as " + account + ". " if account else "") +
+                                     "Selected " + self.workspace["workspace_name"] + ".")
+        elif self.subscriptions: self.connection_note.set("Select a subscription and workspace to continue.")
+        else: self.connection_note.set("Sign in to load your subscriptions and workspaces.")
+
+    def work(self, title, task, done=None, page="connect"):
+        if self.busy:
+            self.flash("Wait for the current task to finish.", "warning", 3); return
+        self.operation_page, self.operation_title = page, title
         self.set_busy(True); self.status.set(title); self.log(title)
         def run():
-            try: result,error=task(),None
-            except Exception as ex: result,error=None,ex
-            self.events.put(("done",(done,result,error)))
-        threading.Thread(target=run,daemon=True).start()
+            try: result, error = task(), None
+            except Exception as ex: result, error = None, ex
+            self.events.put(("done", (done, result, error)))
+        threading.Thread(target=run, daemon=True).start()
 
-    def collect_audit(self):
-        if self.busy: return
-        try:
-            require(self.session and self.workspace,"Sign in and select a discovered workspace first.")
-            start,end=self.vars["audit_start"].get().strip(),self.vars["audit_end"].get().strip()
-            options=self.audit_options()
-            if options["audit"] or options["health"] or options["source_tables"]: date_range(start,end)
-        except Stop as error:
-            messagebox.showerror("Audit evidence",str(error),parent=self.root);return
-        destination=filedialog.askdirectory(title="Choose an approved local folder for client evidence",parent=self.root)
-        if not destination:return
-        workspace=dict(self.workspace);session=self.session
-        self.evidence_folder=None
-        self.audit_summary.set("Collecting evidence for "+workspace["workspace_name"]+". This may take several minutes.")
-        def done(result):
-            self.evidence_folder=Path(result["folder"])
-            rows=result["manifest"]["results"]
-            self.audit_summary.set("Workspace: "+workspace["workspace_name"]+"\n"+
-                "\n".join(r["title"]+": "+r["status"].replace("_"," ")+f" ({r['record_count']} records)" for r in rows)+
-                "\n\nSaved to: "+result["folder"])
-            self.status.set("Evidence package saved. Review collection statuses and limitations in the report.")
-            self.tabs.select(3)
-        self.work("Exporting selected Sentinel configuration and logs...",
-                  lambda:collect_evidence(session,workspace,start,end,destination,options),done,page=3)
-
-    def update_audit_scope_summary(self):
-        count=sum(self.audit_flags[key].get() for key in CONFIGURATIONS)
-        activity=sum(self.audit_flags[key].get() for key in ("audit","health"))
-        self.audit_scope_summary.set(f"Selected: {count} configuration categories · {activity} Sentinel activity logs · {len(self.audit_source_tables)} source tables")
-
-    def audit_options(self):
-        sample=self.vars["audit_sample_limit"].get().strip()
-        require(sample.isascii() and sample.isdigit(),"Enter a sample size from 1 to 1000.")
-        options=validate_options(dict(configurations=[k for k in CONFIGURATIONS if self.audit_flags[k].get()],
-            audit=self.audit_flags["audit"].get(),health=self.audit_flags["health"].get(),
-            source_tables=list(self.audit_source_tables),source_mode=self.vars["audit_source_mode"].get(),sample_limit=int(sample)))
-        require(options["configurations"] or options["audit"] or options["health"] or options["source_tables"],"Select configuration or logs to export.")
-        return options
-
-    def reset_audit_selection(self):
-        self.audit_source_tables=[]
-        self.audit_source_summary.set("No source tables selected.")
-        for key in ("audit","health"): self.audit_flags[key].set(False)
-        self.evidence_folder=None
-        self.audit_summary.set("No export collected for this workspace yet.")
-
-    def choose_source_logs(self):
-        if self.busy:return
-        if not self.session or not self.workspace:
-            messagebox.showerror("Source logs","Sign in and select a workspace first.",parent=self.root);return
-        workspace=dict(self.workspace);session=self.session
-        self.work("Loading source table inventory…",lambda:list_log_tables(session,workspace),
-                  lambda result:self.show_source_picker(result,session,workspace),page=3)
-
-    def show_source_picker(self,result,session,workspace):
-        if self.workspace != workspace:return
-        dialog=tk.Toplevel(self.root);dialog.title("Choose security source logs");dialog.geometry("980x620");dialog.minsize(900,520);dialog.transient(self.root)
-        dialog.grab_set()
-        frame=ttk.Frame(dialog,padding=16);frame.pack(fill="both",expand=True)
-        ttk.Label(frame,text="Security source logs",font=("Segoe UI",18,"bold"),wraplength=840).pack(anchor="w")
-        ttk.Label(frame,text="Select up to 20 tables with Ctrl/Shift. Inventory: "+result["status"].replace("_"," ")+". "+result.get("error", ""),wraplength=840).pack(anchor="w",pady=8)
-        treeframe=ttk.Frame(frame);treeframe.pack(fill="both",expand=True)
-        tree=ttk.Treeview(treeframe,columns=("plan","count","latest","status"),selectmode="extended",height=12)
-        tree.heading("#0",text="Table");tree.column("#0",width=210)
-        for key,label,width in (("plan","Plan",80),("count","Period records",100),("latest","Latest event (UTC)",190),("status","Preview status",160)):
-            tree.heading(key,text=label);tree.column(key,width=width)
-        scrollbar=ttk.Scrollbar(treeframe,orient="vertical",command=tree.yview);scrollbar.pack(side="right",fill="y")
-        tree.configure(yscrollcommand=scrollbar.set);tree.pack(fill="both",expand=True)
-        for row in sorted(result["records"],key=lambda r:r.get("name","")):
-            name=row.get("name","")
-            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}",name) or name in ("SentinelAudit","SentinelHealth") or tree.exists(name):continue
-            tree.insert("", "end",iid=name,text=name,values=((row.get("properties") or {}).get("plan","Unknown"),"—","—","Not previewed"))
-            if name in self.audit_source_tables:tree.selection_add(name)
-        note=tk.StringVar(value="Counts and latest timestamps use the log dates in the audit tab. No event payloads are fetched by preview. Basic/Auxiliary tables may be unavailable through this query API.")
-        ttk.Label(frame,textvariable=note,wraplength=840).pack(anchor="w",pady=10)
-        buttons=ttk.Frame(frame);buttons.pack(fill="x")
-        previewing=[False]
-        def close():
-            if not previewing[0]:dialog.destroy()
-        dialog.protocol("WM_DELETE_WINDOW",close)
-        def selected():
-            tables=list(tree.selection())
-            validate_options(dict(source_tables=tables))
-            return tables
-        def preview():
-            try:
-                tables=selected();require(tables,"Select tables to preview.")
-                start,end=self.vars["audit_start"].get().strip(),self.vars["audit_end"].get().strip();date_range(start,end)
-            except Stop as error:messagebox.showerror("Source logs",str(error),parent=dialog);return
-            previewing[0]=True;preview_button.state(["disabled"]);use_button.state(["disabled"])
-            note.set("Counting selected tables for "+start+" through "+end+" UTC…")
-            outcome=queue.Queue()
-            def run():
-                try:outcome.put((preview_log_tables(session,workspace,start,end,tables),None))
-                except Exception as error:outcome.put((None,str(error)))
-            def poll():
-                try:rows,error=outcome.get_nowait()
-                except queue.Empty:dialog.after(100,poll);return
-                previewing[0]=False;preview_button.state(["!disabled"]);use_button.state(["!disabled"])
-                if error:note.set("Preview failed: "+error);return
-                note.set("Preview: "+start+" through "+end+" UTC. Counts reflect current account visibility; unavailable or partial results are not zero.")
-                for row in rows:
-                    record=row["records"][0] if row["records"] else {}
-                    complete=row["status"] in ("collected","no_records")
-                    tree.set(row["table"],"count",record.get("Records","—") if complete else "Unknown")
-                    tree.set(row["table"],"latest",record.get("LatestEvent") or "—")
-                    tree.set(row["table"],"status",row["status"].replace("_"," "))
-            threading.Thread(target=run,daemon=True).start();dialog.after(100,poll)
-        def use():
-            try:tables=selected()
-            except Stop as error:messagebox.showerror("Source logs",str(error),parent=dialog);return
-            self.audit_source_tables=tables
-            self.audit_source_summary.set("Selected source tables: "+", ".join(tables) if tables else "No source tables selected.")
-            dialog.destroy()
-        preview_button=ttk.Button(buttons,text="Preview selected counts",command=preview,style="Secondary.TButton");preview_button.pack(side="left")
-        use_button=ttk.Button(buttons,text="Use selected tables",command=use,style="Primary.TButton");use_button.pack(side="right")
-
-    def open_evidence(self,report=False):
-        if not self.evidence_folder:
-            messagebox.showinfo("Audit evidence","Collect an evidence package first.",parent=self.root);return
-        os.startfile(str(self.evidence_folder / "report.html" if report else self.evidence_folder))
-
-    def values(self):
-        return {k:v.get().strip() if isinstance(v.get(),str) else v.get() for k,v in self.vars.items()}
-
-    def refresh_clients(self):
-        selected=self.vars["client_name"].get()
-        self.clients.sort(key=lambda c:(c["name"].casefold(),c["name"]))
-        self.clientbox.configure(values=[c["name"] for c in self.clients])
-        if self.clients:
-            names=[c["name"] for c in self.clients]
-            self.vars["client_name"].set(selected if selected in names else names[0])
-            self.client_changed()
-
-    def client_changed(self,event=None):
-        self.offer_access_management.set(False)
-        self.clear_selection()
-        for c in self.clients:
-            if c["name"]==self.vars["client_name"].get():
-                self.vars["tenant"].set(c["tenant"]); self.vars["client_slug"].set(c["slug"])
-                break
-
-    def clear_selection(self):
-        self.rules_page.reset()
-        self.subscriptions=[]; self.workspaces=[]; self.workspace=None; self.plan=None
-        self.reset_audit_selection()
-        self.subbox.configure(values=[]); self.wsbox.configure(values=[])
-        self.vars["subscription"].set(""); self.vars["workspace"].set("")
-        self.identity.set("No authenticated workspace selected.")
-        self.render_access_status()
-        # The old session is not reused for another client's login.
-
-    def add_client(self):
-        name=simpledialog.askstring("Add client","Client display name:",parent=self.root)
-        if not name: return
-        tenant=simpledialog.askstring("Add client","Tenant ID or domain (optional; leave blank to discover after sign-in):",parent=self.root)
-        if tenant is None: return
-        slug=simpledialog.askstring("Add client","Lowercase client slug:",initialvalue=re.sub(r"[^a-z0-9]+","-",name.lower()).strip("-"),parent=self.root)
-        if not slug: return
-        self.vars["client_name"].set(name); self.vars["tenant"].set(tenant); self.vars["client_slug"].set(slug)
-        self.clear_selection(); self.save_client()
-
-    def save_client(self):
-        v=self.values()
-        try:
-            v["tenant"] = validate_tenant_hint(v["tenant"]) if v["tenant"] else ""
-        except Stop as error:
-            messagebox.showerror("Tenant details",str(error),parent=self.root)
-            return
-        self.vars["tenant"].set(v["tenant"])
-        try:
-            require(v["client_name"], "Supply a client display name. Tenant is optional.")
-            slug(v["client_slug"], "Client slug", CLIENT_MAXIMUM)
-        except Stop as error:
-            messagebox.showerror("Client details",str(error),parent=self.root); return
-        entry=dict(name=v["client_name"],slug=v["client_slug"],tenant=v["tenant"])
-        self.clients=[c for c in self.clients if c["name"]!=entry["name"]]+[entry]
-        self.clients.sort(key=lambda c:(c["name"].casefold(),c["name"]))
-        self.clientfile.write_text(json.dumps(self.clients,indent=2),encoding="utf-8")
-        self.clientbox.configure(values=[c["name"] for c in self.clients])
-        self.status.set("Client mapping saved. Credentials are not part of the client inventory.")
-
-    def open_azure_portal(self):
-        try:
-            if not webbrowser.open("https://portal.azure.com/",new=2):
-                raise RuntimeError("Could not open the browser. Open https://portal.azure.com/ manually.")
-            self.status.set("Azure portal opened. Use Sign in & discover to load workspace details into this app.")
-        except Exception as error:
-            messagebox.showerror("Open Azure portal",str(error),parent=self.root)
-
+    # ---------------------------------------------------------------- portals
     def open_cyberqp(self):
-        region=self.vars["cyberqp_region"].get()
-        url=CYBERQP_PORTALS.get(region)
-        if not url:
-            messagebox.showerror("CyberQP region","Choose US, EU, or Canada.",parent=self.root)
-            return
+        url = CYBERQP_PORTALS["US"]
         try:
-            if not webbrowser.open(url,new=2):
-                raise RuntimeError("Could not open the browser. Open " + url + " manually.")
-            self.status.set("CyberQP portal opened. Activate access there, then return to Sign in & discover.")
+            if not webbrowser.open(url, new=2):
+                raise RuntimeError("Couldn't open the browser. Open " + url + " yourself.")
+            self.flash("CyberQP opened in your browser. Activate access there, then sign in with Microsoft here.", "info")
         except Exception as error:
-            messagebox.showerror("Open CyberQP",str(error),parent=self.root)
+            messagebox.showerror("Open CyberQP", str(error), parent=self.root)
 
+    # ---------------------------------------------------------------- sign-in
     def cancel_signin(self):
-        if not self.signin_active or self.signin_cancel is None:return
+        if not self.signin_active or self.signin_cancel is None: return
         self.signin_cancel.set()
         self.finish_signin()
-        self.status.set("Cancelling Microsoft sign-in...")
+        self.status.set("Cancelling Microsoft sign-in…")
 
     def discard_cancelled_signin(self):
         self.finish_signin()
         if self.session:
             # Keep the isolated session only so retry/sign-out/close can clear
             # any CLI cache written just before cancellation won the race.
-            self.session.account=None; self.session.signed_in=False
+            self.session.account = None; self.session.signed_in = False
         self.clear_selection()
-        self.status.set("Sign-in cancelled. You can sign in again.")
-        self.tabs.select(0)
+        self.flash("Sign-in cancelled. You can sign in again.", "info")
+        self.show_page("connect")
 
     def bring_signin_forward(self):
-        if not self.signin_active:return
+        if not self.signin_active: return
         try:
-            found=self.signin_handoff and self.signin_handoff.bring_forward(manual=True)
-        except OSError:found=False
+            found = self.signin_handoff and self.signin_handoff.bring_forward(manual=True)
+        except OSError: found = False
         if not found:
-            self.status.set("Sign-in is still opening or Windows blocked focus. Use Alt+Tab to select the Microsoft sign-in window.")
+            self.status.set("The sign-in window is still opening, or Windows blocked the switch. Use Alt+Tab to find it.")
 
     def watch_signin(self):
-        self.signin_timer=None
-        if not self.signin_active:return
-        if self.signin_handoff and time.monotonic()<self.signin_deadline:
-            try:self.signin_handoff.bring_forward()
-            except OSError:pass
-            self.signin_timer=self.root.after(750,self.watch_signin)
+        self.signin_timer = None
+        if not self.signin_active: return
+        if self.signin_handoff and time.monotonic() < self.signin_deadline:
+            try: self.signin_handoff.bring_forward()
+            except OSError: pass
+            self.signin_timer = self.root.after(SIGNIN_FOCUS_POLL_MS, self.watch_signin)
 
     def finish_signin(self):
-        self.signin_active=False
+        self.signin_active = False
         if self.signin_timer is not None:
-            self.root.after_cancel(self.signin_timer);self.signin_timer=None
-        self.signin_handoff=None
+            self.root.after_cancel(self.signin_timer); self.signin_timer = None
+        self.signin_handoff = None
         self.signin_button.configure(state="disabled")
         self.cancel_signin_button.configure(state="disabled")
-        self.signin_progress.pack_forget()
-        self.signin_cancel=None
+        self.signin_cancel = None
+        self.signin_panel.pack_forget()
+        self.render_session()
+
+    def ask_tenant(self):
+        values = kit.FormDialog(self.root, "Client tenant", "Microsoft needs to know which directory to sign in to.",
+            [("tenant", "Tenant ID or verified domain", "", "From the Azure portal: Microsoft Entra ID > Overview.")],
+            submit="Continue", validate=lambda v: {"tenant": validate_tenant_hint(v["tenant"])}).show()
+        return values["tenant"] if values else None
 
     def recover_authentication(self, error):
-        self.plan=None
         self.finish_signin()
-        tenant=error.tenant or self.vars["tenant"].get().strip()
+        tenant = error.tenant or self.vars["tenant"].get().strip()
         # A broker failure may omit the resource challenge; the browser flow can expose it.
-        method="Browser" if error.broker_failure else self.vars["login_method"].get()
-        attempt=(tenant, error.resource, method, bool(error.claims))
+        method = "Browser" if error.broker_failure else self.vars["login_method"].get()
+        attempt = (tenant, error.resource, method, bool(error.claims))
         if attempt in self.auth_recovery_attempts:
-            messagebox.showerror("Authentication still required",
-                "Microsoft still requires authentication after the fresh sign-in. No operation was retried. "
+            messagebox.showerror("Sign-in still required",
+                "Microsoft still requires authentication after the fresh sign-in. Nothing was retried. "
                 "Confirm Azure CLI is current. Check this client's Entra sign-in logs using the correlation ID below, "
                 "including Authentication Details and Conditional Access results, "
-                "and confirm the account and tenant. You can start another sign-in after resolving them.\n\n"+str(error),parent=self.root)
+                "and confirm the account and tenant. You can start another sign-in after resolving them.\n\n" + str(error),
+                parent=self.root)
             return
-        if not messagebox.askyesno("Complete Microsoft authentication",
-                ("The Windows sign-in component could not complete verification. Try a fresh browser sign-in?\n\n"
+        if not messagebox.askyesno("Sign in again?",
+                ("The Windows sign-in component couldn't complete verification. Try a fresh browser sign-in?\n\n"
                  if error.broker_failure else "Microsoft requires additional verification. Open Microsoft sign-in now?\n\n") +
                 ("Azure supplied an additional authentication challenge; it will be included in this sign-in.\n\n"
                  if error.claims else "") +
-                "After signing in, check the workspace and run Preview again. "
-                "The interrupted operation will not be replayed; earlier steps may already have completed.\n\n"+
-                str(error),parent=self.root):
+                "After signing in, check the workspace and start the task again. "
+                "The interrupted task is not replayed; earlier steps may already have completed.\n\n" +
+                str(error), parent=self.root):
             return
         if not tenant:
-            tenant=simpledialog.askstring("Client tenant", "Enter the CLIENT tenant ID or verified domain from Azure portal:",parent=self.root)
-            if not tenant:return
-        try:tenant=validate_tenant_hint(tenant)
+            tenant = self.ask_tenant()
+            if not tenant: return
+        try: tenant = validate_tenant_hint(tenant)
         except Stop as problem:
-            messagebox.showerror("Client tenant",str(problem),parent=self.root);return
-        self.auth_recovery_attempts.add((tenant,error.resource,method,bool(error.claims)))
+            messagebox.showerror("Client tenant", str(problem), parent=self.root); return
+        self.auth_recovery_attempts.add((tenant, error.resource, method, bool(error.claims)))
         self.vars["login_method"].set(method)
         self.vars["tenant"].set(tenant)
-        self.tabs.select(0)
+        self.show_page("connect")
         self.login(recovery=error)
 
     def login(self, recovery=None):
-        if self.busy:return
-        if recovery is None:self.auth_recovery_attempts.clear()
-        offer=bool(self.offer_access_management.get()) and recovery is None
+        if self.busy: return
+        if recovery is None: self.auth_recovery_attempts.clear()
         try:
-            value=self.vars["tenant"].get().strip()
-            hint=validate_tenant_hint(value) if value else ""
-            if offer:
-                hint=guid(hint,"client tenant ID for access management (use the directory GUID)")
+            value = self.vars["tenant"].get().strip()
+            hint = validate_tenant_hint(value) if value else ""
         except Stop as error:
-            messagebox.showerror("Tenant details",str(error),parent=self.root)
+            self.toggle_tenant(True)
+            messagebox.showerror("Tenant", str(error), parent=self.root)
             return
-        self.offer_access_management.set(False)  # One attempt only; never replay on MFA recovery.
         self.vars["tenant"].set(hint)
         self.clear_selection()
-        self.auth_hint=hint
-        old=self.session
-        self.session=Session(logger=self.log)
+        self.auth_hint = hint
+        old = self.session
+        self.session = Session(logger=self.log)
         self.session.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] = (
-            "true" if self.vars["login_method"].get()=="Windows account window" else "false")
+            "true" if self.vars["login_method"].get() == "Windows account window" else "false")
         self.finish_signin()
-        cancel=threading.Event()
-        self.signin_cancel=cancel
-        session=self.session
-        self.signin_handoff=create_handoff()
-        self.signin_active=True
-        self.signin_progress.pack(fill="x",pady=(6,0))
+        cancel = threading.Event()
+        self.signin_cancel = cancel
+        session = self.session
+        self.signin_handoff = create_handoff()
+        self.signin_active = True
         self.cancel_signin_button.configure(state="normal")
-        self.signin_deadline=time.monotonic()+90
+        self.signin_deadline = time.monotonic() + SIGNIN_FOCUS_SECONDS
         self.signin_button.configure(state="normal" if self.signin_handoff else "disabled")
+        self.signin_panel.pack(fill="x", pady=(px(12), 0), after=self.signin_main)
+        self.render_session()
         self.watch_signin()
+        if self.current_page() == "connect": self.scroll_into_view(self.signin_main)
         def task():
             try:
                 check_cancelled(cancel)
                 if old:
-                    old._signin_cancel=cancel
+                    old._signin_cancel = cancel
                     try:
-                        try:old.logout()
+                        try: old.logout()
                         except Stop as error:
-                            if not re.search(r"no (?:active )?accounts|account.*(?:not found|does not exist)",str(error),re.I):raise
+                            if not re.search(r"no (?:active )?accounts|account.*(?:not found|does not exist)", str(error), re.I): raise
                             self.log("The previous app session has no usable cached account. Continuing with a fresh sign-in.")
-                    finally:old._signin_cancel=None
+                    finally: old._signin_cancel = None
                 check_cancelled(cancel)
-                session._signin_cancel=cancel
+                session._signin_cancel = cancel
                 if recovery is not None:
-                    rows=session.login(hint, resource=recovery.resource, claims=recovery.claims)
-                elif offer:
-                    rows=session.login(hint, resource="arm", allow_empty=True)
+                    rows = session.login(hint, resource=recovery.resource, claims=recovery.claims)
                 else:
-                    rows=session.login(hint)
+                    rows = session.login(hint)
                 check_cancelled(cancel)
                 return rows
             except Exception:
                 check_cancelled(cancel)
                 raise
             finally:
-                session._signin_cancel=None
-                self.events.put(("signin_finished",None))
+                session._signin_cancel = None
+                self.events.put(("signin_finished", None))
         def done(rows):
             if cancel.is_set():
                 self.discard_cancelled_signin(); return
-            self.display_subscriptions(rows, discover=not offer)
-            if offer:
-                self.azure_access_management(on_skip=lambda:self.display_subscriptions(rows))
-        done._signin_cancel=cancel
-        self.work("Waiting for Microsoft sign-in. Use Cancel sign-in to stop waiting.",task,done)
+            self.display_subscriptions(rows)
+        done._signin_cancel = cancel
+        self.work("Waiting for Microsoft sign-in…", task, done)
 
-    def display_subscriptions(self, rows, discover=True):
-        rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
-        self.subscriptions=rows
+    # ------------------------------------------------------------- discovery
+    @staticmethod
+    def subscription_label(row):
+        state = row.get("state", "Unknown")
+        return "  ·  ".join(filter(None, (row.get("name") or "Unnamed subscription", row["id"],
+                                          None if state == "Enabled" else state, "Tenant " + row["tenantId"])))
+
+    def display_subscriptions(self, rows, discover=True, select=None):
+        rows = sorted(rows, key=lambda r: (r.get("name", "").casefold(), r["id"]))
+        self.subscriptions = rows
         self.sync_connection()
-        self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+" | Tenant: "+r["tenantId"] for r in rows])
+        self.subbox.configure(values=[self.subscription_label(r) for r in rows])
+        self.render_session()
         if rows:
-            self.subbox.current(next((i for i,r in enumerate(rows) if r.get("isDefault")),0))
-            if discover:self.subscription_changed()
+            chosen = next((i for i, r in enumerate(rows) if r["id"] == select), None) if select else None
+            if chosen is None: chosen = next((i for i, r in enumerate(rows) if r.get("isDefault")), 0)
+            self.subbox.current(chosen)
+            if discover: self.subscription_changed()
         else:
             self.vars["subscription"].set("")
-            self.status.set("Signed in; no subscriptions visible yet. Review access or refresh after propagation.")
+            self.status.set("Signed in, but no subscriptions are visible yet. Check your access, then select Refresh.")
 
     def refresh_subscriptions(self):
-        if not self.session or not (self.subscriptions or getattr(self.session,"signed_in",False)):
-            messagebox.showinfo("Sign in first","Complete Sign in & discover first."); return
-        index=self.subbox.current()
-        current=self.subscriptions[index]["id"] if 0 <= index < len(self.subscriptions) else ""
+        if not self.session or not (self.subscriptions or getattr(self.session, "signed_in", False)):
+            messagebox.showinfo("Refresh subscriptions", "Sign in with Microsoft first.", parent=self.root); return
+        index = self.subbox.current()
+        current = self.subscriptions[index]["id"] if 0 <= index < len(self.subscriptions) else ""
         def done(rows):
             self.clear_selection()
-            rows=sorted(rows,key=lambda r:(r.get("name","").casefold(),r["id"]))
-            self.subscriptions=rows
-            self.sync_connection()
-            self.subbox.configure(values=[r["name"]+" | "+r["id"]+" | "+r.get("state","Unknown")+
-                                          " | Tenant: "+r["tenantId"] for r in rows])
-            if rows:
-                self.subbox.current(next((i for i,r in enumerate(rows) if r["id"]==current),0))
-                self.subscription_changed()
-            else: self.status.set("Azure returned no subscriptions after refresh.")
-        self.work("Refreshing subscriptions from Azure...",self.session.refresh_subscriptions,done)
+            self.display_subscriptions(rows, select=current)
+            if not rows: self.status.set("No subscriptions are visible for this account.")
+        self.work("Refreshing subscriptions from Azure…", self.session.refresh_subscriptions, done)
 
     def check_subscription(self):
-        if not self.session or not (self.subscriptions or getattr(self.session,"signed_in",False)):
-            messagebox.showinfo("Sign in first","Complete Sign in & discover first."); return
-        value=simpledialog.askstring("Check missing subscription","Paste the subscription ID shown in Azure portal:",parent=self.root)
-        if not value: return
-        try: value=guid(value.strip(),"subscription ID")
-        except Stop as error:
-            messagebox.showerror("Subscription ID",str(error)); return
+        if not self.session or not (self.subscriptions or getattr(self.session, "signed_in", False)):
+            messagebox.showinfo("Check a subscription", "Sign in with Microsoft first.", parent=self.root); return
+        values = kit.FormDialog(self.root, "Check a subscription",
+            "A read-only check of a subscription you expect to see but don't.",
+            [("id", "Subscription ID", "", "From the Azure portal, for example 22222222-2222-4222-8222-222222222222.")],
+            submit="Check", validate=lambda v: {"id": guid(v["id"].strip(), "subscription ID")}).show()
+        if not values: return
+        value = values["id"]
         def done(report):
-            window=tk.Toplevel(self.root);window.title("Subscription diagnostic - read only");window.geometry("820x540")
-            box=tk.Text(window,wrap="word",font=("Consolas",10));box.pack(fill="both",expand=True,padx=16,pady=16)
-            box.insert("1.0",report);box.configure(state="disabled")
+            window = tk.Toplevel(self.root); window.title("Subscription check"); window.configure(bg=COLORS["card"])
+            body = ttk.Frame(window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
+            body.pack(fill="both", expand=True)
+            ttk.Label(body, text="Subscription check", style="CardTitle.TLabel").pack(anchor="w")
+            ttk.Label(body, text="Read-only check of subscription " + value + ".", style="CardSubtitle.TLabel").pack(
+                anchor="w", pady=(px(2), px(14)))
+            frame, box = kit.text_area(body, 18, readonly=True)
+            frame.pack(fill="both", expand=True, pady=(0, px(14)))
+            kit.set_text(box, report)
             def copy():
-                self.root.clipboard_clear();self.root.clipboard_append(report)
-            ttk.Button(window,text="Copy results",command=copy).pack(pady=(0,12))
-            self.status.set("Subscription diagnostic complete. Review the separate results window.")
-            window.lift()
-        self.work("Checking subscription access and workspaces...",lambda:self.session.check_subscription(value),done)
+                self.root.clipboard_clear(); self.root.clipboard_append(report); self.flash("Copied.")
+            actions, buttons = kit.action_row(body, secondary=(("Copy results", copy),), close=("Close", window.destroy))
+            actions.pack(fill="x")
+            kit.place_dialog(window, self.root, 860, 600, 600, 400)
+            kit.modal(window, self.root, window.destroy, focus=buttons[-1])
+            self.flash("Subscription check complete.", "info")
+        self.work("Checking subscription access and workspaces…", lambda: self.session.check_subscription(value), done)
 
-    def subscription_changed(self,event=None):
-        self.workspace=None; self.plan=None; self.workspaces=[]
+    @staticmethod
+    def workspace_rows(sub, workspace=None, note=None):
+        """The identity text shown in the Workspace card, one 'Label: value' line each."""
+        lines = ["Tenant ID: " + sub["tenantId"], "Subscription ID: " + sub["id"]]
+        if workspace is not None:
+            lines += [label + ": " + workspace[key] for key, label in
+                      (("resource_group", "Resource group"), ("workspace_name", "Workspace name"), ("workspace_id", "Workspace ID"))]
+        elif note:
+            lines += ["Workspace name: " + note]
+        return "\n".join(lines)
+
+    def reset_workspaces(self):
+        self.workspace = None; self.workspaces = []
         self.rules_page.reset()
         self.wsbox.configure(values=[]); self.vars["workspace"].set("")
-        index=self.subbox.current()
-        if index<0: return
-        sub=self.subscriptions[index]
-        self.render_access_status()
-        self.auth_hint=sub["tenantId"]
+
+    def subscription_changed(self, event=None):
+        self.reset_workspaces()
+        index = self.subbox.current()
+        if index < 0: return
+        sub = self.subscriptions[index]
+        self.auth_hint = sub["tenantId"]
         self.vars["tenant"].set(self.auth_hint)
-        self.identity.set("Tenant ID: "+sub["tenantId"]+"\nSubscription ID: "+sub["id"]+
-                          "\nResource group: Pending discovery\nWorkspace name: Pending discovery\nWorkspace ID: Pending discovery")
+        self.identity.set(self.workspace_rows(sub, note="Loading workspaces…"))
         self.discover()
 
     def discover(self):
-        index=self.subbox.current()
-        if not self.session or index<0:
-            messagebox.showerror("Sign in first","Sign in and select a subscription."); return
-        sub=self.subscriptions[index]
-        self.workspace=None; self.plan=None; self.workspaces=[]
-        self.rules_page.reset()
-        self.wsbox.configure(values=[]); self.vars["workspace"].set("")
+        index = self.subbox.current()
+        if not self.session or index < 0:
+            messagebox.showinfo("Refresh workspaces", "Sign in and choose a subscription first.", parent=self.root); return
+        sub = self.subscriptions[index]
+        self.reset_workspaces()
         def done(rows):
-            self.workspaces=rows
+            self.workspaces = rows
             self.sync_connection()
-            self.wsbox.configure(values=[r["workspace_name"]+" | "+r["resource_group"] for r in rows])
+            self.wsbox.configure(values=[r["workspace_name"] + "  ·  " + r["resource_group"] for r in rows])
             if rows:
                 self.wsbox.current(0); self.workspace_changed()
-                self.status.set(f"Found {len(self.subscriptions)} subscription(s), {len(rows)} workspace(s) here. Confirm the selected destination before copying.")
+                count = len(rows)
+                self.flash(f"Found {count} workspace{'s' if count != 1 else ''} in this subscription. "
+                           f"Selected {rows[0]['workspace_name']}.")
             else:
-                self.identity.set("Tenant ID: "+sub["tenantId"]+"\nSubscription ID: "+sub["id"]+
-                                  "\nResource group: Not available\nWorkspace name: No accessible workspaces\nWorkspace ID: Not available")
-                self.status.set("No workspaces visible in this subscription. Check access or select another subscription.")
-        self.work("Discovering workspace details...",lambda:self.session.discover(sub["id"],sub["tenantId"]),done)
+                self.identity.set(self.workspace_rows(sub, note="No accessible workspaces"))
+                self.status.set("No workspaces in this subscription. Choose another subscription, or check your access.")
+        self.work("Loading workspaces…", lambda: self.session.discover(sub["id"], sub["tenantId"]), done)
 
-    def workspace_changed(self,event=None):
-        index=self.wsbox.current()
-        if index<0: return
-        self.workspace=dict(self.workspaces[index]); self.plan=None
-        self.reset_audit_selection()
+    def workspace_changed(self, event=None):
+        index = self.wsbox.current()
+        if index < 0: return
+        self.workspace = dict(self.workspaces[index])
         self.rules_page.reset()
-        selected=dict(self.workspace)
-        self.root.after_idle(lambda:self.rules_page.load() if self.workspace==selected and not self.busy else None)
-        account=self.session.account or {}
-        self.identity.set("Signed in: "+account.get("user",{}).get("name","unknown")+"\n"+
-            "\n".join(label+": "+self.workspace[key] for key,label in
-                      (("tenant_id","Tenant ID"),("subscription_id","Subscription ID"),("resource_group","Resource group"),
-                       ("workspace_name","Workspace name"),("workspace_id","Workspace ID"))))
-
-    def azure_access_management(self, on_skip=None):
-        if self.busy:return
-        try:
-            require(self.session and self.session.signed_in, "Sign in to the client tenant first.")
-            tenant=guid(self.vars["tenant"].get().strip(), "client tenant ID (use the directory GUID)")
-            require(tenant == self.auth_hint, "The tenant selection changed. Sign in to this client tenant again.")
-        except Stop as error:
-            messagebox.showerror("Azure access management",str(error),parent=self.root);return
-        session=self.session
-        def reviewed(plan):
-            if self.session is not session or self.vars["tenant"].get().strip() != tenant:
-                self.status.set("Client session changed. Review Azure access management again.");return
-            text=("Enable Access management for Azure resources for this signed-in user?\n\n"
-                  "Account: " + plan["account"] + "\nUser object ID: " + plan["principal"] +
-                  "\nClient tenant: " + plan["tenant"] +
-                  "\n\nThis grants User Access Administrator at root scope (/), covering all subscriptions "
-                  "and management groups in this tenant. Azure requires an active Global Administrator role. "
-                  "It does not grant Contributor.\n\nThe grant remains until removed; signing out or ending "
-                  "CyberQP access does not remove it. Turn it off in Microsoft Entra ID > Properties when finished.")
-            if not messagebox.askokcancel("Review Azure access management",text,parent=self.root):
-                if on_skip:on_skip()
-                return
-            self.plan=None
-            def completed(result):
-                if self.session is not session:return
-                self.log(result)
-                messagebox.showinfo("Azure access management enabled",result,parent=self.root)
-                self.clear_selection()
-                self.work("Refreshing subscriptions after enabling access management...",
-                          lambda:[row for row in session.refresh_subscriptions() if row.get("tenantId", "").lower()==tenant],
-                          self.display_subscriptions,page=0)
-            self.work("Enabling reviewed Azure access management...",
-                      lambda:enable_access_management(session,plan),completed,page=0)
-        self.work("Checking the signed-in account and client tenant...",
-                  lambda:access_management_plan(session,tenant),reviewed,page=0)
-
-    def access_target(self):
-        index=self.subbox.current()
-        if not self.session or not 0 <= index < len(self.subscriptions):return None
-        sub=self.subscriptions[index]
-        return dict(tenant_id=sub["tenantId"],subscription_id=sub["id"])
-
-    def render_access_status(self):
-        target=self.access_target()
-        try:
-            if target:
-                self.access_summary.set(history_text(self.access_history.get(target)));return
-            tenant=self.vars["tenant"].get().strip().lower()
-            rows=[(key,row) for key,row in self.access_history.read().items() if key.split("/")[0]==tenant]
-            if rows:
-                self.access_summary.set("Saved activity for this tenant (not a live access check):\n"+
-                    "\n\n".join("Subscription: "+key.split("/")[-1]+"\n"+history_text(row) for key,row in sorted(rows)[:5]))
-            else:self.access_summary.set("Select a subscription to view saved access activity.")
-        except Exception as error:self.access_summary.set("Access history unavailable: "+str(error))
-
-    def refresh_setup_access(self):
-        if self.busy:return
-        target=self.access_target()
-        if not target:
-            messagebox.showinfo("Select subscription","Sign in and select the client subscription first.",parent=self.root);return
-        session=self.session;location=self.vars["delegation_location"].get().strip() or "eastus"
-        self.plan=None
-        def task():
-            try:result=check_access(session,target,location)
-            except Exception:
-                self.access_history.record(target,"checked",status="Check could not complete; see the operation error.",ready=None)
-                raise
-            status=("Checked setup actions permitted. Run Preview setup to validate the full configuration."
-                    if result["ready"] else "Setup access not ready. "+result["detail"])
-            # Store a short status, never raw authentication responses or tokens.
-            self.access_history.record(target,"checked",account=result["account"],ready=result["ready"],
-                status="Checked setup actions permitted; run Preview setup." if result["ready"] else "Azure has not confirmed setup access.")
-            return result,status
-        def done(value):
-            if self.session is not session or self.access_target()!=target:return
-            result,status=value;self.render_access_status();self.status.set(status);self.log(status)
-            if result["missing"]:self.log("Actions not listed as permitted: "+", ".join(result["missing"]))
-        self.work("Rechecking setup permissions with Azure; no roles or resources are changed...",task,done,page=0)
-
-    def reconnect_azure(self):
-        if self.busy:return
-        target=self.access_target()
-        tenant=target["tenant_id"] if target else self.vars["tenant"].get().strip()
-        if not tenant:
-            messagebox.showinfo("Client tenant","Choose a saved client or enter its tenant ID before refreshing sign-in.",parent=self.root);return
-        self.vars["tenant"].set(tenant)
-        # Request ARM authentication explicitly. Microsoft can require interaction;
-        # never promise a silent refresh or replay an interrupted cloud operation.
-        self.login(recovery=AuthenticationRequired("User requested a fresh Azure management sign-in.",tenant))
-
-    def setup_access(self):
-        if self.busy:return
-        index=self.subbox.current()
-        if not self.session or index<0:
-            messagebox.showinfo("Select subscription","Sign in and select the client subscription first.",parent=self.root);return
-        session=self.session
-        sub=self.subscriptions[index]
-        target=dict(tenant_id=sub["tenantId"],subscription_id=sub["id"])
-        try:
-            self.access_history.record(target,"clicked")
-        except Exception as error:
-            messagebox.showerror("Access history",str(error),parent=self.root);return
-        self.render_access_status()
-        def reviewed(plan):
-            if self.session is not session:return
-            if not plan["needs_role"]:
-                messagebox.showinfo("Setup access", "Your current session lists provider registration and deployment actions as permitted. No additional Contributor role is needed. Use Refresh setup access to test deployment validation. Preview setup will check the remaining onboarding permissions.",parent=self.root);return
-            text=("Assign active Contributor to the signed-in user?\n\nAccount: " + plan["account"] +
-                  "\nUser object ID: " + plan["principal"] + "\nClient tenant: " + target["tenant_id"] +
-                  "\nScope: " + plan["scope"] +
-                  "\n\nThis permits management of resources throughout this subscription. It remains assigned until removed; CyberQP session expiry does not remove this Azure assignment. Azure policies and role conditions still apply.")
-            if not messagebox.askokcancel("Review Contributor assignment",text,parent=self.root):return
-            self.plan=None
-            def assign():
-                result=apply_contributor(session,plan,details=True)
-                if result["assigned"]:
-                    self.access_history.record(target,"accepted",account=plan["account"],ready=False,
-                        status="Azure accepted the assignment. Effective access has not been checked yet.")
-                return result["message"]
-            def completed(result):
-                self.render_access_status();self.log(result);self.status.set(result)
-            self.work("Assigning reviewed Contributor access...",assign,completed,page=0)
-        self.work("Checking current subscription access...",lambda:access_plan(session,target),reviewed,page=0)
-
-    def payload(self):
-        v=self.values()
-        require(self.workspace and self.session, "Sign in and select a discovered workspace first.")
-        require(v["tenant"] == self.auth_hint, "Tenant field changed since sign-in. Sign in to the selected tenant again.")
-        sub=self.subscriptions[self.subbox.current()]
-        require(sub["tenantId"].lower()==self.workspace["tenant_id"].lower(), "Client/tenant selection changed.")
-        validate_target(v["client_slug"],v["label"])
-        return config_from_workspace(self.workspace,v["client_slug"],v["label"],v,self.extras)
-
-    def onboard(self,apply):
-        try:
-            config=self.payload()
-            token=fingerprint(config,onboarding_mode(config),[])
-            if apply:
-                require(self.plan and self.plan[0]==token and time.time()-self.plan[1]<900,
-                        "Preview this exact configuration first. Plans expire after 15 minutes.")
-            summary, action = review_text(config)
-            self.summary.set(summary)
-            if apply and not messagebox.askokcancel("Apply reviewed setup",summary+
-                    "\n\n"+action+"\nProceed with this destination?",parent=self.root):
-                return
-            self.tabs.select(2)
-            self.plan=None
-            def task():
-                return full_run(self.session,config,apply)
-            def done(result):
-                self.log(result)
-                self.status.set(result)
-                if not apply: self.plan=(token,time.time())
-                else: self.log("Merge the reviewed PR, run preview on main, review the what-if, then run an approved deployment.")
-            self.work("Applying reviewed setup..." if apply else "Building a read-only setup plan...",task,done)
-        except Exception as error: messagebox.showerror("Setup details",str(error))
+        selected = dict(self.workspace)
+        self.root.after_idle(lambda: self.rules_page.load() if self.workspace == selected and not self.busy else None)
+        account = self.session.account or {}
+        sub = dict(tenantId=self.workspace["tenant_id"], id=self.workspace["subscription_id"])
+        self.identity.set("Signed in: " + account.get("user", {}).get("name", "unknown") + "\n" +
+                          self.workspace_rows(sub, self.workspace))
 
     def render_details(self):
-        self.details.configure(state="normal")
-        self.details.delete("1.0","end")
-        self.details.insert("1.0",self.identity.get())
-        self.details.configure(state="disabled")
+        lines = self.identity.get().splitlines()
+        rows = [line.split(": ", 1) for line in lines if ": " in line]
+        if lines and len(rows) == len(lines):
+            self.details_empty.pack_forget()
+            # The account already shows in the note, pill and sidebar; Copy details keeps it.
+            self.details.set([row for row in rows if row[0] != "Signed in"]); self.details.pack(fill="x")
+        else:
+            self.details.pack_forget()
+            self.details_empty.configure(text=self.identity.get()); self.details_empty.pack(fill="x")
+        self.render_session()
 
     def copy_workspace(self):
         if not self.workspace:
-            messagebox.showinfo("Select workspace","Discover and select a workspace first.")
+            messagebox.showinfo("Copy details", "Choose a workspace first.", parent=self.root)
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(self.identity.get())
-        self.status.set("Workspace details copied to the clipboard.")
+        self.copy_button.configure(text="Copied")
+        self.root.after(2000, lambda: self.copy_button.winfo_exists() and self.copy_button.configure(text="Copy details"))
+        self.flash("Workspace details copied.")
 
-    def export_config(self):
-        try:
-            v=self.values()
-            config=config_from_workspace(self.workspace,v["client_slug"],v["label"],v,self.extras)
-            path=filedialog.asksaveasfilename(defaultextension=".json",initialfile=v["client_slug"]+"-"+v["label"]+".json",
-                                            filetypes=[("JSON configuration","*.json")])
-            if path:
-                Path(path).write_text(json.dumps(config,indent=2),encoding="utf-8")
-                self.status.set("Onboarding configuration exported. It contains client and managing-tenant identifiers; store it accordingly.")
-        except Exception as error: messagebox.showerror("Export",str(error))
-
-    def import_config(self):
-        path=filedialog.askopenfilename(filetypes=[("JSON configuration","*.json")])
-        if not path:return
-        try:
-            c=json.loads(Path(path).read_text(encoding="utf-8-sig")); validate_config(c)
-            self.clear_selection()
-            mapping={"tenant":"tenant_id","client_slug":"client","label":"workspace_label",
-                     "github_owner":"github_owner","github_repo":"github_repo",
-                     "managing_tenant_id":"managing_tenant_id",
-                     "deploy_group_object_id":"deploy_group_object_id",
-                     "read_group_object_id":"read_group_object_id",
-                     "engineer_group_object_id":"engineer_group_object_id",
-                     "preview_environment":"preview_environment",
-                     "production_environment":"production_environment",
-                     "msp_offer_name":"msp_offer_name","delegation_location":"delegation_location",
-                     "rule_path":"initial_rule_path"}
-            for local,source in mapping.items(): self.vars[local].set(c.get(source,""))
-            self.vars["client_name"].set(c["client"])
-            self.vars["allow_missing_mitre"].set(c.get("allow_missing_mitre",False))
-            self.extras={}
-            self.status.set("Imported settings. Sign in and rediscover the workspace to verify the destination.")
-        except Exception as error: messagebox.showerror("Import",str(error))
-
+    # ----------------------------------------------------------------- github
     def github_login(self):
         def task():
-            session=self.session or Session(logger=self.log)
-            require(session.gh_exe,"Install GitHub CLI first.")
+            session = self.session or Session(logger=self.log)
+            require(session.gh_exe, "GitHub CLI isn't installed on this PC. Ask your administrator to install it.")
             # Explicit user action. Device authorization text is shown live; no tokens are printed.
-            p=subprocess.Popen([session.gh_exe,"auth","login","--hostname","github.com","--git-protocol","https","--web"],
-                stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,
-                encoding="utf-8",errors="replace",env=session.env,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            p = subprocess.Popen([session.gh_exe, "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", env=session.env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             p.stdin.write("\n"); p.stdin.flush(); p.stdin.close()
-            timer=threading.Timer(900,p.kill); timer.start()
+            timer = threading.Timer(GITHUB_LOGIN_TIMEOUT_SECONDS, p.kill); timer.start()
             try:
                 for line in p.stdout: self.log(line.rstrip())
-                require(p.wait()==0,"GitHub sign-in did not complete. Check the displayed authorization message.")
+                require(p.wait() == 0, "GitHub sign-in didn't finish. Check the one-time code shown in Session activity.")
             finally: timer.cancel()
-            return "GitHub sign-in completed."
-        self.tabs.select(2)
-        self.work("Complete GitHub authorization in the browser; a one-time code may appear below.",task,
-                  lambda result:self.status.set(result))
+            return "Signed in to GitHub."
+        self.show_page("connect"); self.root.update_idletasks()
+        self.page_canvases[PAGES.index("connect")].yview_moveto(1)
+        def done(result):
+            self.flash(result)
+            self.rule_builder.check_github(force=True)
+        self.work("Finish signing in to GitHub in the browser; the one-time code appears in Session activity…", task, done)
 
     def logout(self):
-        if not self.session:return
-        session=self.session
+        if not self.session or self.busy: return
+        session = self.session
         def done(_):
-            self.session=None; self.clear_selection(); self.status.set("Azure app session signed out.")
-        self.work("Signing out of this app's Azure session...",session.logout,done)
+            self.session = None; self.clear_selection(); self.flash("Signed out.")
+        self.work("Signing out…", session.logout, done)
 
     def close(self):
         if self.busy:
-            messagebox.showinfo("Operation running","Wait for the operation to finish before closing. Cloud changes may still be in progress.")
-            return
+            if not messagebox.askyesno("Close Sentinel Workspace?",
+                    "A task is still running. If you close now it will be abandoned; nothing already sent to Azure or GitHub is undone.",
+                    parent=self.root):
+                return
+            self.save_state(); self.root.destroy(); return
         if not self.rule_builder.can_discard():
             return
+        self.save_state()
         if self.session:
-            session=self.session
-            self.work("Signing out before closing...",session.logout,lambda _:self.root.destroy())
-        else:self.root.destroy()
+            session = self.session
+            self.work("Signing out before closing…", session.logout, lambda _: self.root.destroy())
+            self.closing = True
+        else: self.root.destroy()
+
 
 def main():
-    if os.name=="nt":
+    if os.name == "nt":
         try:
             import ctypes
             ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-        except (AttributeError,OSError):
+        except (AttributeError, OSError):
             pass
-    root=tk.Tk()
+    root = tk.Tk()
     App(root)
     root.mainloop()
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     main()

@@ -4,7 +4,6 @@ import json
 import subprocess
 import sys
 import tempfile
-import time
 import tkinter as tk
 import unittest
 from pathlib import Path
@@ -119,14 +118,13 @@ class DesktopTests(unittest.TestCase):
             app.login()
             session.login.assert_called_once_with("")
             session.discover.assert_called_once_with(SUB,TENANT)
-            details=app.details.get("1.0","end")
+            shown=[label.cget("text") for label in app.details.values]
             for value in (TENANT,SUB,WS,"rg-example-sentinel","law-example-sentinel"):
-                self.assertIn(value,details)
-            self.assertEqual(app.details.cget("state"),"disabled")
+                self.assertIn(value,shown)
             session.discover.return_value=[]
             app.subscription_changed()
             self.assertIsNone(app.workspace)
-            self.assertNotIn(WS,app.details.get("1.0","end"))
+            self.assertNotIn(WS,[label.cget("text") for label in app.details.values])
             self.assertIn("No accessible workspaces",app.identity.get())
 
     def test_client_can_be_saved_before_tenant_is_known(self):
@@ -168,15 +166,14 @@ class DesktopTests(unittest.TestCase):
             app.save_client()
         self.assertFalse(app.clientfile.exists())
 
-    def test_cyberqp_opens_selected_region_without_authentication(self):
+    def test_cyberqp_opens_portal_without_authentication(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root)
+        self.assertNotIn("cyberqp_region",app.vars)
         with patch.object(ui.webbrowser,"open",return_value=True) as browser,patch.object(ui,"Session") as session:
-            for region,url in backend.CYBERQP_PORTALS.items():
-                app.vars["cyberqp_region"].set(region)
-                app.open_cyberqp()
-                browser.assert_called_with(url,new=2)
-            session.assert_not_called()
+            app.open_cyberqp()
+        browser.assert_called_once_with(backend.CYBERQP_PORTALS["US"],new=2)
+        session.assert_not_called()
 
     def test_logout_of_empty_session_is_harmless(self):
         session=backend.Session(self.data/"empty")
@@ -233,14 +230,6 @@ class DesktopTests(unittest.TestCase):
         with patch.object(ui,"Session",return_value=new),patch.object(app,"work"):
             app.login()
         self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"true")
-
-    def test_portal_button_opens_portal_without_app_authentication(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=ui.App(root)
-        with patch.object(ui.webbrowser,"open",return_value=True) as browser,patch.object(ui,"Session") as session:
-            app.open_azure_portal()
-        browser.assert_called_once_with("https://portal.azure.com/",new=2)
-        session.assert_not_called()
 
     def test_workspace_discovery_extracts_all_ids(self):
         self.assertEqual(WORKSPACE["resource_group"],"rg-example-sentinel")
@@ -330,7 +319,6 @@ class DesktopTests(unittest.TestCase):
     def test_delete_last_client_persists_empty_list_and_clears_plan(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
-        app.plan=("old",123)
         app.workspace=dict(WORKSPACE)
         retained=self.data/"runs"/"example-client-primary"
         retained.mkdir(parents=True)
@@ -342,7 +330,6 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(json.loads(app.clientfile.read_text()),[])
         self.assertEqual(app.clients,[])
         self.assertEqual(app.vars["client_name"].get(),"")
-        self.assertIsNone(app.plan)
         self.assertIsNone(app.workspace)
         self.assertEqual(app.session.calls,[])
         self.assertTrue(state.exists())
@@ -364,22 +351,28 @@ class DesktopTests(unittest.TestCase):
             app.delete_client();prompt.assert_not_called()
         self.assertEqual(len(app.clients),1)
 
-    def test_lighthouse_settings_and_navigation_are_available(self):
+    def test_navigation_offers_connect_rules_and_builder_only(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
-        self.assertNotIn("mode",app.vars)
-        for key in ("managing_tenant_id","deploy_group_object_id","read_group_object_id",
-                    "engineer_group_object_id","preview_environment","production_environment"):
-            self.assertIn(key,app.vars)
-        sidebar=app.nav[0][0].master
-        rows=sorted(app.nav,key=lambda row:sidebar.pack_slaves().index(row[0]))
-        self.assertEqual([row[1].cget("text") for row in rows],
-                         ["Workspaces","Analytics rules","Repository catalog","Rule builder","Onboarding","Review onboarding","Sentinel audit"])
+        self.assertEqual([item["title"].cget("text") for item in app.nav],["Connect","Rules","Rule builder"])
+        for removed in ("audit_start","label","managing_tenant_id"):
+            self.assertNotIn(removed,app.vars)
         root.deiconify();root.update()
-        for row in rows:
-            row[0].event_generate("<Button-1>")
+        for index,item in enumerate(app.nav):
+            item["row"].event_generate("<Button-1>")
             root.update()
-            self.assertEqual(row[1].cget("fg"),"#ffffff")
+            self.assertEqual(app.tabs.index("current"),index)
+            self.assertEqual(item["title"].cget("fg"),"#FFFFFF")
+
+    def test_saving_repository_keeps_command_line_settings(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
+        (self.data/"settings.json").write_text(json.dumps({"managing_tenant_id":TENANT,"github_owner":"old"}))
+        app=self.make_app(root)
+        self.assertEqual(app.vars["github_owner"].get(),"old")
+        app.vars["github_owner"].set("example");app.vars["github_repo"].set("detections")
+        app.save_settings()
+        self.assertEqual(json.loads(app.settingsfile.read_text()),
+                         {"managing_tenant_id":TENANT,"github_owner":"example","github_repo":"detections"})
 
     def test_gui_starts_without_authentication(self):
         root=tk.Tk();root.withdraw()
@@ -389,138 +382,23 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.vars["client_name"].get(),"Example client")
         self.assertIsNone(app.workspace)
         self.assertIsNone(app.session)
-        self.assertEqual(len(app.tabs.tabs()),7)
-    def test_audit_requires_discovered_workspace(self):
+        self.assertEqual(len(app.tabs.tabs()),3)
+    def test_new_client_dialog_validates_tenant(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root)
-        with patch.object(ui.messagebox,"showerror") as message,patch.object(ui.filedialog,"askdirectory") as choose:
-            app.collect_audit()
-        message.assert_called_once()
-        choose.assert_not_called()
-
-    def test_audit_selection_clears_with_workspace(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root);app.workspace=dict(WORKSPACE)
-        app.audit_source_tables=["SecurityEvent"]
-        app.audit_flags["audit"].set(True)
-        app.evidence_folder=self.data
-        app.clear_selection()
-        self.assertEqual(app.audit_source_tables,[])
-        self.assertFalse(app.audit_flags["audit"].get())
-        self.assertIsNone(app.evidence_folder)
-
-    def test_audit_invalid_selection_does_not_open_destination_dialog(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
-        app.audit_source_tables=["Heartbeat | take 1"]
-        with patch.object(ui.messagebox,"showerror") as message,patch.object(ui.filedialog,"askdirectory") as choose:
-            app.collect_audit()
-        message.assert_called_once();choose.assert_not_called()
-
-    def test_audit_defaults_to_configuration_without_logs(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root)
-        options=app.audit_options()
-        self.assertEqual(options["configurations"],list(ui.CONFIGURATIONS))
-        self.assertEqual(options["source_tables"],[])
-        self.assertFalse(options["audit"] or options["health"])
-        self.assertEqual(options["source_mode"],"sample")
-
-    def test_audit_action_uses_captured_workspace_and_reports_results(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
-        app.vars["audit_start"].set("2024-01-01");app.vars["audit_end"].set("2024-01-02")
-        result=dict(folder=str(self.data/"evidence-example"),manifest=dict(results=[dict(title="Rules",status="access_denied",record_count=0)]))
-        with patch.object(ui.filedialog,"askdirectory",return_value=str(self.data)),patch.object(ui,"collect_evidence",return_value=result) as collect,patch.object(app,"work") as launch:
-            app.collect_audit()
-            self.assertEqual(launch.call_args.kwargs["page"],3)
-            app.workspace=None
-            returned=launch.call_args.args[1]()
-            launch.call_args.args[2](returned)
-        self.assertEqual(collect.call_args.args[1],WORKSPACE)
-        self.assertIn("access denied",app.audit_summary.get())
-        self.assertEqual(app.tabs.index("current"),3)
-        self.assertIsNone(app.plan)
-
-    def test_audit_picker_previews_selected_tables_and_does_not_treat_denial_as_zero(self):
-        import time
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root);app.workspace=dict(WORKSPACE)
-        app.vars["audit_start"].set("2024-01-01");app.vars["audit_end"].set("2024-01-02")
-        result=dict(status="collected",records=[dict(name="SigninLogs",properties=dict(plan="Analytics")),dict(name="SentinelAudit")])
-        app.show_source_picker(result,FakeSession(),dict(WORKSPACE))
-        def descendants(widget):
-            for child in widget.winfo_children():
-                yield child
-                yield from descendants(child)
-        widgets=list(descendants(root))
-        tree=next(w for w in widgets if isinstance(w,ui.ttk.Treeview) and w.winfo_toplevel() is not root)
-        self.assertEqual(tree.get_children(),("SigninLogs",))
-        self.assertFalse(tree.selection())
-        tree.selection_set("SigninLogs")
-        preview=next(w for w in widgets if isinstance(w,ui.ttk.Button) and w.cget("text")=="Preview selected counts")
-        use=next(w for w in widgets if isinstance(w,ui.ttk.Button) and w.cget("text")=="Use selected tables")
-        with patch.object(ui,"preview_log_tables",return_value=[dict(table="SigninLogs",records=[],status="access_denied")]) as query:
-            preview.invoke()
-            deadline=time.monotonic()+3
-            while tree.set("SigninLogs","status")=="Not previewed" and time.monotonic()<deadline:
-                root.update();time.sleep(.01)
-        self.assertEqual(tree.set("SigninLogs","count"),"Unknown")
-        self.assertEqual(tree.set("SigninLogs","status"),"access denied")
-        self.assertEqual(query.call_args.args[2:],("2024-01-01","2024-01-02",["SigninLogs"]))
-        use.invoke()
-        self.assertEqual(app.audit_options()["source_tables"],["SigninLogs"])
-
-    def test_audit_configuration_export_ignores_log_dates(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root);app.workspace=dict(WORKSPACE);app.session=FakeSession()
-        app.vars["audit_start"].set("invalid")
-        with patch.object(ui.filedialog,"askdirectory",return_value=str(self.data)),patch.object(app,"work") as launch:
-            app.collect_audit()
-        launch.assert_called_once()
-
-    def test_profile_slug_uses_shared_validation_before_saving(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root)
-        with patch.object(ui.messagebox,"showerror") as error:
-            for value in ("a"*63,"double--dash"):
-                app.vars["client_slug"].set(value);app.save_client()
-                self.assertFalse(app.clientfile.exists())
-            self.assertEqual(error.call_count,2)
-        app.vars["client_slug"].set("explosive-countermeasures-international")
-        app.save_client()
-        self.assertEqual(json.loads(app.clientfile.read_text())[0]["slug"],"explosive-countermeasures-international")
-
-    def test_payload_reports_combined_target_overflow(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root);app.session=FakeSession();app.workspace=dict(WORKSPACE)
-        app.auth_hint=TENANT;app.subscriptions=[dict(id=SUB,tenantId=TENANT)]
-        app.subbox.configure(values=["Example"]);app.subbox.current(0)
-        app.vars["client_slug"].set("a"*32)
-        app.vars["label"].set("b"*32)
-        with patch.object(ui,"config_from_workspace") as build,self.assertRaisesRegex(Stop,"is 65 characters; the limit is 64"):
-            app.payload()
-        build.assert_not_called()
-
-    def test_gui_blocks_apply_without_plan(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root)
-        app.payload=self.lighthouse_config
-        with patch.object(ui.messagebox,"showerror") as message, patch.object(app,"work") as launch:
-            app.onboard(True)
-            launch.assert_not_called()
-            self.assertIn("Preview",message.call_args.args[1])
-    def test_gui_blocks_expired_or_changed_plan(self):
-        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
-        app=self.make_app(root)
-        payload=self.lighthouse_config()
-        app.payload=lambda:payload
-        token=backend.fingerprint(payload,"lighthouse-delegation",[])
-        for plan in ((token,0),("different configuration",time.time())):
-            with self.subTest(plan=plan),patch.object(ui.messagebox,"showerror") as message,patch.object(app,"work") as launch:
-                app.plan=plan
-                app.onboard(True);launch.assert_not_called()
-                self.assertIn("Preview",message.call_args.args[1])
+        app=ui.App(root)
+        def show(dialog,tenant):
+            dialog.vars["name"].set("Fabrikam Inc");dialog.vars["tenant"].set(tenant)
+            dialog.submit()
+            if dialog.result is None:
+                self.assertIn("Directory (tenant) ID",dialog.error.get());dialog.window.destroy()
+            return dialog.result
+        with patch.object(ui.kit.FormDialog,"show",lambda dialog:show(dialog,"portal.azure.com")):
+            app.add_client()
+        self.assertFalse(app.clientfile.exists())
+        with patch.object(ui.kit.FormDialog,"show",lambda dialog:show(dialog," Fabrikam.OnMicrosoft.com ")):
+            app.add_client()
+        self.assertEqual(json.loads(app.clientfile.read_text()),
+                         [{"name":"Fabrikam Inc","tenant":"fabrikam.onmicrosoft.com"}])
 
 if __name__=="__main__":unittest.main(verbosity=2)
 

@@ -36,7 +36,7 @@ class HistoryTests(unittest.TestCase):
             rows, issues = list_requests(self.folder)
         self.assertFalse(issues)
         self.assertEqual([row["name"] for row in rows], ["Later rule", "Earlier rule"])
-        self.assertEqual([row["status"] for row in rows], ["PR link saved", "Submission unconfirmed"])
+        self.assertEqual([row["status"] for row in rows], ["Submitted — awaiting approval", "Not finished — open to resume"])
         self.assertNotIn("content", rows[0])
 
     def test_invalid_file_does_not_hide_valid_records_or_change_files(self):
@@ -108,7 +108,7 @@ class HistoryDialogTests(unittest.TestCase):
         self.select(); self.path.write_text("{}", encoding="utf-8")
         with patch("sentinel_app.review_history.ReviewDialog") as open_dialog: self.dialog.open_selected()
         open_dialog.assert_not_called()
-        self.assertIn("Could not open", self.dialog.notice.get())
+        self.assertIn("couldn't be opened", self.dialog.notice.get())
 
     def test_busy_operation_blocks_reopen_and_close(self):
         self.select(); self.app.busy = True

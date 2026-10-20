@@ -197,8 +197,8 @@ class AssignmentService(ReviewService):
 
     def change_title(self,plan): return 'Assign Sentinel rule: '+plan['name'][:160]
 
-    def pull_body(self,plan):
-        return ('Assigns `'+plan['rule_path']+'` to the reviewed client workspaces.\n\n'
+    def pull_body(self,plan,note=''):
+        return ((note.strip()+'\n\n' if note and note.strip() else '')+'Assigns `'+plan['rule_path']+'` to the reviewed client workspaces.\n\n'
                 'Requested rule state: '+('Enabled' if plan['enabled'] else 'Disabled')+'. '
                 'Existing overrides are preserved except for the explicitly reviewed enabled value. '
                 'Workspace enablement, Azure destinations and the shared rule file are unchanged.\n\n'

@@ -39,7 +39,12 @@ class ReviewDialogTests(unittest.TestCase):
         self.assertIn("before/" + NEW, self.dialog.text.get("1.0", "end"))
         self.assertEqual(str(self.dialog.submit_button.cget("state")), "normal")
         with patch.object(self.app, "work", side_effect=self.work): self.dialog.submit()
+        self.assertFalse(self.remote.pulls)  # A reason is required before anything is sent.
+        self.assertIn("why the rule is changing", self.dialog.notice.get())
+        self.dialog.reason.insert("1.0", "Tightened the threshold after false positives.")
+        with patch.object(self.app, "work", side_effect=self.work): self.dialog.submit()
         self.assertEqual(len(self.remote.pulls), 1)
+        self.assertIn("Tightened the threshold", self.remote.pulls[0]["body"])
         self.assertEqual(str(self.dialog.submit_button.cget("state")), "disabled")
         self.assertEqual(str(self.dialog.link_button.cget("state")), "normal")
 
@@ -53,6 +58,7 @@ class ReviewDialogTests(unittest.TestCase):
     def test_failed_submission_can_retry_same_request(self):
         with patch.object(self.app, "work", side_effect=self.work): self.dialog.prepare()
         identity = self.dialog.record["plan"]["request_id"]
+        self.dialog.reason.insert("1.0", "Covers the new sign-in table.")
         self.remote.fail_after = "/pulls"
         with patch.object(self.app, "work", side_effect=self.work): self.dialog.submit()
         self.assertIn("Recovery files", self.dialog.notice.get())
@@ -63,8 +69,8 @@ class ReviewDialogTests(unittest.TestCase):
     def test_draft_source_round_trip_preserves_update_context(self):
         source = {"repository": REPO, "revision": "a" * 40, "path": NEW}
         self.builder.load_form(valid_form(), source=source)
-        path = Path(self.temp.name) / "local.rule-draft.json"
-        with patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename", return_value=str(path)): self.builder.save()
+        self.builder.save()
+        path = self.builder.recent_drafts()[0]
         self.assertEqual(drafts.read_draft_source(path), source)
         self.builder.load_form(drafts.new_form())
         with patch("sentinel_app.rule_builder_page.filedialog.askopenfilename", return_value=str(path)): self.builder.open_draft()

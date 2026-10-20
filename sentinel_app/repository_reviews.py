@@ -97,12 +97,12 @@ class ReviewService:
     def __init__(self, request=None):
         self.request = request or api
 
-    def prepare(self, repository, path, content, allow_missing_mitre=False, source=None):
+    def prepare(self, repository, path, content, allow_missing_mitre=False, source=None, progress=None):
         check_path(path)
         rule = parse_yaml(content.encode("utf-8"))
         warnings = rule_schema.validate(rule, allow_missing_mitre)
         rule_schema.to_arm(rule)
-        snapshot = GitHubReader(lambda endpoint: self.request("GET", endpoint)).load(repository)
+        snapshot = GitHubReader(lambda endpoint: self.request("GET", endpoint)).load(repository, progress)
         require(snapshot["private"] is True, "Select the private detection repository, not the public application repository.")
         require(snapshot["can_push"] is True, "This GitHub account needs write access to the detection repository.")
         require(not snapshot["issues"], "The repository catalog is incomplete or invalid. Resolve its catalog issues before submitting a rule.")
@@ -160,8 +160,9 @@ class ReviewService:
     def change_title(self, plan):
         return "Review Sentinel rule: " + plan["name"][:180]
 
-    def pull_body(self, plan):
-        return ("Proposes a change to `" + plan["path"] + "` from the desktop rule builder.\n\n"
+    def pull_body(self, plan, note=""):
+        return ((note.strip() + "\n\n" if note and note.strip() else "") +
+                "Proposes a change to `" + plan["path"] + "` from the desktop rule builder.\n\n"
                 "Validated with the application's reviewed rule schema. Live KQL, repository checks, "
                 "and deployment approval remain required.\n\n"
                 "Existing target references: " + str(len(plan["impact"])) + ". No client manifests are changed.\n\n"
@@ -224,9 +225,10 @@ class ReviewService:
                     and pull["base"]["ref"] == plan["base_branch"]
                     and pull["head"]["repo"]["id"] == plan["repository_id"], "The existing pull request differs from this review.")
         else:
-            body = self.pull_body(plan)
+            body = self.pull_body(plan, record.get("note", ""))
+            # Ready for review straight away: the analyst's note is the description and reviewers are notified.
             pull = self.request("POST", prefix + "/pulls", {"title": self.change_title(plan),
-                "head": branch, "base": plan["base_branch"], "body": body, "draft": True})
+                "head": branch, "base": plan["base_branch"], "body": body, "draft": False})
         url = pull["html_url"]
         require(re.fullmatch(r"https://github\.com/" + re.escape(plan["repository"]) + r"/pull/\d+", url, re.I), "Unexpected pull request URL.")
         record["pull_request"] = url

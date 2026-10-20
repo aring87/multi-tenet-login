@@ -1,5 +1,10 @@
 # Onboarding a client with the desktop app
 
+> The onboarding and Review & apply screens are not part of the desktop app at present.
+> Use `py -m sentinel_app.lighthouse_onboarding --help` for the same onboarding flow.
+> Sign-in and workspace discovery below still apply on **Connect**. The desktop's
+> access-management and Contributor tools were removed; grant those in Azure and Entra.
+
 The app chooses an onboarding path from the selected workspace tenant:
 
 - **Client tenant:** Azure Lighthouse delegation and a target-file pull request.
@@ -76,7 +81,7 @@ Click **Sign in to GitHub** if `gh` is not already authenticated.
 
 ## Step 2 — Activate access to the client tenant
 
-Back on **Discover**. Pick your CyberQP region and click **Sign in to CyberQP**
+On **Connect**, select **Open CyberQP** (bottom of the Sign in card)
 if you use it, activate the client's JIT account there, and return.
 
 Then activate the Azure role if it is PIM-eligible rather than permanently

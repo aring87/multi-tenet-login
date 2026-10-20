@@ -1,9 +1,9 @@
 # Documentation
 
 - [Desktop quick start](DESKTOP-START-HERE.md)
-- [Current Lighthouse onboarding](APP-ONBOARDING.md)
+- [Current Lighthouse onboarding](APP-ONBOARDING.md) (command line; not shown in the desktop app at present)
 - [Repository catalog, rule builder, reviews and deployments](REPOSITORY-PILOT.md)
-- [Sentinel audit exports](AUDIT-EVIDENCE.md)
+- [Sentinel audit exports](AUDIT-EVIDENCE.md) (not shown in the desktop app at present)
 - [Project folders and upgrade instructions](PROJECT-MAP.md)
 - [Offline validation](VALIDATION.md)
 - [Rule schema provenance](RULE-SCHEMA.md)

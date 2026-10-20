@@ -52,4 +52,21 @@ class CatalogPageTests(unittest.TestCase):
         self.assertIn("unavailable", self.page.note.get())
 
 
+    def test_rule_can_be_opened_for_editing_from_the_list(self):
+        self.page.snapshot = catalog(fixtures(), "synthetic", "one"); self.page.render(); self.root.update()
+        self.assertFalse(self.page.edit_bar.winfo_manager())  # Clients view: nothing to edit.
+        self.page.view.set("Rules"); self.root.update()
+        self.assertTrue(self.page.edit_bar.winfo_manager())
+        self.assertEqual(str(self.page.edit_button.cget("state")), "disabled")
+        self.page.tree.selection_set("0"); self.page.selected()
+        self.assertEqual(str(self.page.edit_button.cget("state")), "normal")
+        with patch.object(self.app.rule_builder, "edit_rule", return_value=True) as edit:
+            self.page.open_row()  # Enter or double-click on the row.
+        self.assertEqual(edit.call_args.args[0], self.page.visible[0]["raw"])
+        self.root.update(); self.assertEqual(self.app.current_page(), "builder")
+        self.app.set_busy(True)
+        self.assertEqual(str(self.page.edit_button.cget("state")), "disabled")
+        self.app.set_busy(False)
+
+
 if __name__ == "__main__": unittest.main()

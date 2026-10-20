@@ -42,10 +42,12 @@ class RuleBuilderPageTests(unittest.TestCase):
         self.assertEqual(self.page.vars["id"].get(), identity)
 
     def test_save_incomplete_then_reopen_and_export(self):
-        path = Path(self.temp.name) / "draft.rule-draft.json"
         self.page.vars["name"].set("Incomplete")
-        with patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename", return_value=str(path)): self.page.save()
+        with patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename") as dialog: self.page.save()
+        dialog.assert_not_called()  # Drafts save under their rule name without a prompt.
+        path = Path(self.temp.name) / "drafts" / "incomplete.rule-draft.json"
         self.assertFalse(self.page.dirty()); self.assertEqual(drafts.read_draft(path)["name"], "Incomplete")
+        self.assertEqual([p.name for p in self.page.recent_drafts()], ["incomplete.rule-draft.json"])
         self.page.load_form(valid_form()); self.root.update()
         output = Path(self.temp.name) / "export.yml"
         with patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename", return_value=str(output)): self.page.export()
@@ -65,7 +67,7 @@ class RuleBuilderPageTests(unittest.TestCase):
             self.app.close(); destroy.assert_not_called()
 
     def test_rule_builder_has_no_azure_signin_requirement(self):
-        self.app.tabs.select(6); self.root.update()
+        self.app.show_page("builder"); self.root.update()
         self.assertIn("Azure sign-in is not required", self.app.workspace_context.get())
 
     def test_busy_disables_authoring(self):
@@ -76,11 +78,11 @@ class RuleBuilderPageTests(unittest.TestCase):
 
     def test_all_builder_steps_fit_at_minimum_width(self):
         from test_desktop_design import descendants
-        self.root.deiconify(); self.root.geometry("1120x740"); self.app.tabs.select(6)
+        self.root.deiconify(); self.root.geometry("1120x740"); self.app.show_page("builder")
         for index in range(5):
             self.page.steps.select(index); self.root.update()
-            canvas = self.app.page_canvases[6]
-            for widget in descendants(self.app.page_contents[6]):
+            canvas = self.app.page_canvases[2]
+            for widget in descendants(self.app.page_contents[2]):
                 if widget.winfo_ismapped() and isinstance(widget, (ui.ttk.Button, ui.ttk.Entry, ui.ttk.Combobox)):
                     self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
                                          canvas.winfo_rootx() + canvas.winfo_width() + 2, str(widget))

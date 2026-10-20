@@ -206,3 +206,34 @@ behind labeled expandable sections. Automated checks cover workspace-action gati
 state restoration after work, hidden sign-in controls, preserved full diagnostics,
 and horizontal fit. A separate synthetic-data app instance was visually inspected at the default size. Minimum-size widget measurements confirmed all navigation labels and the primary sign-in control fit at 1120x740; the final minimum-size screenshot check was unavailable because Windows refused to activate the preview.
 No real Microsoft sign-in or Azure permission changes were performed during QA.
+
+## Desktop redesign (2026-10-20)
+
+The desktop now has three sections: Connect, Rules (workspace rules and repository
+library) and Rule builder. The audit and onboarding screens are not shown. The
+connection-screen behaviours above (workspace-action gating, hidden sign-in controls,
+a compact status line and grouped catalog actions) were carried into the new layout.
+Automated checks cover navigation, client-profile validation, repository settings
+preservation, rule details, view switching and horizontal fit at 1120x740. A
+synthetic-data instance was inspected in screenshots at 1360x900. No real Microsoft
+sign-in or Azure permission changes were performed during QA.
+
+## Desktop polish pass (2026-10-20)
+
+The three pages and every dialog now share one component kit (`sentinel_app/ui_kit.py`)
+and one token set (`desktop_theme.py`): cards, banners, pills, segmented switches,
+key–value panels, bordered tables with empty states, and a common dialog shell
+(centred placement, Esc/Enter handling, right-aligned buttons in one order, controls
+disabled while work runs, bottom-anchored buttons that stay visible at the minimum
+size). Analyst-facing wording was unified around "rule library", "Check" and
+"Submit for approval"; submissions open a pull request that is ready for review and
+carry a required note from the analyst as the description. Drafts save under the rule
+name without a file prompt, Run every / Look back take a number and a unit, and the
+sidebar shows the app version. Automated checks were aligned with the new labels and
+cover the submission note, non-draft pull requests, draft auto-save, dialog minimum
+sizes and the sign-in panel. The full suite (475 tests) passes apart from 20
+pre-existing failures that need `ruamel.yaml` installed (`test_rule_assignments`,
+`test_assignment_dialog`) or depend on an uncommitted onboarding edit
+(`test_lighthouse_preflight`). A synthetic-data instance was screenshotted on every
+screen and dialog at the 1120x740 minimum (125% display scaling) and inspected. No
+real Microsoft sign-in, GitHub write or Azure change was performed during QA.

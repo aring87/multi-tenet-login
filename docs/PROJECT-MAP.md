@@ -25,7 +25,7 @@ All the following modules live in `sentinel_app/`:
 
 | Area | Modules |
 |---|---|
-| Desktop and sign-in UI | desktop_app, connection_page, desktop_theme, signin_window, signin_process |
+| Desktop shell, design system and sign-in UI | desktop_app, desktop_theme, ui_kit, signin_window, signin_process |
 | Analytics rule inventory and export | rules_page, rule_export |
 | Repository catalog | repository_catalog, catalog_page |
 | Reviewed client rule assignments | rule_assignments, assignment_dialog |
@@ -35,7 +35,7 @@ All the following modules live in `sentinel_app/`:
 | GitHub previews and deployments | preview_workflow, preview_dialog, deployment_workflow, deployment_dialog |
 | Azure sessions and workspace access | desktop_backend, auth_recovery, workspace_tools, tenant_access, access_readiness |
 | Current Lighthouse onboarding | lighthouse_onboarding, yaml_identifiers |
-| Audit collection and analysis | audit_evidence, audit_analysis |
+| Audit collection and analysis (not shown in the desktop app) | audit_evidence, audit_analysis |
 | Legacy per-client identity onboarding | full_onboarding |
 | Resource and data locations | paths |
 

@@ -163,18 +163,17 @@ class AuthenticationUITests(unittest.TestCase):
         for timer in self.root.tk.call("after", "info"): self.root.after_cancel(timer)
         self.root.destroy()
 
-    def test_accepting_reauthentication_invalidates_preview_and_only_starts_signin(self):
-        self.app.plan = ("old", time.time()); self.app.workspace = WORKSPACE
-        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(self.app, "login") as login, patch.object(self.app, "onboard") as onboard:
+    def test_accepting_reauthentication_only_starts_signin(self):
+        self.app.workspace = WORKSPACE
+        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(self.app, "login") as login:
             self.app.recover_authentication(self.error)
-        login.assert_called_once_with(recovery=self.error); onboard.assert_not_called()
-        self.assertIsNone(self.app.plan); self.assertEqual(self.app.vars["tenant"].get(), TENANT)
+        login.assert_called_once_with(recovery=self.error)
+        self.assertEqual(self.app.vars["tenant"].get(), TENANT)
 
-    def test_declining_does_not_open_signin_and_invalidates_preview(self):
-        self.app.plan = ("old", time.time())
+    def test_declining_does_not_open_signin(self):
         with patch.object(ui.messagebox, "askyesno", return_value=False), patch.object(self.app, "login") as login:
             self.app.recover_authentication(self.error)
-        login.assert_not_called(); self.assertIsNone(self.app.plan)
+        login.assert_not_called()
 
     def test_repeated_challenge_stops_instead_of_prompt_loop(self):
         self.app.auth_recovery_attempts.add((TENANT, "arm", "Browser", False))
@@ -219,7 +218,7 @@ class AuthenticationUITests(unittest.TestCase):
         old.logout.assert_called_once()
 
     def test_unknown_tenant_must_be_supplied_not_guessed(self):
-        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(ui.simpledialog, "askstring", return_value=None), patch.object(self.app, "login") as login:
+        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(ui.kit.FormDialog, "show", return_value=None), patch.object(self.app, "login") as login:
             self.app.recover_authentication(AuthenticationRequired(MFA))
         login.assert_not_called()
 
@@ -244,6 +243,6 @@ class AuthenticationUITests(unittest.TestCase):
     def test_missing_subscription_diagnostic_available_after_empty_discovery(self):
         self.app.session = MagicMock(); self.app.session.signed_in = True
         self.app.subscriptions = []
-        with patch.object(ui.simpledialog, "askstring", return_value=SUB), patch.object(self.app, "work") as work:
+        with patch.object(ui.kit.FormDialog, "show", return_value={"id": SUB}), patch.object(self.app, "work") as work:
             self.app.check_subscription()
         self.assertTrue(work.called)

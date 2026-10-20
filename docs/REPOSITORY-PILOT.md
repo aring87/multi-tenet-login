@@ -1,6 +1,6 @@
 # Repository UI pilot
 
-The app includes a repository catalog, local rule authoring, and reviewed client assignments. Existing onboarding and live Sentinel views remain available. The new **Repository catalog** page reads a detection repository without executing its scripts. Browsing the catalog makes no changes. The separate rule-review, assignment, client-preview and deployment dialogs require an explicit submission action.
+The app includes a repository catalog, local rule authoring, and reviewed client assignments. The library view is **Rules > Rule library**; it reads a detection repository without executing its scripts. Browsing the catalog makes no changes. The separate rule-review, assignment, client-preview and deployment dialogs require an explicit submission action.
 
 ## Start the development copy
 
@@ -16,11 +16,11 @@ Use Python 3.10+ with Tkinter. Keep the working onboarding copy at its known wor
 
 ## Browse clients and rules
 
-1. Open **Repository catalog**.
-2. Choose a local detection repository root containing `clients/` and `rules/sentinel/`, or select **GitHub repository** and enter `owner/name`.
-3. Select **Refresh catalog**. Local mode shows working files, including uncommitted changes. GitHub mode reads the default branch at one commit and shows its SHA and signed-in account.
+1. Open **Rules** and choose **Rule library** at the top.
+2. Choose **GitHub** to read the repository set on Connect, or **Folder on this PC** and choose a local detection repository root containing `clients/` and `rules/sentinel/`.
+3. Select **Refresh library**. Local mode shows working files, including uncommitted changes. GitHub mode reads the default branch at one commit and shows its SHA and signed-in account.
 4. Switch between Clients and Rules, search, filter configured state and select a row to see assignments and raw configuration.
-5. Check **Show catalog issues** if any file is unavailable or malformed. A loaded catalog is not a pipeline validation result and does not establish deployment state.
+5. Check **Library issues** if any file is unavailable or malformed. A loaded catalog is not a pipeline validation result and does not establish deployment state.
 
 For this pilot GitHub mode uses the existing GitHub CLI login (`gh auth login --hostname github.com`); local mode requires no GitHub or Azure sign-in. The planned GitHub App device login, live review/check status and installable distribution are subsequent work, not implemented here. No new personal access token is required by this feature.
 
@@ -48,37 +48,40 @@ All new test data is synthetic. GitHub API reads are mocked in offline tests. No
 3. For existing rules, optional entity mappings, custom details, suppression, grouping and
    template metadata remain under Advanced. Unknown properties remain visible and block export
    until the schema supports them or you explicitly correct them.
-4. **Save draft** keeps incomplete work in a local `.rule-draft.json` file. The default folder
-   is ignored `desktop-data/drafts/`. **Open draft** restores it, including its original ID.
-5. **Validate & review** checks the reviewed repository schema and displays the YAML.
+4. **Save draft** (Ctrl+S) keeps incomplete work in `desktop-data/drafts/<rule-name>.rule-draft.json`
+   without asking for a file name. **Open…** lists recent drafts and restores one, including its original ID.
+5. **Check rule** checks the reviewed repository schema and displays the file.
    Changes clear that preview. A missing-MITRE migration exception must also be allowed by
    each destination's workspace manifest; this editor does not change those settings.
-6. **Export YAML** validates again and saves the file you select. Add it under `rules/sentinel/`
+6. **Export rule file…** checks again and saves the file you select. Add it under `rules/sentinel/`
    in the private detection repository through your existing review process. Exporting does
    not assign clients, open a PR, preview against Azure, or deploy anything.
 
 The validator is a bundled, reviewed copy of your uploaded rules.py; see [schema provenance](RULE-SCHEMA.md).
 KQL still needs a workspace query check. Keep local drafts and private queries out of this
-public application repository. Guided draft PR submission, client assignment, selected-rule previews and reviewed deployment controls are available below.
+public application repository. Guided pull-request submission, client assignment, selected-rule previews and reviewed deployment controls are available below.
 
 ## Submit a rule for repository review
 
 1. Sign in to GitHub CLI with the account authorized for the private detection repository.
    This pilot uses that existing login; it does not require creating a new personal token.
-2. For an existing rule, refresh the **GitHub repository** catalog and choose
-   **Edit selected rule as draft**. Keep the original rule ID and path. Draft saves retain
-   this repository source. A rule opened only from a local YAML file cannot overwrite an
-   existing remote rule; open that rule from the GitHub catalog first.
-3. In **Rule builder**, finish validation and select **Review for GitHub**.
-4. Check the private repository and file path, then choose **Prepare review**. This only
-   reads GitHub. Review the exact diff, signed-in account, base revision, existing client
-   references and their overrides. New files do not automatically get client assignments.
-5. Select **Create / recover draft PR** to create one rule-file commit on a new branch and
-   a draft pull request. The app never writes to the default branch, merges the request,
+2. For an existing rule, use **Edit existing rule…** in the Rule builder (or refresh the
+   **Rule library**, select the rule and choose **Edit selected rule**). Keep the original rule
+   ID and path. Draft saves retain this repository source. **Open… > Open rule file…** links a
+   file to the library rule with the same ID, at the current library revision; the review
+   then warns that removed lines come from the library version.
+3. In **Rule builder**, select **Submit for approval**. The rule is checked first.
+4. The window reads GitHub automatically (no writes) and shows the signed-in account,
+   existing client references and their overrides, and the exact diff. The repository and
+   file path are under **Where it will be saved**; **Check again** re-reads after a change.
+   New files do not automatically get client assignments.
+5. Write a short note on why the rule is changing, then select **Submit for approval** to
+   create one rule-file commit on a new branch and a pull request that is ready for review,
+   with your note as its description. The app never writes to the default branch, merges the request,
    or dispatches an Azure deployment. Creating a branch or PR can trigger workflows already
-   configured in your repository. Use **Open pull request** for its checks and review.
-6. If a response times out, retry in the same dialog. After an app restart, use
-   **Saved review requests** to search and reopen a request. For files copied from another computer, use **Open request file** and select the matching file from
+   configured in your repository. Use **Open in GitHub** for its checks and review.
+6. If a response times out, select **Submit for approval** again in the same window. After
+   an app restart, use **My submissions** to search and reopen a request. For files copied from another computer, use **Open from file…** and select the matching file from
    `desktop-data/review-requests/`. Requests include private YAML and are ignored by Git.
    Keep these app-created files unchanged. Completed requests open their existing PR;
    changed review branches are refused rather than overwritten.
@@ -111,14 +114,14 @@ recovery; it does not mean GitHub received nothing. Opening a saved review never
 it automatically. Use its explicit recovery button if needed.
 
 Unreadable files are reported and left unchanged. The list shows up to 200 recent files;
-use **Open request file** for older files. A new laptop has an empty list unless you copy
+use **Open from file…** for older files. A new laptop has an empty list unless you copy
 its private review request files into that laptop's ignored app data folder.
 
 ## Preview a rule for selected clients
 
-1. Load the **GitHub repository** catalog for the private detection repository.
-   Resolve any catalog issues first. Local working files cannot start workflow runs.
-2. Choose **Rules**, select a rule, and click **Preview / deploy selected rule for clients**.
+1. Load the **Rule library** from GitHub for the private detection repository.
+   Resolve any library issues first. Local working files cannot start workflow runs.
+2. Choose **Rules**, select a rule, and select **Preview and deploy…**.
 3. Click client rows (or press Space) to select them. Search by client, workspace or
    target. **Select all eligible** selects all enabled targets that already reference
    this rule, including those hidden by the search. Disabled or unassigned targets
@@ -166,7 +169,7 @@ controls still need a pilot against the private repository.
 
 ## Export rules during a client audit
 
-After signing in and choosing a workspace, open **Analytics rules** and click
+After signing in and choosing a workspace, open **Rules > Workspace rules** and click
 **Export all rules**. Save the ZIP containing `rules.json` (all original rule
 configuration fields plus collection metadata), `rules.csv` (readable state and
 flattened configuration columns), and `manifest.json` (workspace identifiers,
@@ -187,17 +190,17 @@ previously generated numeric manifests; see `detection-as-code/README.md`.
 
 ## Deploy a previewed rule from the app
 
-1. In **Repository catalog**, load the private GitHub repository, select a rule,
-   and choose **Preview / deploy selected rule for clients**.
+1. In **Rules > Rule library**, load the private GitHub repository, select a rule,
+   and choose **Preview and deploy…**.
 2. Select assigned, enabled client targets, prepare the exact request, and start
    previews. Use **Open GitHub** to review each run's checks and what-if artifacts.
-3. Select **Refresh status**. **Review deployment** becomes available only after
+3. Select **Refresh status**. **Deploy…** becomes available only after
    all confirmed preview runs finish successfully at the reviewed main revision.
    A partial submission, unknown run ID, failed run, or different revision blocks it.
-4. **Review deployment** reads GitHub again without submitting anything. Review
+4. **Deploy…** opens the deployment review, which reads GitHub again without submitting anything. Review
    the repository, account, rule, exact clients/workspaces, subscription/resource
    group, configured enabled/disabled state, assignment overrides and preview runs.
-5. Select **Start reviewed deployment** to send `mode: deploy` through the existing
+5. Select **Start deployment** to send `mode: deploy` through the existing
    `sentinel-multi-workspace.yml`, using the same selected rule and concrete targets.
    Selections larger than the workflow's slots are split into batches. The app
    never sends the **All enabled clients** sentinel or assigns additional clients.
@@ -235,22 +238,22 @@ private workflow or live Azure deployment is started by the development tests.
 Install the updated requirements (`py -m pip install -r requirements.txt`); this
 feature uses ruamel.yaml to retain YAML comments and quoted numeric client names.
 
-1. Refresh the **GitHub repository** catalog for your private detection repository.
-2. Switch to **Rules**, select a rule, and choose **Assign to clients**.
+1. Load the **Rule library** from GitHub for your private detection repository.
+2. Switch to **Rules**, select a rule, and choose **Assign to clients…**.
 3. Search by client, workspace or target. Click rows to select workspaces, or use
    **Select shown** to add the currently visible rows. Searching keeps earlier
    selections; the counter tells you how many are hidden. **Clear selection** clears all.
 4. Choose **Enabled** or **Disabled** for this rule in the selected workspaces.
    Disabled is the initial choice. Existing severity, query, ID and other overrides
    stay intact. Assignment does not enable a disabled workspace target.
-5. Choose **Prepare review**. Check the repository, account, main revision, selected
+5. Choose **Check**. Check the repository, account, main revision, selected
    destinations, warnings and full YAML diffs. This step only reads GitHub.
-6. Choose **Create / recover draft PR**. All changed client manifests go into one
-   commit and draft PR. The shared rule, Azure destinations, other rules and
+6. Choose **Submit for approval**. All changed client manifests go into one
+   commit and pull request. The shared rule, Azure destinations, other rules and
    unselected clients are unchanged. The app does not merge or dispatch deployments;
    existing repository workflows may run when the branch or PR is created.
-7. Use **Open pull request** for review and CI. After merging, refresh the catalog,
-   then use **Preview / deploy selected rule for clients** with your normal approvals.
+7. Use **Open in GitHub** for review and CI. After merging, select **Refresh library**,
+   then use **Preview and deploy…** with your normal approvals.
 
 This action adds missing assignments or changes the selected rule's enabled override.
 It does not remove assignments. Unchanged requests do not create an empty PR. Select
@@ -259,7 +262,7 @@ and updated file contents. Malformed catalogs, invalid effective rules, stale ma
 revisions, changed GitHub identity or lost write access stop submission.
 
 If submission is interrupted, retry in the same dialog. After restarting, choose
-**Open assignment review** in the catalog and open the matching `.assignment.json`
+**Open saved assignment…** in the Rule library and open the matching `.assignment.json`
 file in `desktop-data/assignment-requests/`. These ignored local files contain private
 client configuration. Recovery checks the reviewed base and branch contents and
 reuses the existing PR; it does not overwrite a branch changed elsewhere.
@@ -270,26 +273,26 @@ one disabled test-rule assignment through your private CI before broader use.
 
 ## Preview and deployment history
 
-Select **Repository catalog > Preview / deployment history**. No catalog or Azure
+Select **Rules > Rule library > Preview & deployment history…**. No catalog or Azure
 sign-in is needed to browse receipts saved on this computer. Search by rule,
 client, workspace, repository or request ID, and filter Preview or Deploy requests.
 Select a request to inspect its intended workspaces, reviewed revision, each batch's
 inputs, saved run IDs, actual revisions and last-checked timestamps.
 
-**Reload saved history** reads ignored `desktop-data/preview-requests/` and
-`desktop-data/deployment-requests/`. **Open receipt file** also accepts an original
+**Reload** reads ignored `desktop-data/preview-requests/` and
+`desktop-data/deployment-requests/`. **Open receipt file…** also accepts an original
 app-created receipt copied from another authorized computer. Keep receipts private;
 they contain client configuration. Malformed, oversized or linked files are
 reported and left unchanged. The list shows the newest 200 receipts.
 
-**Refresh GitHub status** uses the current GitHub CLI account to read the saved
+**Refresh status** uses the current GitHub CLI account to read the saved
 repository and confirmed runs. It verifies repository/workflow/run identity,
 records current status and flags revision mismatches. This works after main moves
 on or the workflow is disabled, and does not require write access. Partial read
 failures preserve prior status and are marked as incomplete. The history screen
 cannot dispatch, retry, cancel, approve or merge anything.
 
-Select a batch and choose **Open selected run / Actions** for its jobs, artifacts
+Select a batch and choose **Open in GitHub** for its jobs, artifacts
 and environment approvals. Without a confirmed run ID, this opens the workflow
 page; the app does not guess a matching run or resubmit an uncertain request.
 This is history of app-saved requests, not every run started directly in GitHub.

@@ -28,19 +28,6 @@ class DesignTests(unittest.TestCase):
             self.root.after_cancel(timer)
         self.root.destroy()
 
-    def test_collapsed_logs_preserve_selections_and_expose_summary(self):
-        self.app.tabs.select(3);self.root.update()
-        toggle=next(w for w in descendants(self.root) if isinstance(w,ui.ttk.Button) and "Add logs" in str(w.cget("text")))
-        body=toggle.master.winfo_children()[0]
-        self.assertFalse(body.winfo_manager())
-        toggle.invoke();self.root.update();self.assertTrue(body.winfo_manager())
-        self.app.audit_flags["audit"].set(True)
-        self.app.vars["audit_start"].set("2024-01-01")
-        toggle.invoke();self.root.update()
-        self.assertTrue(self.app.audit_options()["audit"])
-        self.assertEqual(self.app.vars["audit_start"].get(),"2024-01-01")
-        self.assertIn("1 Sentinel activity logs",self.app.audit_scope_summary.get())
-
     def test_workspace_context_updates_and_clears(self):
         self.app.workspace=dict(WORKSPACE);self.app.identity.set("Synthetic workspace")
         self.assertIn(WORKSPACE["workspace_name"],self.app.workspace_context.get())
@@ -49,12 +36,12 @@ class DesignTests(unittest.TestCase):
 
     def test_busy_state_disables_controls_and_restores_readonly_fields(self):
         self.app.set_busy(True)
-        self.assertEqual(self.app.activity_badge.cget("text"),"WORKING")
+        self.assertIn("Working",self.app.activity_badge.cget("text"))
         self.assertEqual(str(self.app.subbox.cget("state")),"disabled")
         self.app.subscriptions=[{"id":"synthetic"}]
         self.app.set_busy(False)
         self.assertEqual(str(self.app.subbox.cget("state")),"readonly")
-        self.assertEqual(self.app.activity_badge.cget("text"),"READY")
+        self.assertIn("Ready",self.app.activity_badge.cget("text"))
 
     def test_rules_filter_and_clear_on_client_change(self):
         page=self.app.rules_page
@@ -120,14 +107,37 @@ class DesignTests(unittest.TestCase):
             page.export()
         export.assert_not_called()
 
+    def test_repository_view_needs_no_workspace_and_switches_back(self):
+        self.app.workspace=dict(WORKSPACE);self.app.show_page("rules");self.root.update()
+        self.assertIn(WORKSPACE["workspace_name"],self.app.workspace_context.get())
+        self.app.rule_view.set("repository");self.root.update()
+        self.assertIn("Azure sign-in is not required",self.app.workspace_context.get())
+        self.assertTrue(self.app.catalog_page.tree.winfo_ismapped())
+        self.assertFalse(self.app.rules_page.tree.winfo_ismapped())
+        self.app.rule_view.set("workspace");self.root.update()
+        self.assertTrue(self.app.rules_page.tree.winfo_ismapped())
+
+    def test_rule_detail_summarises_selected_rule(self):
+        page=self.app.rules_page
+        page.rows=[dict(name="rule-1",kind="Scheduled",properties=dict(displayName="First",enabled=True,severity="High",
+                                                                      query="SigninLogs | take 1",tactics=["InitialAccess"]))]
+        page.render();page.tree.selection_set("0");page.selected()
+        self.assertEqual(page.detail_card.title_var.get(),"First")
+        self.assertIn("InitialAccess",[label.cget("text") for label in page.overview.values])
+        self.assertIn("SigninLogs",page.query.get("1.0","end"))
+        page.reset();self.assertEqual(page.detail_card.title_var.get(),"Rule details")
+        self.assertFalse(page.overview.values)
+
     def test_all_pages_fit_horizontally_at_minimum_size(self):
         for index in range(len(self.app.page_contents)):
-            self.app.tabs.select(index);self.root.update()
-            canvas=self.app.page_canvases[index]
-            self.assertLessEqual(self.app.page_contents[index].winfo_width(),canvas.winfo_width())
-            for widget in descendants(self.app.page_contents[index]):
-                if widget.winfo_ismapped() and isinstance(widget,(ui.ttk.Button,ui.ttk.Entry,ui.ttk.Combobox)):
-                    self.assertLessEqual(widget.winfo_rootx()+widget.winfo_width(),canvas.winfo_rootx()+canvas.winfo_width()+2,str(widget))
+            for view in ("workspace","repository"):
+                self.app.rule_view.set(view)
+                self.app.tabs.select(index);self.root.update()
+                canvas=self.app.page_canvases[index]
+                self.assertLessEqual(self.app.page_contents[index].winfo_width(),canvas.winfo_width())
+                for widget in descendants(self.app.page_contents[index]):
+                    if widget.winfo_ismapped() and isinstance(widget,(ui.ttk.Button,ui.ttk.Entry,ui.ttk.Combobox)):
+                        self.assertLessEqual(widget.winfo_rootx()+widget.winfo_width(),canvas.winfo_rootx()+canvas.winfo_width()+2,str(widget))
 
 
 if __name__=="__main__":unittest.main()

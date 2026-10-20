@@ -5,6 +5,8 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -12,6 +14,7 @@ from urllib.parse import quote
 MAX_FILE = 2 * 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
 MAX_FILES = 2000
+BLOB_WORKERS = 8
 
 
 class CatalogError(ValueError):
@@ -187,7 +190,8 @@ class GitHubReader:
                                "For a private repository, Not Found can mean no access. Run gh auth login if needed.")
         return json.loads(result.stdout)
 
-    def load(self, repository):
+    def load(self, repository, progress=None):
+        """``progress(done, total)`` is called from worker threads as files arrive."""
         parse_yaml(b"catalog: true")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", repository):
             raise CatalogError("Enter a repository as owner/name.")
@@ -210,13 +214,28 @@ class GitHubReader:
         entries = [e for e in tree["tree"] if category(e["path"]) and e["type"] == "blob"]
         if len(entries) > MAX_FILES:
             raise CatalogError("Catalog exceeds the file count limit.")
+        wanted = []
         for entry in entries:
             path = entry["path"]
             if entry.get("mode") not in ("100644", "100755"):
                 issues.append(path + ": linked file skipped."); continue
             if entry.get("size", 0) > MAX_FILE:
                 issues.append(path + ": file exceeds 2 MB limit."); continue
+            wanted.append(entry)
+        if sum(entry.get("size", 0) for entry in wanted) > MAX_TOTAL:
+            raise CatalogError("Catalog exceeds its file size limit.")
+        # Each blob is a separate CLI round trip; fetch them concurrently, then check in tree order.
+        fetched, lock = [0], threading.Lock()
+        def fetch(entry):
             blob = self.request(prefix + "/git/blobs/" + entry["sha"])
+            with lock:
+                fetched[0] += 1; count = fetched[0]
+            if progress: progress(count, len(wanted))
+            return blob
+        with ThreadPoolExecutor(max_workers=BLOB_WORKERS) as pool:
+            blobs = list(pool.map(fetch, wanted))
+        for entry, blob in zip(wanted, blobs):
+            path = entry["path"]
             if blob.get("encoding") != "base64":
                 raise CatalogError("GitHub returned an unsupported blob encoding.")
             raw = base64.b64decode(blob["content"])

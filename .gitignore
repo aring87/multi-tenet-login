@@ -33,3 +33,8 @@ lighthouse-onboard.isi.json
 
 # Local deployment receipts include private client selections and preview evidence
 *.deployment.json
+
+# Packaged exe build output
+build/
+dist/
+*.spec

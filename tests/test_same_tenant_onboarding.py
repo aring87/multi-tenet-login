@@ -189,20 +189,5 @@ class SameTenantTests(unittest.TestCase):
         self.assertTrue(any(p.endswith('clients/413/413-workspace-gcc.yml') for p in puts))
         self.assertEqual(sum(p.endswith(tuple(lh.DROPDOWN_WORKFLOWS)) for p in puts), 2)
 
-    def test_ui_requires_review_and_cancel_never_applies(self):
-        from sentinel_app import desktop_app as ui
-        app = SimpleNamespace(payload=lambda:self.c, plan=None, summary=MagicMock(), root=MagicMock(),
-                              tabs=MagicMock(), work=MagicMock())
-        with patch.object(ui.messagebox, 'showerror') as error:
-            ui.App.onboard(app, True)
-        self.assertIn('Preview this exact configuration', error.call_args.args[1])
-        app.work.assert_not_called()
-        import time
-        app.plan=(backend.fingerprint(self.c,'same-tenant',[]),time.time())
-        with patch.object(ui.messagebox,'askokcancel',return_value=False) as confirm:
-            ui.App.onboard(app,True)
-        self.assertIn('No Azure resources',confirm.call_args.args[1])
-        app.work.assert_not_called()
-
 
 if __name__ == '__main__': unittest.main()

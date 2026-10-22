@@ -36,7 +36,7 @@ NAVIGATION = dict(
              "Rule builder", "Create or edit a rule and submit it for a teammate's approval."))
 
 EVENT_POLL_MS = 100
-SIGNIN_FOCUS_SECONDS = 90
+SIGNIN_FOCUS_SECONDS = 300  # The whole sign-in, MFA included (Azure CLI times out at five minutes).
 SIGNIN_FOCUS_POLL_MS = 750
 GITHUB_LOGIN_TIMEOUT_SECONDS = 900
 STATUS_PREVIEW_CHARS = 180
@@ -993,7 +993,11 @@ class App:
         self.signin_timer = None
         if not self.signin_active: return
         if self.signin_handoff and time.monotonic() < self.signin_deadline:
-            try: self.signin_handoff.bring_forward()
+            try:
+                for process, title, signin in self.signin_handoff.new_windows():
+                    self.log("Sign-in window check: " + process + (" — " + title if title else "")
+                             + (" (sign-in window)" if signin else ""))
+                self.signin_handoff.bring_forward()
             except OSError: pass
             self.signin_timer = self.root.after(SIGNIN_FOCUS_POLL_MS, self.watch_signin)
 

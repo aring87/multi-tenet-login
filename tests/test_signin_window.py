@@ -51,7 +51,7 @@ class SignInWindowTests(unittest.TestCase):
 
     def test_manual_falls_back_to_a_new_browser_window(self):
         before={100:(42,"msedge.exe","Inbox - Outlook")}
-        helper=self.handoff(before,{**before,200:(43,"msedge.exe","Microsoft Authenticator - Microsoft Edge")})
+        helper=self.handoff(before,{**before,200:(43,"msedge.exe","New tab - Microsoft Edge")})
         self.assertFalse(helper.bring_forward())
         self.assertTrue(helper.bring_forward(manual=True))
         helper.user.SetForegroundWindow.assert_called_once_with(200)
@@ -70,3 +70,15 @@ class SignInWindowTests(unittest.TestCase):
     def test_account_picker_host_needs_a_signin_title(self):
         self.assertTrue(is_signin("ApplicationFrameHost.exe","Pick an account"))
         self.assertFalse(is_signin("ApplicationFrameHost.exe","Settings"))
+
+    def test_new_windows_reports_titles_only_for_signin_hosts(self):
+        helper=self.handoff({}, {100:(42,"credentialuibroker.exe","Windows Security"),200:(43,"outlook.exe","Private email subject")})
+        helper.seen=set()
+        found=helper.new_windows()
+        self.assertIn(("credentialuibroker.exe","Windows Security",True),found)
+        self.assertIn(("outlook.exe",None,False),found)
+        self.assertEqual(helper.new_windows(),[])
+
+    def test_untitled_microsoft_account_window_qualifies(self):
+        self.assertTrue(is_signin("Microsoft.AAD.BrokerPlugin.exe",""))
+        self.assertFalse(is_signin("msedge.exe",""))

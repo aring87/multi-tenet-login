@@ -7,8 +7,14 @@ class SignInWindowTests(unittest.TestCase):
         helper=WindowsSignIn.__new__(WindowsSignIn)
         helper.before=before;helper.raised=set()
         helper.user=MagicMock();helper.user.IsIconic.return_value=False
-        helper.user.SetForegroundWindow.return_value=True
         helper.snapshot=MagicMock(return_value=current)
+        # Like Windows: a window is in front only after a SetForegroundWindow that was allowed.
+        helper.state={"front":None,"allow":True}
+        def set_front(hwnd):
+            if helper.state["allow"]:helper.state["front"]=hwnd
+            return helper.state["allow"]
+        helper.user.SetForegroundWindow.side_effect=set_front
+        helper.user.GetForegroundWindow.side_effect=lambda:helper.state["front"]
         return helper
 
     def test_only_supported_signin_windows_qualify(self):
@@ -39,6 +45,28 @@ class SignInWindowTests(unittest.TestCase):
 
     def test_windows_focus_denial_is_not_reported_as_success(self):
         helper=self.handoff({}, {100:(42,"chrome.exe","Sign in to your account")})
-        helper.user.SetForegroundWindow.return_value=False
+        helper.state["allow"]=False
         self.assertFalse(helper.bring_forward())
         self.assertFalse(helper.raised)
+
+    def test_manual_falls_back_to_a_new_browser_window(self):
+        before={100:(42,"msedge.exe","Inbox - Outlook")}
+        helper=self.handoff(before,{**before,200:(43,"msedge.exe","Microsoft Authenticator - Microsoft Edge")})
+        self.assertFalse(helper.bring_forward())
+        self.assertTrue(helper.bring_forward(manual=True))
+        helper.user.SetForegroundWindow.assert_called_once_with(200)
+
+    def test_refused_focus_retries_and_still_raises_the_window(self):
+        helper=self.handoff({}, {100:(42,"chrome.exe","Sign in to your account")})
+        # Windows reports success but leaves the old window in front; the Alt retry then works.
+        attempts=iter([None,100])
+        def set_front(hwnd):
+            helper.state["front"]=next(attempts);return True
+        helper.user.SetForegroundWindow.side_effect=set_front
+        self.assertTrue(helper.bring_forward())
+        self.assertEqual(helper.user.SetForegroundWindow.call_count,2)
+        helper.user.keybd_event.assert_called()
+
+    def test_account_picker_host_needs_a_signin_title(self):
+        self.assertTrue(is_signin("ApplicationFrameHost.exe","Pick an account"))
+        self.assertFalse(is_signin("ApplicationFrameHost.exe","Settings"))

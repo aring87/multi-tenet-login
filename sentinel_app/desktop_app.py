@@ -918,8 +918,13 @@ class App:
         except queue.Empty:
             pass
         finally:
-            if self.root.winfo_exists():
-                self.root.after(EVENT_POLL_MS, self.poll)
+            # A callback may have destroyed the window (closing after sign-out); then there
+            # is nothing left to poll and winfo_exists itself raises.
+            try:
+                if self.root.winfo_exists():
+                    self.root.after(EVENT_POLL_MS, self.poll)
+            except tk.TclError:
+                pass
 
     def dispatch(self, kind, data):
         if kind == "log":

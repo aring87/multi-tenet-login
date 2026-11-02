@@ -371,12 +371,15 @@ class ProgressLine(tk.Canvas):
 
     def tick(self):
         self.timer = None
-        if not self.winfo_exists(): return
-        self.phase = (self.phase + self.STEP) % 1.0
-        self.draw()
-        # Scheduled on the root, like every timer in the kit, so a pending callback is owned
-        # by one widget only and cancelling it elsewhere never leaves a dangling command here.
-        self.timer = self._root().after(self.INTERVAL_MS, self.tick)
+        try:
+            if not self.winfo_exists(): return
+            self.phase = (self.phase + self.STEP) % 1.0
+            self.draw()
+            # Scheduled on the root, like every timer in the kit, so a pending callback is owned
+            # by one widget only and cancelling it elsewhere never leaves a dangling command here.
+            self.timer = self._root().after(self.INTERVAL_MS, self.tick)
+        except tk.TclError:
+            pass  # The window went away mid-animation.
 
     def draw(self):
         width, height = self.winfo_width(), self.winfo_height()

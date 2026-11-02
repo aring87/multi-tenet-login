@@ -4,14 +4,17 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import webbrowser
 from datetime import datetime
 from tkinter import ttk, messagebox
 from . import __version__
-from .desktop_theme import configure_theme, app_icon, COLORS, FONTS, TONES, px
+from .desktop_theme import configure_theme, COLORS, FONTS, TONES, px
+from . import brand
 from . import ui_kit as kit
 from .auth_recovery import AuthenticationRequired, SignInCancelled
 from .signin_process import check_cancelled
@@ -20,6 +23,8 @@ from .catalog_page import CatalogPage
 from .rule_builder_page import RuleBuilderPage
 from .signin_window import create_handoff
 from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, validate_tenant_hint, CYBERQP_PORTALS)
+from .gov_onboarding import GOV_CLOUD
+from .gov_onboarding_dialog import GovOnboardingDialog
 
 # Only the GitHub repository is edited here. Any other keys found in an existing
 # settings.json (the command-line onboarding tools keep theirs there) are preserved verbatim.
@@ -28,7 +33,7 @@ SETTINGS_KEYS = ("github_owner", "github_repo")
 # Page keys in notebook order, with navigation and header copy.
 PAGES = ("connect", "rules", "builder")
 NAVIGATION = dict(
-    connect=("Connect", "Pick a client and sign in", "connect",
+    connect=("Connect", "Choose a client and sign in", "connect",
              "Connect", "Sign in with your Microsoft account, then choose the client's workspace."),
     rules=("Rules", "Live rules and the library", "rules",
            "Rules", "Browse the live rules in the selected workspace, or the rule library."),
@@ -250,8 +255,8 @@ class App:
 
     # ------------------------------------------------------------------ shell
     def build(self):
-        self.icon = app_icon(self.root)
-        self.root.iconphoto(True, self.icon)
+        self.icons = brand.window_icons(self.root)
+        self.root.iconphoto(True, *self.icons)
         self.build_sidebar()
         main = tk.Frame(self.root, bg=COLORS["canvas"]); main.pack(side="left", fill="both", expand=True)
         self.build_header(main)
@@ -319,19 +324,19 @@ class App:
         c = COLORS
         side = tk.Frame(self.root, bg=c["sidebar"], width=px(244))
         side.pack(side="left", fill="y"); side.pack_propagate(False)
-        brand = tk.Frame(side, bg=c["sidebar"]); brand.pack(fill="x", padx=px(16), pady=(px(26), px(28)))
-        logo = tk.Frame(brand, bg=c["accent"], width=px(36), height=px(36)); logo.pack(side="left")
-        logo.pack_propagate(False)
-        glyph = kit.icon_label(logo, "shield", c["accent"], "#FFFFFF", "icon_large")
-        if glyph: glyph.pack(expand=True)
-        words = tk.Frame(brand, bg=c["sidebar"]); words.pack(side="left", padx=(px(12), 0))
+        header = tk.Frame(side, bg=c["sidebar"]); header.pack(fill="x", padx=px(16), pady=(px(22), px(22)))
+        self.brand_mark = brand.mark(self.root, px(36))
+        tk.Label(header, image=self.brand_mark, bg=c["sidebar"], bd=0).pack(side="left")
+        words = tk.Frame(header, bg=c["sidebar"]); words.pack(side="left", padx=(px(12), 0))
         tk.Label(words, text="Sentinel Workspace", font=FONTS["brand"], bg=c["sidebar"], fg="#FFFFFF", bd=0).pack(anchor="w")
-        tk.Label(words, text="Version " + __version__, font=FONTS["small"], bg=c["sidebar"], fg=c["sidebar_muted"],
-                 bd=0).pack(anchor="w")
+        tk.Label(words, text="FOR MICROSOFT SENTINEL", font=FONTS["eyebrow"], bg=c["sidebar"], fg=c["sidebar_muted"],
+                 bd=0).pack(anchor="w", pady=(px(1), 0))
+        tk.Frame(side, bg=c["sidebar_line"], height=1).pack(fill="x", padx=px(16), pady=(0, px(12)))
 
-        footer = tk.Frame(side, bg=c["sidebar"]); footer.pack(side="bottom", fill="x", padx=px(20), pady=(0, px(20)))
+        footer = tk.Frame(side, bg=c["sidebar"]); footer.pack(side="bottom", fill="x", padx=px(20), pady=(0, px(18)))
         for text, command, tip in (("Help & prerequisites", self.open_help, "Open the desktop guide"),
-                                   ("Open app data folder", lambda: os.startfile(str(DATA)), "Clients, drafts and submissions saved on this PC")):
+                                   ("Open app data folder", lambda: os.startfile(str(DATA)), "Clients, drafts and submissions saved on this PC"),
+                                   ("About Sentinel Workspace", self.open_about, "Version, components and license")):
             item = kit.link(footer, text, command, c["sidebar_muted"], c["sidebar_ink"], c["sidebar"],
                             focus_color=c["sidebar_accent"])
             item.pack(fill="x", pady=(px(6), 0))
@@ -382,6 +387,32 @@ class App:
     def open_help():
         os.startfile(str(BASE / "docs" / "DESKTOP-START-HERE.md"))
 
+    def open_about(self):
+        """Version, what the app talks to, and where its data lives."""
+        c = COLORS
+        window = tk.Toplevel(self.root); window.title("About Sentinel Workspace")
+        window.resizable(False, False); window.configure(bg=c["card"])
+        body = ttk.Frame(window, style="Card.TFrame", padding=(kit.space("xl"), px(24), kit.space("xl"), px(20)))
+        body.pack(fill="both", expand=True)
+        head = ttk.Frame(body, style="Card.TFrame"); head.pack(fill="x")
+        self.about_mark = brand.mark(self.root, px(56))
+        tk.Label(head, image=self.about_mark, bg=c["card"], bd=0).pack(side="left", anchor="n")
+        words = ttk.Frame(head, style="Card.TFrame"); words.pack(side="left", padx=(px(16), 0))
+        ttk.Label(words, text="Sentinel Workspace", style="CardTitle.TLabel").pack(anchor="w")
+        ttk.Label(words, text="Version " + __version__, style="CardSubtitle.TLabel").pack(anchor="w", pady=(px(2), 0))
+        ttk.Label(words, text="Connect to client tenants, review Microsoft Sentinel analytics rules\n"
+                              "and submit detection rules for approval.", style="Body.TLabel", justify="left").pack(
+            anchor="w", pady=(px(10), 0))
+        kit.divider(body, 16)
+        facts = kit.KeyValues(body, key_width=14); facts.pack(fill="x")
+        facts.set([("Python", sys.version.split()[0]), ("Tk", str(tk.TkVersion)),
+                   ("App data", str(DATA)), ("License", "MIT")], mono={"App data"})
+        actions, buttons = kit.action_row(body, secondary=(("Open license", lambda: os.startfile(str(BASE / "LICENSE"))),),
+                                          close=("Close", window.destroy))
+        actions.pack(fill="x", pady=(px(20), 0))
+        kit.place_dialog(window, self.root, width=520)
+        kit.modal(window, self.root, window.destroy, focus=buttons[-1])
+
     def paint_nav(self, index, hover=False):
         c = COLORS
         item = self.nav[index]
@@ -416,8 +447,9 @@ class App:
         tk.Label(chip, textvariable=self.workspace_context, font=FONTS["small"], bg=c["raised"], fg=c["ink_2"],
                  bd=0, wraplength=px(300), justify="left").pack(side="left", padx=(0, px(12)), pady=px(7))
         tk.Frame(main, bg=c["line"], height=1).pack(fill="x")
+        # A thin activity line runs under the header while the app is busy; see set_busy.
         holder = tk.Frame(main, bg=c["canvas"], height=px(3)); holder.pack(fill="x"); holder.pack_propagate(False)
-        self.progress = ttk.Progressbar(holder, mode="indeterminate", maximum=100)
+        self.progress = kit.ProgressLine(holder, background=c["canvas"])
 
     def build_statusbar(self, main):
         c = COLORS
@@ -426,16 +458,26 @@ class App:
         row = ttk.Frame(bar, style="Card.TFrame", padding=(kit.space("xl"), kit.space("sm"))); row.pack(fill="x")
         self.activity_badge = kit.Pill(row, "Ready", "success")
         self.activity_badge.pack(side="left", anchor="n")
+        ttk.Label(row, text="Sentinel Workspace " + __version__, style="Hint.TLabel").pack(side="right", anchor="n", padx=(px(12), 0))
         self.status = tk.StringVar(value="Ready.")
         self.status_preview = tk.StringVar()
-        def show_status(*args):
-            # A long diagnostic must not grow the footer; the full text stays in status and the log.
-            text = " ".join(self.status.get().split())
-            self.status_preview.set(text if len(text) <= STATUS_PREVIEW_CHARS else text[:STATUS_PREVIEW_CHARS - 3] + "…")
-        self.status.trace_add("write", show_status); show_status()
-        status = ttk.Label(row, textvariable=self.status_preview, style="Muted.TLabel")
+        status = ttk.Label(row, textvariable=self.status_preview, style="Muted.TLabel", anchor="w")
         status.pack(side="left", fill="x", expand=True, padx=(px(12), 0))
-        kit.wrap_to_parent(status, 0)
+        kit.tooltip(status, "")
+        body_font = tkfont.Font(self.root, font=FONTS["body"])
+        def show_status(*args):
+            # The footer stays one line tall: a long diagnostic is shortened with an ellipsis and
+            # shown in full in the label's tooltip and in Session activity. The pill already says
+            # Ready, so the bare ready message is not repeated beside it.
+            text = " ".join(self.status.get().split())
+            text = "" if text == "Ready." else text
+            text = text if len(text) <= STATUS_PREVIEW_CHARS else text[:STATUS_PREVIEW_CHARS - 3] + "…"
+            width = status.winfo_width() - px(4)
+            shown = kit.ellipsize(text, body_font, width) if width > px(40) else text
+            self.status_preview.set(shown)
+            status.tooltip_text = text if shown != text else ""
+        self.status.trace_add("write", show_status); show_status()
+        status.bind("<Configure>", show_status, add="+")
 
     # --------------------------------------------------------------- connect
     def build_connect(self, page):
@@ -545,6 +587,10 @@ class App:
             self.copy_button,
             ttk.Button(actions, text="View analytics rules", command=lambda: self.show_page("rules"), style="Primary.TButton")]
         self.workspace_actions[0].pack(side="left"); self.workspace_actions[1].pack(side="right")
+        # Shown only for a workspace in an Azure Government (GCC High) tenant; see sync_connection.
+        self.gov_button = ttk.Button(actions, text="Onboard GCC High…", command=self.open_gov_onboarding,
+                                     style="Secondary.TButton")
+        kit.tooltip(self.gov_button, "Create this client's pipeline identities and open its target pull request")
 
         github = kit.Card(right, "Rule library", "The GitHub repository where rules are stored and approved.",
                           icon="library", tone="neutral")
@@ -567,8 +613,10 @@ class App:
         clear = ttk.Button(log.actions, text="Clear", style="Small.Ghost.TButton",
                            command=lambda: kit.set_text(self.logbox, ""))
         clear.pack(); kit.tooltip(clear, "Clear the activity log")
-        frame, self.logbox = kit.text_area(log.body, 7, readonly=True)
+        frame, self.logbox = kit.text_area(log.body, 7, readonly=True,
+                                           placeholder="Sign-in steps, GitHub one-time codes and any errors appear here.")
         frame.pack(fill="both", expand=True)
+        self.logbox.tag_configure("stamp", foreground=c["subtle"])
         self.render_tenant()
         self.render_details()
         self.sync_connection()
@@ -648,14 +696,20 @@ class App:
         if view == "repository": self.catalog_page.auto_load()
 
     # ------------------------------------------------------------ navigation
-    def scroll_into_view(self, widget):
-        """Scroll the current page so ``widget`` sits near the top of the view."""
+    def scroll_into_view(self, widget, only_if_hidden=False):
+        """Scroll the current page so ``widget`` sits near the top of the view.
+
+        With ``only_if_hidden`` the page stays put while the widget is already fully
+        visible, so pointing at a field never scrolls the message about it away."""
         index = self.tabs.index("current")
         canvas, content = self.page_canvases[index], self.page_contents[index]
         self.root.update_idletasks()
         height = content.winfo_height()
-        if height > canvas.winfo_height():
-            canvas.yview_moveto(max(0, (widget.winfo_rooty() - content.winfo_rooty() - px(SCROLL_TARGET_OFFSET)) / height))
+        if height <= canvas.winfo_height(): return
+        if only_if_hidden:
+            top, bottom = widget.winfo_rooty(), widget.winfo_rooty() + widget.winfo_height()
+            if canvas.winfo_rooty() <= top and bottom <= canvas.winfo_rooty() + canvas.winfo_height(): return
+        canvas.yview_moveto(max(0, (widget.winfo_rooty() - content.winfo_rooty() - px(SCROLL_TARGET_OFFSET)) / height))
 
     def scroll_page(self, event):
         widget = event.widget
@@ -871,8 +925,10 @@ class App:
         if kind == "log":
             if not hasattr(self, "logbox"): return
             self.logbox.configure(state="normal")
+            self.logbox.insert("end", datetime.now().strftime("%H:%M:%S") + "  ", ("stamp",))
             self.logbox.insert("end", data + "\n"); self.logbox.see("end")
             self.logbox.configure(state="disabled")
+            kit.refresh_placeholder(self.logbox)
         elif kind == "signin_finished":
             self.finish_signin()
         elif kind == "ui":
@@ -927,6 +983,12 @@ class App:
         if not hasattr(self, "workspace_actions"): return
         for button in self.workspace_actions:
             button.configure(state="normal" if self.workspace and not self.busy else "disabled")
+        gov = bool(self.workspace) and getattr(self.session, "cloud", None) == GOV_CLOUD
+        if gov and not self.gov_button.winfo_manager():
+            self.gov_button.pack(side="left", padx=(px(8), 0), after=self.copy_button)
+        elif not gov and self.gov_button.winfo_manager():
+            self.gov_button.pack_forget()
+        self.gov_button.configure(state="disabled" if self.busy else "normal")
         self.subbox.configure(state="readonly" if self.subscriptions and not self.busy else "disabled")
         self.wsbox.configure(state="readonly" if self.workspaces and not self.busy else "disabled")
         signed_in = self.session is not None and (bool(self.subscriptions) or getattr(self.session, "signed_in", False) is True)
@@ -1096,6 +1158,8 @@ class App:
                     finally: old._signin_cancel = None
                 check_cancelled(cancel)
                 session._signin_cancel = cancel
+                session.prepare_cloud(hint)
+                check_cancelled(cancel)
                 if recovery is not None:
                     rows = session.login(hint, resource=recovery.resource, claims=recovery.claims)
                 else:
@@ -1246,6 +1310,14 @@ class App:
             self.details_empty.configure(text=self.identity.get()); self.details_empty.pack(fill="x")
         self.render_session()
 
+    def open_gov_onboarding(self):
+        if self.busy or not self.workspace: return
+        if "/" not in self.github_repository():
+            messagebox.showinfo("Onboard GCC High client", "Set and save the rule library (organization and repository) first. "
+                                "The target pull request is opened there.", parent=self.root)
+            self.show_github_settings(); return
+        GovOnboardingDialog(self)
+
     def copy_workspace(self):
         if not self.workspace:
             messagebox.showinfo("Copy details", "Choose a workspace first.", parent=self.root)
@@ -1303,11 +1375,19 @@ class App:
         else: self.root.destroy()
 
 
+APP_USER_MODEL_ID = "ISIEnterprises.SentinelWorkspace"
+
+
 def main():
     if os.name == "nt":
+        import ctypes
         try:
-            import ctypes
             ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except (AttributeError, OSError):
+            pass
+        try:
+            # Group the window under its own taskbar button with the app's icon, instead of Python's.
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
         except (AttributeError, OSError):
             pass
     root = tk.Tk()

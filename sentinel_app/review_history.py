@@ -115,7 +115,7 @@ class ReviewHistoryDialog:
                                                 "or finish an unfinished submission; Open in GitHub shows the approval.",
                                      style="CardSubtitle.TLabel", justify="left", width=1), minimum=px(200)).pack(
             fill="x", pady=(px(2), px(14)))
-        self.progress = ttk.Progressbar(body, mode="indeterminate", maximum=100)
+        self.progress = kit.ProgressLine(body)
         self.notice = tk.StringVar()
         self.banner = kit.Banner(body, self.notice); self.banner.pack(fill="x", pady=(0, px(12)))
         self.search = tk.StringVar()

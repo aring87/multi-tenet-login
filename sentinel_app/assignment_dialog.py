@@ -58,7 +58,9 @@ class AssignmentDialog:
         self.all_button.pack(side="left"); self.clear_button.pack(side="left", padx=px(8))
         self.count = tk.StringVar(); ttk.Label(selection, textvariable=self.count, style="Hint.TLabel").pack(side="left", padx=(px(8), 0))
         ttk.Label(body, text="What will change", style="Section.TLabel").pack(anchor="w", pady=(px(4), px(6)))
-        review, self.text = kit.text_area(body, 10, readonly=True); review.pack(fill="both", expand=True)
+        review, self.text = kit.text_area(body, 10, readonly=True,
+                                          placeholder="Select clients, then Check to see exactly which client files will change.")
+        review.pack(fill="both", expand=True)
         self.search.trace_add("write", lambda *args: self.render_clients())
         self.enabled.trace_add("write", lambda *args: self.invalidate())
         kit.place_dialog(self.window, app.root, 1050, 800, 900, 720)
@@ -123,8 +125,7 @@ class AssignmentDialog:
         if not self.locked and not self.app.busy: self.selected.clear(); self.invalidate()
 
     def show(self, value):
-        self.text.configure(state="normal"); self.text.delete("1.0", "end"); self.text.insert("1.0", value)
-        self.text.configure(state="disabled")
+        kit.set_text(self.text, value)
 
     def refresh_controls(self):
         for widget in (self.search_box, self.all_button, self.clear_button, self.prepare_button):

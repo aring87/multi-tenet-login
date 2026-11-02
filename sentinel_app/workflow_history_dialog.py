@@ -125,8 +125,7 @@ class WorkflowHistoryDialog:
             text = "\n".join(lines)
         if self.runs.get_children(): self.runs_empty.hide()
         else: self.runs_empty.show("Select a request to see its runs." if not self.current else "No run receipts.")
-        self.detail.configure(state="normal"); self.detail.delete("1.0", "end"); self.detail.insert("1.0", text)
-        self.detail.configure(state="disabled")
+        kit.set_text(self.detail, text)
         self.controls()
 
     def refresh_status(self):

@@ -89,7 +89,7 @@ class ReviewDialog:
         ttk.Label(head, text="Submit for approval", style="CardTitle.TLabel").pack(anchor="w")
         name = record["plan"]["name"] if record else self.form["name"]
         ttk.Label(head, text=name or "Untitled rule", style="CardSubtitle.TLabel").pack(anchor="w", pady=(px(2), 0))
-        self.progress = ttk.Progressbar(body, mode="indeterminate", maximum=100)
+        self.progress = kit.ProgressLine(body)
         stages = ttk.Frame(body, style="Card.TFrame"); stages.pack(fill="x", pady=(px(14), px(12)))
         self.stage_labels = []
         for index, stage in enumerate(STAGES):
@@ -132,7 +132,8 @@ class ReviewDialog:
         legend = ttk.Frame(body, style="Card.TFrame"); legend.pack(fill="x", pady=(0, px(6)))
         for text, color in (("Added lines", COLORS["success"]), ("Removed lines", COLORS["danger"])):
             tk.Label(legend, text="■ " + text, font=FONTS["small"], bg=COLORS["card"], fg=color).pack(side="left", padx=(0, px(14)))
-        frame, self.text = kit.text_area(body, 14, readonly=True, wrap="none")
+        frame, self.text = kit.text_area(body, 14, readonly=True, wrap="none",
+                                         placeholder="The comparison with the rule library appears here after Check.")
         frame.pack(fill="both", expand=True)
         for tag, fg, bg in (("added", COLORS["success"], COLORS["success_soft"]),
                             ("removed", COLORS["danger"], COLORS["danger_soft"]),
@@ -198,6 +199,7 @@ class ReviewDialog:
                    else "added" if line.startswith("+") else "removed" if line.startswith("-") else ())
             self.text.insert("end", line, tag)
         self.text.configure(state="disabled")
+        kit.refresh_placeholder(self.text)
 
     def refresh_controls(self):
         for widget in self.controls: widget.configure(state="disabled" if self.locked else "normal")

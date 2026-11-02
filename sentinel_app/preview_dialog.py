@@ -58,7 +58,9 @@ class PreviewDialog:
         kit.wrap_to_parent(ttk.Label(body, text="Select a row or press Space to pick it. Only enabled targets that already have "
                                                 "this rule can be previewed.", style="Hint.TLabel", justify="left", width=1),
                            minimum=px(200)).pack(fill="x", pady=px(8))
-        review_frame, self.review = kit.text_area(body, 6, readonly=True); review_frame.pack(fill="both", expand=True)
+        review_frame, self.review = kit.text_area(body, 6, readonly=True,
+                                                  placeholder="Select Check to see the exact workspaces and workflow runs before anything starts.")
+        review_frame.pack(fill="both", expand=True)
         self.search.trace_add("write", lambda *args: self.render_clients())
         kit.place_dialog(self.window, app.root, 1000, 760, 850, 680)
         kit.modal(self.window, app.root, self.close, primary=self.prepare_button, focus=self.search_box)
@@ -116,8 +118,7 @@ class PreviewDialog:
         if not self.app.busy and not self.locked: self.selected.clear(); self.invalidate()
 
     def show_review(self, text):
-        self.review.configure(state="normal"); self.review.delete("1.0", "end"); self.review.insert("1.0", text)
-        self.review.configure(state="disabled")
+        kit.set_text(self.review, text)
 
     def controls(self):
         for widget in (self.search_box, self.all_button, self.clear_button, self.prepare_button):

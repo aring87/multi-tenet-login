@@ -17,10 +17,11 @@ HEADINGS = {"Clients": ("Client", "State", "Workspace", "Target"), "Rules": ("Ru
 
 def friendly_time(value):
     """A library's load time in local words: 'today at 14:02' or '12 Oct, 14:02'."""
+    text = str(value or "")
     try:
-        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone()
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00").replace(" UTC", "+00:00")).astimezone()
     except (ValueError, TypeError):
-        return str(value or "")
+        return text
     now = datetime.now().astimezone()
     return ("today at " if moment.date() == now.date() else moment.strftime("%d %b, ")) + moment.strftime("%H:%M")
 
@@ -68,8 +69,8 @@ class CatalogPage:
         kit.placeholder(self.search_entry, self.search, "Search the library  (Ctrl+F)")
         self.summary = tk.StringVar(value="")
         kit.wrap_to_parent(ttk.Label(body, textvariable=self.summary, style="Hint.TLabel")).pack(fill="x", pady=(0, px(10)))
-        frame, self.tree, self.empty = kit.table(body, (("name", "Client", 230, True), ("state", "State", 130, False),
-                                                       ("info", "Workspace", 160, True), ("path", "Target", 260, True)),
+        frame, self.tree, self.empty = kit.table(body, (("name", "Client", 320, True), ("state", "State", 110, False),
+                                                       ("info", "Workspace", 170, True), ("path", "Target", 250, True)),
                                                  height=10)
         frame.pack(fill="both", expand=True)
         # Editing is the most common action, so it sits right under the list.
@@ -98,7 +99,8 @@ class CatalogPage:
                 button.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else px(8), 0))
                 if gated: self.rule_actions.append(button)
                 else: app.controls.append((button, "normal"))
-        frame, self.details = kit.text_area(detail.body, 12, readonly=True)
+        frame, self.details = kit.text_area(detail.body, 12, readonly=True,
+                                            placeholder="Select a client or rule above to see its assignments and configuration.")
         frame.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.tree.bind("<Double-1>", self.open_row)
@@ -293,7 +295,7 @@ class CatalogPage:
         if not key[1]:
             self.snapshot = None; self.render(); return
         self.snapshot = None; self.render(); self.note.set("Reading the rule library…")
-        self.empty.show("Reading the rule library…")
+        self.empty.show("Reading the rule library…", busy=True)
         progress = self.app.file_progress(self.note.set)
         def task():
             try:

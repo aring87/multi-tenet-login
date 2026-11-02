@@ -6,9 +6,10 @@ GitHub CLI is needed only for the rule library and for submitting rules for appr
 The app has three sections in the sidebar: **Connect**, **Rules** and **Rule builder**
 (Ctrl+1, Ctrl+2 and Ctrl+3). Sentinel audit exports and the onboarding/review screens are
 not part of the desktop app at present; onboarding remains available from the command line
-(`py -m sentinel_app.lighthouse_onboarding --help`). The sidebar shows the app version, and
-a welcome banner on Connect points a new analyst at the two things to set up until a client
-or a rule library exists.
+(`py -m sentinel_app.lighthouse_onboarding --help`). The status bar shows the app version,
+**About Sentinel Workspace** at the foot of the sidebar shows the version, the Python and Tk
+builds and the app data folder, and a welcome banner on Connect points a new analyst at the
+two things to set up until a client or a rule library exists.
 
 ## Connect
 
@@ -90,19 +91,60 @@ PC and asks GitHub for each one's current state (GET requests only): waiting for
 changes requested, approved, merged or closed. **View changes** reopens one and **Open in
 GitHub** opens its pull request.
 
+## Onboard a GCC High client
+
+GCC High tenants live in Azure Government, which commercial Lighthouse can't reach, so each
+one gets its own pair of pipeline app registrations inside the client's tenant.
+
+1. Activate the client's JIT Global Administrator account in CyberQP. In the client's Entra
+   admin center (entra.microsoft.us) turn on **Properties > Access management for Azure
+   resources** so the account can grant roles.
+2. On **Connect**, set the client's tenant to its `.onmicrosoft.us` domain or tenant ID and
+   sign in with the JIT account. The app asks Entra which cloud the tenant uses and signs in to
+   Azure Government automatically; Session activity says "GCC High tenant detected".
+3. Choose the subscription and workspace, then select **Onboard GCC High…** on the Workspace
+   card. The button appears only for Azure Government workspaces.
+4. Check the client folder name (for example `aosense`) and select **Preview**. The plan lists
+   what already exists and what will be created. Nothing changes.
+5. Select **Apply reviewed setup**. The app creates `ISI Sentinel Pipeline - Preview` and
+   `ISI Sentinel Pipeline - Deploy`, adds one GitHub trust to each (sentinel-preview and
+   sentinel-production), assigns Microsoft Sentinel Reader and Log Analytics Reader to preview
+   and Microsoft Sentinel Contributor to deploy on the workspace resource group, and opens the
+   target pull request with `tenant_id`, `cloud`, `preview_client_id` and `deploy_client_id`
+   filled in. **Open pull request** opens it.
+6. Turn **Access management for Azure resources** off again. Merge the PR, then run preview
+   for the new target on main.
+
+If a step fails, fix the cause and apply again: finished steps are found and skipped. No
+secrets are created. The GitHub trust subject uses the organization's immutable-ID format; if
+login fails with AADSTS700213, compare it with **Actions > Inspect Azure trust subject**.
+
 ## Navigation and storage
 
 Tab navigates controls; Enter/Space activates a focused sidebar item or option, and the
 arrow keys move within a view switch. Dialogs close with Esc and run their main action
 with Enter. Pages scroll at smaller window sizes; the window size is remembered. The
 header shows the selected workspace and tenant, and the sidebar shows the signed-in
-account. The status bar reports Ready or Working; a thin progress line appears under the
-header while work runs. The status bar shows a compact one-line message so a long
-diagnostic cannot push content offscreen; full errors remain in their dialogs and Session
-activity.
+account. The status bar reports Ready or Working; a thin activity line glides under the
+header while work runs, and lists show the same line in place of their rows while they
+load. The status bar keeps to one line: a long message is shortened with an ellipsis, and
+pointing at it shows the full text. Full errors remain in their dialogs and Session
+activity. Empty lists and text areas say what will appear in them and, where it helps,
+offer the action that fills them.
 
 Client profiles, settings, drafts and submission records stay in desktop-data. Exports are
 written to the folder you choose.
+
+## Build a Windows app (.exe)
+
+`Build-Exe.cmd` in the repository root builds `dist\Sentinel Workspace.exe` with
+PyInstaller. It first runs `scripts\make_build_assets.py`, which draws the app icon
+(`assets\sentinel-workspace.ico`) and writes the Windows version resource
+(`assets\version-info.txt`) from the same brand module and version number the running app
+uses, so the icon in Explorer, the taskbar and the window title bar match and the file's
+Details tab shows the product name and version. The .exe keeps its data in a `desktop-data`
+folder beside it (or under `%LOCALAPPDATA%\Sentinel Workspace` when that folder is
+read-only). Azure CLI and GitHub CLI are still needed on each PC.
 
 ### Client slug and workspace label length
 

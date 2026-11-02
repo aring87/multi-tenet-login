@@ -9,8 +9,8 @@ import tkinter.font as tkfont
 from tkinter import ttk
 
 COLORS = dict(
-    canvas="#F4F6FA", card="#FFFFFF", raised="#F8FAFC", hover="#F1F5F9",
-    line="#E2E8F0", line_strong="#CBD5E1",
+    canvas="#F4F6FA", card="#FFFFFF", raised="#F8FAFC", hover="#F1F5F9", stripe="#F6F8FB",
+    line="#E2E8F0", line_strong="#CBD5E1", shadow="#DCE2EC",
     ink="#0F172A", ink_2="#334155", muted="#64748B", subtle="#94A3B8", disabled="#A0AEC0",
     accent="#2563EB", accent_hover="#1D4ED8", accent_pressed="#1E40AF",
     accent_soft="#EEF4FF", accent_line="#BFD3FE", accent_disabled="#9DB7F2",
@@ -60,24 +60,17 @@ def _resolve_fonts(root):
     FONTS.update(
         body=(text, 10), small=(text, 9),
         strong=(strong, 10, strong_weight), strong_small=(strong, 9, strong_weight),
-        eyebrow=(strong, 9, strong_weight), field=(strong, 9, strong_weight),
+        eyebrow=(strong, 8, strong_weight), field=(strong, 9, strong_weight),
         title=(display, 12, "bold"), page=(display, 19, "bold"), brand=(display, 12, "bold"),
-        stat=(display, 20, "bold"), mono=(mono, 9),
+        stat=(display, 22, "bold"), mono=(mono, 9),
         icon=(icons, 12) if icons else None, icon_large=(icons, 15) if icons else None,
-        icon_small=(icons, 10) if icons else None)
+        icon_hero=(icons, 26) if icons else None, icon_small=(icons, 10) if icons else None)
 
 
 def app_icon(root, size=32):
-    """Window and taskbar icon: a white shield on the accent colour."""
-    image = tk.PhotoImage(master=root, width=size, height=size)
-    image.put(COLORS["accent"], to=(0, 0, size, size))
-    top, bottom, centre, half = size * 3 // 16, size * 27 // 32, (size - 1) / 2, size * 9 / 32
-    for y in range(top, bottom):
-        progress = (y - top) / (bottom - top)
-        width = half if progress < .5 else half * (1 - (progress - .5) / .5) ** .8
-        left, right = int(round(centre - width)), int(round(centre + width)) + 1
-        if right > left: image.put("#FFFFFF", to=(left, y, right, y + 1))
-    return image
+    """The product mark as a Tk image; see brand.py for the drawing."""
+    from .brand import mark
+    return mark(root, size)
 
 
 def configure_theme(root):
@@ -128,6 +121,7 @@ def configure_theme(root):
             ("RaisedProse", f["body"], c["ink"], c["raised"]),
             ("RaisedMuted", f["body"], c["muted"], c["raised"]),
             ("Stat", f["stat"], c["ink"], c["card"]),
+            ("Eyebrow", f["eyebrow"], c["muted"], c["card"]),
             ("PageTitle", f["page"], c["ink"], c["card"]),
             ("PageSubtitle", f["body"], c["muted"], c["card"]),
             ("Context", f["body"], c["muted"], c["canvas"])):

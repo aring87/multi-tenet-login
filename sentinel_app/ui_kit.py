@@ -4,9 +4,11 @@ areas, and the helpers that give every window the same keyboard behaviour.
 
 They are drawn with plain Tk/ttk widgets so they need no extra dependencies.
 """
+import math
 import re
 import weakref
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 
 from .desktop_theme import COLORS, FONTS, TONES, ICONS, SPACE, px
@@ -83,18 +85,35 @@ def icon_tile(parent, name, tone="info", size=34, background=None):
     return tile
 
 
+def ellipsize(text, font, width):
+    """Shorten ``text`` with a trailing ellipsis so it fits ``width`` pixels in ``font``
+    (a tkfont.Font). Text that already fits is returned unchanged."""
+    if width <= 0 or font.measure(text) <= width:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if font.measure(text[:middle].rstrip() + "…") <= width: low = middle
+        else: high = middle - 1
+    return text[:low].rstrip() + "…" if low else "…"
+
+
 def tooltip(widget, text):
-    """Show ``text`` under the widget after a short hover, and on keyboard focus."""
+    """Show ``text`` under the widget after a short hover, and on keyboard focus.
+    The text is read from ``widget.tooltip_text`` when shown, so it can be updated;
+    an empty text shows nothing."""
     state = {"window": None, "timer": None}
     def show():
         state["timer"] = None
         if state["window"] is not None or not widget.winfo_exists(): return
+        current = getattr(widget, "tooltip_text", text)
+        if not current: return
         window = tk.Toplevel(widget); window.overrideredirect(True)
         try: window.attributes("-topmost", True)
         except tk.TclError: pass
         window.configure(bg=COLORS["line_strong"])
-        tk.Label(window, text=text, font=FONTS["small"], bg=COLORS["card"], fg=COLORS["ink"],
-                 padx=px(8), pady=px(4), bd=0).pack(padx=1, pady=1)
+        tk.Label(window, text=current, font=FONTS["small"], bg=COLORS["card"], fg=COLORS["ink"],
+                 padx=px(8), pady=px(4), bd=0, justify="left", wraplength=px(420)).pack(padx=1, pady=1)
         window.update_idletasks()
         x = widget.winfo_rootx() + (widget.winfo_width() - window.winfo_reqwidth()) // 2
         y = widget.winfo_rooty() + widget.winfo_height() + px(6)
@@ -131,21 +150,25 @@ def link(parent, text, command, fg, hover_fg, bg, font=None, focus_color=None):
 
 
 class Card:
-    """White surface with a hairline border and an optional header row.
+    """White surface with a hairline border, a soft shadow and an optional header row.
 
-    ``frame`` is the outer widget to place; ``body`` receives content and
-    ``actions`` sits at the right of the header for buttons or pills. The
-    title wraps beside the actions and the subtitle runs under both."""
+    ``frame`` is the outer widget to place; ``surface`` is the white panel,
+    ``body`` receives content and ``actions`` sits at the right of the header
+    for buttons or pills. The title wraps beside the actions and the subtitle
+    runs under both."""
 
-    def __init__(self, parent, title=None, subtitle=None, icon=None, tone="info", padding=20):
-        self.frame = tk.Frame(parent, bg=COLORS["card"], bd=0, highlightthickness=1,
-                              highlightbackground=COLORS["line"], highlightcolor=COLORS["line"])
+    def __init__(self, parent, title=None, subtitle=None, icon=None, tone="info", padding=20, shadow=True):
+        # The outer frame shows through as a 2px strip under the surface: the shadow.
+        self.frame = tk.Frame(parent, bg=COLORS["shadow"] if shadow else COLORS["canvas"], bd=0, highlightthickness=0)
+        self.surface = tk.Frame(self.frame, bg=COLORS["card"], bd=0, highlightthickness=1,
+                                highlightbackground=COLORS["line"], highlightcolor=COLORS["line"])
+        self.surface.pack(fill="both", expand=True, pady=(0, px(2) if shadow else 0))
         self.frame.card = self  # Keep the title variables alive as long as the widget.
         self.title_var = tk.StringVar(value=title or "")
         self.subtitle_var = tk.StringVar(value=subtitle or "")
         self.actions = None
         if title is not None:
-            head = ttk.Frame(self.frame, style="Card.TFrame", padding=(px(padding), px(padding - 4), px(padding), 0))
+            head = ttk.Frame(self.surface, style="Card.TFrame", padding=(px(padding), px(padding - 4), px(padding), 0))
             head.pack(fill="x")
             head.columnconfigure(1, weight=1)
             if icon:
@@ -163,7 +186,7 @@ class Card:
                                                 justify="left", wraplength=px(480), width=1)
                 self.subtitle_label.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(px(2), 0))
                 wrap_to_parent(self.subtitle_label, minimum=px(120))
-        self.body = ttk.Frame(self.frame, style="Card.TFrame",
+        self.body = ttk.Frame(self.surface, style="Card.TFrame",
                               padding=(px(padding), px(16 if title is not None else padding), px(padding), px(padding)))
         self.body.pack(fill="both", expand=True)
 
@@ -312,56 +335,150 @@ class Banner(tk.Frame):
                                                                  "success": "check"}.get(tone, "info")])
 
 
+class ProgressLine(tk.Canvas):
+    """Thin indeterminate activity bar: a short accent segment glides along a quiet
+    track while work runs. It replaces ttk.Progressbar, whose indeterminate mode is
+    invisible at this thickness, and keeps its ``start``/``stop`` names."""
+
+    LENGTH, INTERVAL_MS, STEP = 0.28, 24, 0.011
+
+    def __init__(self, parent, background=None, thickness=3):
+        super().__init__(parent, height=px(thickness), bg=background or COLORS["card"], bd=0, highlightthickness=0)
+        self.track = self.create_rectangle(0, 0, 0, 0, fill=COLORS["accent_line"], width=0, state="hidden")
+        self.bar = self.create_rectangle(0, 0, 0, 0, fill=COLORS["accent"], width=0, state="hidden")
+        self.timer, self.phase = None, 0.0
+        self.bind("<Configure>", lambda event: self.draw(), add="+")
+
+    def running(self):
+        return self.timer is not None
+
+    def start(self, interval=None):
+        """Begin animating. ``interval`` is accepted for ttk.Progressbar compatibility."""
+        if self.timer is None:
+            self.itemconfigure(self.track, state="normal"); self.itemconfigure(self.bar, state="normal")
+            self.tick()
+
+    def stop(self):
+        if self.timer is not None:
+            try: self._root().after_cancel(self.timer)
+            except tk.TclError: pass
+            self.timer = None
+        self.phase = 0.0
+        try:
+            self.itemconfigure(self.track, state="hidden"); self.itemconfigure(self.bar, state="hidden")
+        except tk.TclError:
+            pass
+
+    def tick(self):
+        self.timer = None
+        if not self.winfo_exists(): return
+        self.phase = (self.phase + self.STEP) % 1.0
+        self.draw()
+        # Scheduled on the root, like every timer in the kit, so a pending callback is owned
+        # by one widget only and cancelling it elsewhere never leaves a dangling command here.
+        self.timer = self._root().after(self.INTERVAL_MS, self.tick)
+
+    def draw(self):
+        width, height = self.winfo_width(), self.winfo_height()
+        self.coords(self.track, 0, 0, width, height)
+        if self.timer is None: return
+        length = max(px(72), width * self.LENGTH)
+        eased = 0.5 - math.cos(math.pi * self.phase) / 2  # Slow at both ends, quick through the middle.
+        x = -length + (width + length) * eased
+        self.coords(self.bar, x, 0, x + length, height)
+
+
 class StatTile:
-    """Number with a caption, used for inventory summaries."""
+    """A metric card: a coloured accent along the top, a small caption and a large number."""
 
     def __init__(self, parent, caption, tone="neutral"):
         self.card = Card(parent, padding=16)
         self.frame = self.card.frame
-        head = ttk.Frame(self.card.body, style="Card.TFrame"); head.pack(fill="x")
-        dot = tk.Label(head, text="●", font=FONTS["small"], bg=COLORS["card"], fg=TONES[tone][0], bd=0)
-        dot.pack(side="left", padx=(0, px(6)))
-        ttk.Label(head, text=caption, style="Key.TLabel").pack(side="left")
+        fg, _ = TONES[tone]
+        tk.Frame(self.card.surface, bg=fg if tone != "neutral" else COLORS["line_strong"], height=px(3), bd=0).pack(
+            fill="x", side="top", before=self.card.body)
+        ttk.Label(self.card.body, text=caption.upper(), style="Eyebrow.TLabel").pack(anchor="w")
         self.value = tk.StringVar(value="—")
-        ttk.Label(self.card.body, textvariable=self.value, style="Stat.TLabel").pack(anchor="w", pady=(px(4), 0))
+        ttk.Label(self.card.body, textvariable=self.value, style="Stat.TLabel").pack(anchor="w", pady=(px(2), 0))
 
 
 class EmptyOverlay:
-    """Message drawn over a table while it has no rows, with an optional action."""
+    """Message drawn over a table while it has no rows, with an optional action, a
+    large muted glyph above the text when the icon font is available, and an
+    activity line while ``busy`` (loading) is set.
 
-    def __init__(self, host, text=""):
+    The message is centred in the space under the column headings, so it never
+    overlaps them in a short table and sits comfortably high in a tall one."""
+
+    HEADING = 36  # Treeview heading height, 96-DPI pixels.
+
+    def __init__(self, host, text="", icon="rules"):
+        self.host = host
         self.frame = tk.Frame(host, bg=COLORS["card"], bd=0, highlightthickness=0)
+        self.glyph = icon_label(self.frame, icon, COLORS["card"], COLORS["line_strong"], font="icon_hero")
+        if self.glyph is not None: self.glyph.pack(pady=(0, px(10)))
         self.text = tk.StringVar(value=text)
         self.label = tk.Label(self.frame, textvariable=self.text, font=FONTS["body"], fg=COLORS["muted"],
                               bg=COLORS["card"], justify="center", wraplength=px(420))
         self.label.pack()
+        self.line = ProgressLine(self.frame, thickness=3)
         self.button = ttk.Button(self.frame, style="Small.Secondary.TButton")
+        host.bind("<Configure>", lambda event: self.visible() and self.position(), add="+")
 
-    def show(self, text=None, action=None):
+    def position(self):
+        # place() remembers earlier options, so rely and y are always both given.
+        height = self.host.winfo_height()
+        if height <= 1:
+            self.frame.place(relx=.5, rely=.4, y=0, anchor="center"); return
+        head = px(self.HEADING)
+        room = max(0, height - head)
+        # A tall table reads better with the message in its upper third; a short one is simply centred.
+        share = .5 if room < px(260) else .36
+        self.frame.place(relx=.5, rely=0, y=head + int(room * share), anchor="center")
+
+    def show(self, text=None, action=None, busy=False):
         if text is not None:
             self.text.set(text)
+        if busy:
+            if not self.line.winfo_manager(): self.line.pack(fill="x", padx=px(40), pady=(px(12), 0))
+            self.line.start()
+            if self.glyph is not None: self.glyph.pack_forget()
+        else:
+            self.line.stop(); self.line.pack_forget()
+            if self.glyph is not None and not self.glyph.winfo_manager(): self.glyph.pack(before=self.label, pady=(0, px(10)))
         if action:
             self.button.configure(text=action[0], command=action[1])
             if not self.button.winfo_manager(): self.button.pack(pady=(px(10), 0))
         else:
             self.button.pack_forget()
-        self.frame.place(relx=.5, rely=.32, anchor="center")
+        self.position()
 
     def hide(self):
+        self.line.stop()
         self.frame.place_forget()
 
     def visible(self):
         return bool(self.frame.winfo_manager())
 
 
-def table(parent, columns, height=10, selectmode="browse"):
-    """A bordered Treeview with slim scrollbars and an empty-state overlay.
+class StripedTreeview(ttk.Treeview):
+    """A Treeview whose top-level rows are striped as they are inserted, so every
+    list in the app alternates row tints without each page having to count."""
+
+    def insert(self, parent, index, iid=None, **kw):
+        if parent == "" and index == "end" and len(self.get_children("")) % 2:
+            kw["tags"] = tuple(kw.get("tags", ())) + ("stripe",)
+        return super().insert(parent, index, iid, **kw)
+
+
+def table(parent, columns, height=10, selectmode="browse", icon="rules"):
+    """A bordered Treeview with striped rows, slim scrollbars and an empty-state overlay.
 
     ``columns`` holds (key, heading, width[, stretch]) tuples."""
     frame = tk.Frame(parent, bg=COLORS["card"], bd=0, highlightthickness=1,
                      highlightbackground=COLORS["line"], highlightcolor=COLORS["line"])
-    tree = ttk.Treeview(frame, columns=[key for key, *_ in columns], show="headings", height=height,
-                        selectmode=selectmode)
+    tree = StripedTreeview(frame, columns=[key for key, *_ in columns], show="headings", height=height,
+                           selectmode=selectmode)
     for key, title, width, *stretch in columns:
         tree.heading(key, text=title, anchor="w")
         tree.column(key, width=px(width), minwidth=px(70), anchor="w", stretch=bool(stretch[0]) if stretch else True)
@@ -381,13 +498,17 @@ def table(parent, columns, height=10, selectmode="browse"):
         tree._root().after_idle(lambda: tree.winfo_exists() and tree.xview_moveto(tree.xview()[0]))
     tree.bind("<Configure>", reflow, add="+")
     frame.columnconfigure(0, weight=1); frame.rowconfigure(0, weight=1)
+    tree.tag_configure("stripe", background=COLORS["stripe"])
     tree.tag_configure("muted", foreground=COLORS["muted"])
     tree.tag_configure("danger", foreground=COLORS["danger"])
-    return frame, tree, EmptyOverlay(frame)
+    return frame, tree, EmptyOverlay(frame, icon=icon)
 
 
-def text_area(parent, height, readonly=False, wrap="word", undo=False, font="mono"):
-    """A Text widget with a slim scrollbar inside a bordered frame."""
+def text_area(parent, height, readonly=False, wrap="word", undo=False, font="mono", placeholder=None):
+    """A Text widget with a slim scrollbar inside a bordered frame.
+
+    ``placeholder`` is muted text shown while the area is empty; write through
+    ``set_text`` (or call ``refresh_placeholder``) so it comes and goes."""
     frame = tk.Frame(parent, bg=COLORS["card"], bd=0, highlightthickness=1,
                      highlightbackground=COLORS["line"], highlightcolor=COLORS["line"])
     text = tk.Text(frame, height=height, width=30, wrap=wrap, undo=undo, font=FONTS[font],
@@ -406,7 +527,26 @@ def text_area(parent, height, readonly=False, wrap="word", undo=False, font="mon
     if readonly:
         text.configure(state="disabled", bg=COLORS["raised"])
         frame.configure(bg=COLORS["raised"])
+    if placeholder:
+        text.placeholder_label = tk.Label(text, text=placeholder, font=FONTS["body"], fg=COLORS["subtle"],
+                                          bg=COLORS["raised"] if readonly else COLORS["card"], bd=0,
+                                          justify="left", anchor="nw", wraplength=px(440))
+        text.placeholder_label.bind("<Button-1>", lambda event: text.focus_set())
+        if not readonly:
+            # An editable area clears its hint while it has the keyboard, so the caret is never hidden.
+            text.bind("<<Modified>>", lambda event: refresh_placeholder(text), add="+")
+            text.bind("<FocusIn>", lambda event: text.placeholder_label.place_forget(), add="+")
+            text.bind("<FocusOut>", lambda event: refresh_placeholder(text), add="+")
+        refresh_placeholder(text)
     return frame, text
+
+
+def refresh_placeholder(text):
+    """Show a text area's placeholder while it is empty, hide it otherwise."""
+    label = getattr(text, "placeholder_label", None)
+    if label is None: return
+    if text.get("1.0", "end-1c").strip(): label.place_forget()
+    elif not label.winfo_manager(): label.place(x=px(12), y=px(10))
 
 
 def set_text(widget, value):
@@ -414,21 +554,52 @@ def set_text(widget, value):
     state = widget.cget("state")
     widget.configure(state="normal"); widget.delete("1.0", "end"); widget.insert("1.0", value)
     widget.configure(state=state)
+    refresh_placeholder(widget)
+
+
+def font(widget, name):
+    """A measuring tkfont.Font for the named FONTS entry, cached per Tk instance."""
+    root = widget._root()
+    fonts = getattr(root, "_kit_fonts", None)
+    if fonts is None:
+        fonts = root._kit_fonts = {}
+    if name not in fonts:
+        fonts[name] = tkfont.Font(root, font=FONTS[name])
+    return fonts[name]
 
 
 def field_label(parent, text, hint=None):
-    """Label above a form control, with an optional muted hint on the right."""
+    """Label above a form control, with an optional muted hint on the right.
+
+    The hint gives way to the label: in a narrow column it is shortened with an
+    ellipsis rather than clipped mid-word."""
     row = ttk.Frame(parent, style="Card.TFrame"); row.pack(fill="x", pady=(0, px(5)))
-    ttk.Label(row, text=text, style="Field.TLabel").pack(side="left")
+    row.label = ttk.Label(row, text=text, style="Field.TLabel"); row.label.pack(side="left")
+    row.hint = None
     if hint:
-        ttk.Label(row, text=hint, style="Hint.TLabel").pack(side="right")
+        row.hint = ttk.Label(row, text=hint, style="Hint.TLabel", anchor="e")
+        row.hint.pack(side="right", padx=(px(8), 0))
+        small = font(row, "small")
+        def fit(event=None):
+            room = row.winfo_width() - row.label.winfo_reqwidth() - px(12)
+            row.hint.configure(text=ellipsize(hint, small, room) if room > px(30) else "")
+        row.bind("<Configure>", fit, add="+")
     return row
 
 
-def section_label(parent, text, style="Section.TLabel"):
-    label = ttk.Label(parent, text=text, style=style)
-    label.pack(anchor="w", pady=(0, px(8)))
-    return label
+def section_label(parent, text, style="Section.TLabel", action=None):
+    """A small heading inside a card. ``action`` is an optional (text, command)
+    pair shown as a ghost button at the right. Returns the row; ``row.label``
+    and ``row.button`` hold its parts."""
+    row = ttk.Frame(parent, style="Card.TFrame")
+    row.pack(fill="x", pady=(0, px(8)))
+    row.label = ttk.Label(row, text=text, style=style)
+    row.label.pack(side="left")
+    row.button = None
+    if action:
+        row.button = ttk.Button(row, text=action[0], command=action[1], style="Small.Ghost.TButton")
+        row.button.pack(side="right")
+    return row
 
 
 def divider(parent, pady=16):

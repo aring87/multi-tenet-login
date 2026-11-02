@@ -10,11 +10,15 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from urllib.error import URLError
+from urllib.parse import quote
+from urllib.request import urlopen
 from .auth_recovery import AuthenticationRequired, SignInCancelled, signin_was_cancelled, azure_error, recovery_scope
 from .signin_process import run_signin
 from .lighthouse_onboarding import CLI, Onboard, Stop, guid, require
 
 from .same_tenant_onboarding import SameTenantOnboard, validate_app_config, onboarding_mode
+from .gov_onboarding import GOV_CLOUD, DEFAULT_LABEL, GovOnboard, validate_gov_config
 
 from .paths import ROOT as BASE, DATA
 
@@ -54,6 +58,31 @@ def validate_tenant_hint(value):
             and re.search(r"[a-z]", labels[-1]), guidance)
     return hint
 
+OPENID_URL = "https://login.microsoftonline.com/{}/v2.0/.well-known/openid-configuration"
+
+
+def detect_cloud(tenant_hint, fetch=None):
+    """Azure CLI cloud for a tenant, from Entra's public tenant discovery document.
+
+    GCC High and DoD tenants report cloud_instance_name microsoftonline.us and must sign
+    in to Azure Government. GCC (moderate) is commercial Azure. Vanity domains hide the
+    difference, so ask Entra rather than guessing from the name. With no tenant, or if
+    discovery is unreachable, stay on Azure public cloud.
+    Returns (cloud_name, note)."""
+    if not tenant_hint:
+        return "AzureCloud", ""
+    def default_fetch(url):
+        with urlopen(url, timeout=15) as response:
+            return response.read(65536)
+    try:
+        data = json.loads((fetch or default_fetch)(OPENID_URL.format(quote(tenant_hint, safe=""))))
+    except (URLError, OSError, ValueError) as error:
+        return "AzureCloud", "Couldn't check which Microsoft cloud the tenant uses (" + str(error)[:120] + "); using Azure public cloud."
+    if isinstance(data, dict) and data.get("cloud_instance_name") == "microsoftonline.us":
+        return GOV_CLOUD, "GCC High tenant detected; signing in to Azure Government."
+    return "AzureCloud", ""
+
+
 class Session:
     def __init__(self, folder=None, logger=None):
         self.folder = Path(folder or DATA / "sessions" / str(uuid.uuid4()))
@@ -67,6 +96,7 @@ class Session:
                         PYTHONIOENCODING="utf-8")
         self.az_exe = shutil.which("az")
         self.gh_exe = shutil.which("gh")
+        self.cloud = "AzureCloud"
         self.account = None
         self.login_tenant = ""
         self.login_diagnostics = ""
@@ -76,7 +106,7 @@ class Session:
     def execute(self, executable, args, data=None, timeout=900):
         require(executable, "Required tool is missing. Install Azure CLI / GitHub CLI and restart this app.")
         auth_command = executable == self.az_exe and (
-            tuple(args[:1]) in (("login",), ("logout",)) or tuple(args[:2]) == ("cloud", "show"))
+            tuple(args[:1]) in (("login",), ("logout",)) or tuple(args[:2]) in (("cloud", "show"), ("cloud", "set")))
         # The MSI wrapper invokes this exact interpreter. Bypass cmd.exe so REST
         # query separators, percent escapes and pagination links remain literal.
         if executable == self.az_exe and Path(executable).name.lower() == "az.cmd":
@@ -160,6 +190,19 @@ class Session:
                        "Enter the client tenant ID and sign in again. If sign-in succeeded, use "
                        "Check missing subscription with its ID from Azure portal.\n" + self.login_diagnostics)
         return subscriptions
+
+    def prepare_cloud(self, tenant_hint=""):
+        """Point this session's Azure CLI at the tenant's cloud before sign-in.
+
+        Each app session has its own Azure CLI folder, so switching to Azure Government
+        here never changes the cloud your terminal uses."""
+        tenant_hint = validate_tenant_hint(tenant_hint) if tenant_hint.strip() else ""
+        cloud, note = detect_cloud(tenant_hint)
+        if note: self.log(note)
+        if cloud != self.cloud:
+            self.az("cloud", "set", "--name", cloud)
+            self.cloud = cloud
+        return cloud
 
     def refresh_subscriptions(self):
         rows=self.az("account","list","--all","--refresh") or []
@@ -279,6 +322,62 @@ def config_from_workspace(workspace, client, label, fields, extras=None):
     # Validation derives target; do not include that internal field in exported configuration.
     validate_app_config(config)
     return config
+
+def gov_config_from_workspace(workspace, client, label, settings, rule_path="", allow_missing_mitre=True):
+    """Settings for GCC High onboarding of the selected workspace. Only the GitHub
+    repository has to be saved; the shared environment names default to the ones
+    every commercial client already uses."""
+    require(workspace, "Select the client's workspace first.")
+    require(settings.get("github_owner") and settings.get("github_repo"),
+            "Set the rule library (organization and repository) on Connect first.")
+    config = dict(tenant_id=workspace["tenant_id"], subscription_id=workspace["subscription_id"],
+                  resource_group=workspace["resource_group"], workspace_name=workspace["workspace_name"],
+                  client=client, workspace_label=label or DEFAULT_LABEL,
+                  github_owner=settings["github_owner"], github_repo=settings["github_repo"],
+                  preview_environment=settings.get("preview_environment") or "sentinel-preview",
+                  production_environment=settings.get("production_environment") or "sentinel-production",
+                  initial_rule_path=rule_path, allow_missing_mitre=allow_missing_mitre)
+    for key in ("app_name_prefix", "subject_format"):
+        if settings.get(key):
+            config[key] = settings[key]
+    validate_gov_config(config)
+    return config
+
+
+def gov_run(session, config, apply=False):
+    """Preview or apply GCC High onboarding. Returns (summary, full output)."""
+    config = validate_gov_config(config)
+    require(session.cloud == GOV_CLOUD, "Sign in to the client's GCC High tenant first.")
+    session.verify(config)
+    folder = DATA / "runs" / config["target"]
+    folder.mkdir(parents=True, exist_ok=True)
+    lock = folder / "onboarding.lock"
+    acquired = False
+    try:
+        if apply:
+            try:
+                with lock.open("x") as file:
+                    file.write(str(os.getpid()))
+                acquired = True
+            except FileExistsError:
+                raise Stop("An onboarding lock exists. Check whether an earlier run is active before retrying.")
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                GovOnboard(config, DesktopCLI(session, apply), folder / "onboarding.state.json").run()
+        except Stop as error:
+            raise Stop(buffer.getvalue() + "\nSTOPPED: " + str(error) +
+                       ("\nChanges may be partial. Correct the issue and apply again; finished steps are skipped."
+                        if apply else "")) from None
+        finally:
+            session.log(buffer.getvalue())
+        summary = ("GCC High onboarding applied; review the pull request." if apply else
+                   "GCC High onboarding plan ready. Nothing changed.")
+        return summary, buffer.getvalue()
+    finally:
+        if acquired:
+            lock.unlink()
+
 
 def permission_run(session, workspace, target, principals, apply=False):
     """Retired. Kept so the UI reports why rather than failing obscurely."""

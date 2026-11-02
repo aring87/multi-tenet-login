@@ -1,4 +1,5 @@
 """Preflight authorisation checks: no Azure or GitHub calls."""
+import base64
 import json
 import unittest
 from pathlib import Path
@@ -66,19 +67,33 @@ class TokenAuthorizationTests(unittest.TestCase):
 
 
 class DelegationRightsTests(unittest.TestCase):
+    """The caller's roles are read by object ID from the sign-in token, so the check
+    works for guest and GCC High accounts whose Graph lookups may be refused."""
+
+    OBJECT_ID = "62651bcc-1111-4111-8111-111111111111"
+
+    def token(self):
+        claims = base64.urlsafe_b64encode(json.dumps({"oid": self.OBJECT_ID}).encode()).decode().rstrip("=")
+        return "header." + claims + ".signature"
+
     def rights(self, assignments):
         instance = object.__new__(lh.Onboard)
         instance.io = MagicMock()
-        instance.io.az = MagicMock(side_effect=[{"user": {"name": "u@example.com"}}, assignments])
+        instance.io.az = MagicMock(side_effect=[{"accessToken": self.token()}, assignments])
+        instance.c = {"tenant_id": "t"}
         instance.scope = "/subscriptions/s"
         instance.state = {}
         return instance
 
-    def test_roles_granted_through_a_group_are_counted(self):
+    def test_roles_are_read_by_object_id_without_a_graph_lookup(self):
         instance = self.rights([{"roleDefinitionName": "User Access Administrator"}])
         instance.check_delegation_rights()
-        self.assertIn("--include-groups", instance.io.az.call_args_list[1][0])
-        self.assertIn("--include-inherited", instance.io.az.call_args_list[1][0])
+        token_call, roles_call = [call[0] for call in instance.io.az.call_args_list]
+        self.assertEqual(token_call[:2], ("account", "get-access-token"))
+        self.assertIn("--include-inherited", roles_call)
+        self.assertIn("--assignee-object-id", roles_call)
+        self.assertIn(self.OBJECT_ID, roles_call)
+        self.assertNotIn("--assignee", roles_call)
         self.assertEqual(instance.state["caller_roles"], ["User Access Administrator"])
 
     def test_contributor_alone_is_refused(self):

@@ -95,8 +95,7 @@ class DeploymentDialog:
                   "its configured enabled state.",
                   "GitHub resolves main when each run starts, so it can change after this review; check each run's revision and "
                   "new preview artifacts before approving production."]
-        self.review.configure(state="normal"); self.review.delete("1.0", "end")
-        self.review.insert("1.0", "\n".join(lines)); self.review.configure(state="disabled")
+        kit.set_text(self.review, "\n".join(lines))
         self.render_runs()
 
     def render_runs(self):

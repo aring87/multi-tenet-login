@@ -351,9 +351,14 @@ class Onboard:
     def check_delegation_rights(self):
         """Creating a delegation is a role assignment in the client's directory.
         Owner or User Access Administrator; Contributor and Sentinel roles are not enough."""
+        token = self.io.az("account", "get-access-token", "--tenant", self.c["tenant_id"],
+                           "--resource", "https://management.azure.com/")["accessToken"]
+        encoded = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        principal = guid(claims.get("oid", ""), "signed-in user object ID")
         permissions = self.io.az("role", "assignment", "list", "--scope", self.scope,
-                                 "--include-inherited", "--include-groups", "--assignee",
-                                 self.io.az("account", "show")["user"]["name"])
+                                 "--include-inherited", "--assignee-object-id", principal,
+                                 "--fill-principal-name", "false")
         roles = {p["roleDefinitionName"] for p in permissions}
         require(roles & {"Owner", "User Access Administrator"},
                 "The signed-in account needs Owner or User Access Administrator on the client "
@@ -558,6 +563,9 @@ class Onboard:
                 "delegation, so no per-client identity, credential, environment or role "
                 "definition was created. ")
 
+    def tenant_note(self):
+        return "tenant_id is the MANAGING tenant by design. "
+
     def create_target_pr(self):
         if self.target_exists:
             print("Target already matches main; no pull request needed.")
@@ -596,7 +604,7 @@ class Onboard:
         pr = prs[0] if prs else self.io.gh("POST", self.repo_path + "/pulls", {
             "title": "Onboard Sentinel workspace " + self.c["target"],
             "head": self.branch, "base": "main",
-            "body": self.access_description() + "tenant_id is the MANAGING tenant by design. "
+            "body": self.access_description() + self.tenant_note() +
                     "Any initial rule is explicitly disabled. After merging, run preview on "
                     "main, review the what-if, then run an approved deployment."
                     + ("\n\nThe client dropdowns in " + " and ".join(DROPDOWN_WORKFLOWS)

@@ -68,10 +68,15 @@ def validate_target(path, doc, rules):
             'Client folder, client field and target prefix must agree: '+path)
     require(type(doc['enabled']) is bool and type(doc['allow_missing_mitre']) is bool, 'Invalid target booleans: '+path)
     azure = doc['azure']
-    require(isinstance(azure,dict) and set(azure)=={'tenant_id','subscription_id','resource_group','workspace_name','workspace_id'}, 'Invalid Azure fields: '+path)
+    base = {'tenant_id','subscription_id','resource_group','workspace_name','workspace_id'}
+    # GCC High targets also name their Gov cloud and per-client pipeline app registrations.
+    gov = {'cloud','preview_client_id','deploy_client_id'}
+    require(isinstance(azure,dict) and set(azure) in (base, base|gov), 'Invalid Azure fields: '+path)
     require(all(isinstance(v,str) and v.strip() for v in azure.values()), 'Invalid Azure identifiers: '+path)
+    require(azure.get('cloud','AzureUSGovernment')=='AzureUSGovernment', 'Invalid Azure cloud: '+path)
     if doc['enabled']:
-        require(all(rule_schema.guid(azure[k]) for k in ('tenant_id','subscription_id','workspace_id')), 'Enabled target requires valid Azure GUIDs: '+path)
+        ids = ('tenant_id','subscription_id','workspace_id') + (('preview_client_id','deploy_client_id') if 'cloud' in azure else ())
+        require(all(rule_schema.guid(azure[k]) for k in ids), 'Enabled target requires valid Azure GUIDs: '+path)
         require(all(re.fullmatch(r'[A-Za-z0-9_.()-]{1,90}',azure[k]) and 'REPLACE' not in azure[k]
                     for k in ('resource_group','workspace_name')), 'Invalid workspace or resource group: '+path)
     ids, paths, warnings = set(), set(), []

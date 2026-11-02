@@ -98,11 +98,13 @@ class RulesPage:
         kit.wrap_to_parent(ttk.Label(detail.body, textvariable=self.description, style="Body.TLabel",
                                      justify="left", wraplength=px(600))).pack(fill="x")
         self.overview = kit.KeyValues(detail.body, key_width=14); self.overview.pack(fill="x", pady=(px(4), 0))
-        self.query_label = kit.section_label(detail.body, "Query")
+        self.query_label = kit.section_label(detail.body, "Query", action=("Copy query", lambda: self.copy(self.query, "Query")))
         self.query_frame, self.query = kit.text_area(detail.body, 8, readonly=True, wrap="none")
-        self.raw_label = kit.section_label(detail.body, "Full configuration")
+        self.raw_label = kit.section_label(detail.body, "Full configuration",
+                                           action=("Copy JSON", lambda: self.copy(self.details, "Rule configuration")))
         self.raw_label.pack_configure(pady=(kit.space("lg"), px(8)))
-        frame, self.details = kit.text_area(detail.body, 10, readonly=True)
+        frame, self.details = kit.text_area(detail.body, 10, readonly=True,
+                                            placeholder="Select a rule above to see its full configuration as JSON.")
         frame.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.tree.bind("<Double-1>", self.open_row)
@@ -124,6 +126,14 @@ class RulesPage:
         busy = self.app.busy
         self.refresh_button.configure(state="normal" if self.ready() and not busy else "disabled")
         self.export_button.configure(state="normal" if self.current_collection() and self.rows and not busy else "disabled")
+
+    def copy(self, widget, what):
+        """Put a text area's contents on the clipboard and confirm in the status bar."""
+        text = widget.get("1.0", "end-1c")
+        if not text.strip():
+            self.app.flash("Select a rule first.", "info", 3); return
+        self.app.root.clipboard_clear(); self.app.root.clipboard_append(text)
+        self.app.flash(what + " copied.")
 
     def open_row(self, event=None):
         """Double-click or Enter brings the details card into view."""
@@ -210,7 +220,7 @@ class RulesPage:
         if app.busy or not self.ready(): return
         session, workspace = app.session, dict(app.workspace)
         self.reset(); self.summary.set("Loading rules from " + workspace["workspace_name"] + "…")
-        self.empty.show("Loading rules from " + workspace["workspace_name"] + "…")
+        self.empty.show("Loading rules from " + workspace["workspace_name"] + "…", busy=True)
         def task():
             try: return list_rules(session, workspace)
             except Exception as error: return dict(records=[], status="error", error=str(error))

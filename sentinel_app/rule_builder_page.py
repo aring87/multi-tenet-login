@@ -163,7 +163,8 @@ class RuleBuilderPage:
         self.field(basics, "Rule ID", "id", readonly=True, hint="Kept when you edit a rule; New rule creates a new one")
 
         self.textbox(query, "Query (KQL)", "query", 12,
-                     "Write the query in KQL. It runs against the client's workspace after approval.", font="mono")
+                     "Write the query in KQL. It runs against the client's workspace after approval.", font="mono",
+                     placeholder="SigninLogs\n| where ResultType != 0\n| summarize Attempts = count() by UserPrincipalName")
         self.schedule = ttk.Frame(query, style="Card.TFrame"); self.schedule.pack(fill="x")
         row = ttk.Frame(self.schedule, style="Card.TFrame"); row.pack(fill="x")
         row.columnconfigure((0, 1), weight=1, uniform="fields")
@@ -195,7 +196,8 @@ class RuleBuilderPage:
 
         self.hint(review, "Select Check rule to build the file that will be submitted. The check covers the rule's "
                           "format, not the query results or deployment permissions.")
-        self.preview = self.make_text(review, 19, readonly=True)
+        self.preview = self.make_text(review, 19, readonly=True,
+                                      placeholder="The rule file appears here once the check passes.")
 
         self.footer = kit.Card(app.footer_slot, padding=12)
         actions = self.footer.body
@@ -305,18 +307,18 @@ class RuleBuilderPage:
         self.widgets[key], self.labels[key] = control, label
         var.trace_add("write", self.changed)
 
-    def make_text(self, parent, height, readonly=False, font="mono"):
-        frame, text = kit.text_area(parent, height, readonly=readonly, undo=not readonly, font=font)
+    def make_text(self, parent, height, readonly=False, font="mono", placeholder=None):
+        frame, text = kit.text_area(parent, height, readonly=readonly, undo=not readonly, font=font, placeholder=placeholder)
         frame.pack(fill="both", expand=True, pady=(0, px(14)))
         if not readonly: self.app.controls.append((text, "normal"))
         return text
 
-    def textbox(self, parent, label, key, height, hint=None, font="body"):
+    def textbox(self, parent, label, key, height, hint=None, font="body", placeholder=None):
         kit.field_label(parent, label)
         if hint: self.hint(parent, hint)
-        text = self.make_text(parent, height, font=font); self.texts[key] = text
+        text = self.make_text(parent, height, font=font, placeholder=placeholder); self.texts[key] = text
         self.widgets[key], self.labels[key] = text, label
-        text.bind("<<Modified>>", lambda event: self.text_changed(text))
+        text.bind("<<Modified>>", lambda event: self.text_changed(text), add="+")  # The kit's placeholder listens too.
 
     def text_changed(self, text):
         if text.edit_modified():
@@ -518,7 +520,7 @@ class RuleBuilderPage:
         elif isinstance(widget, kit.Segmented):
             widget.configure(highlightbackground=COLORS["danger"], highlightthickness=2)
         self.flagged = key
-        self.app.scroll_into_view(widget)
+        self.app.scroll_into_view(widget, only_if_hidden=True)
         try: widget.focus_set()
         except tk.TclError: pass
 

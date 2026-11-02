@@ -6,13 +6,15 @@ No credentials, page contents or tokens are inspected or retained.
 import os
 
 BROWSERS = {"msedge.exe", "chrome.exe", "firefox.exe", "brave.exe"}
-BROKERS = {"microsoft.aad.brokerplugin.exe", "accountscontrolhost.exe"}
+# Windows-owned sign-in and credential prompts (account window, Windows Security, passkeys).
+BROKERS = {"microsoft.aad.brokerplugin.exe", "accountscontrolhost.exe", "credentialuibroker.exe"}
 # Hosts that show the Windows account picker; they qualify only with a sign-in title.
-ACCOUNT_HOSTS = {"applicationframehost.exe", "credentialuibroker.exe"}
+ACCOUNT_HOSTS = {"applicationframehost.exe"}
 SIGNIN_TITLES = ("sign in to your account", "sign in - microsoft", "microsoft sign in",
                  "pick an account", "work or school account", "sign in to microsoft azure",
                  "microsoft account", "verify your identity", "approve sign in request",
-                 "stay signed in", "enter password", "login.microsoftonline.com")
+                 "stay signed in", "enter password", "login.microsoftonline.com", "windows security",
+                 "making sure it's you", "passkey", "enter code", "authenticator")
 ASFW_ANY = 0xFFFFFFFF
 VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
 SW_RESTORE, SW_SHOW = 9, 5
@@ -63,24 +65,40 @@ class WindowsSignIn:
         self.user.AllowSetForegroundWindow(ASFW_ANY)
         self.before=self.snapshot()
         self.raised=set()
+        self.seen=set(self.before)
+
+    def new_windows(self):
+        """Windows that appeared since the last call, for the sign-in diagnostic log:
+        the program name always, the title only for sign-in hosts (other titles can
+        contain unrelated private text)."""
+        found=[]
+        for hwnd,(pid,process,title) in self.snapshot().items():
+            if hwnd in self.seen:continue
+            self.seen.add(hwnd)
+            known=process in BROWSERS or process in BROKERS or process in ACCOUNT_HOSTS
+            found.append((process,title if known else None,is_signin(process,title)))
+        return found
 
     def snapshot(self):
         result={}
         def visit(hwnd,_):
             if not self.user.IsWindowVisible(hwnd):return True
-            size=self.user.GetWindowTextLengthW(hwnd)
-            if not size:return True
-            title=self.ctypes.create_unicode_buffer(size+1)
-            self.user.GetWindowTextW(hwnd,title,size+1)
             pid=self.w.DWORD()
             self.user.GetWindowThreadProcessId(hwnd,self.ctypes.byref(pid))
             handle=self.kernel.OpenProcess(0x1000,False,pid.value)
             if not handle:return True
             try:
                 path=self.ctypes.create_unicode_buffer(32768);length=self.w.DWORD(len(path))
-                if self.kernel.QueryFullProcessImageNameW(handle,0,path,self.ctypes.byref(length)):
-                    result[hwnd]=(pid.value,os.path.basename(path.value).casefold(),title.value)
+                if not self.kernel.QueryFullProcessImageNameW(handle,0,path,self.ctypes.byref(length)):return True
+                process=os.path.basename(path.value).casefold()
             finally:self.kernel.CloseHandle(handle)
+            size=self.user.GetWindowTextLengthW(hwnd)
+            title=self.ctypes.create_unicode_buffer(size+1)
+            if size:self.user.GetWindowTextW(hwnd,title,size+1)
+            # The Windows account window Azure CLI opens is owned by a hidden window: it has
+            # no taskbar button and may have no title, so keep untitled Microsoft sign-in windows.
+            if size or process in BROKERS:
+                result[hwnd]=(pid.value,process,title.value)
             return True
         self.user.EnumWindows(self.callback(visit),0)
         return result

@@ -275,7 +275,7 @@ def main():
     for _ in range(50):
         settle(root, 100)
         if not app.busy: break
-    cat.mode.set("GitHub repository"); cat.invalidate()
+    cat.mode.set("GitHub repository"); cat.invalidate(); cat.show_source(False)  # Saved, not read yet: folded.
     app.status.set("Ready."); app.activity_badge.set("Ready", "success"); shot(root, "17-library-empty")
     snapshot = library(); cat.snapshot = snapshot; cat.view.set("Clients"); cat.render()
     cat.loaded(snapshot, "isi-security/detection-as-code")

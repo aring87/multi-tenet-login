@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from sentinel_app import desktop_app as ui
+from sentinel_app import ui_kit as kit
 from sentinel_app.repository_catalog import catalog
 from test_repository_catalog import fixtures
 
@@ -34,6 +35,13 @@ class CatalogPageTests(unittest.TestCase):
     def cleanup(self):
         for timer in self.root.tk.call("after", "info"): self.root.after_cancel(timer)
         self.root.destroy()
+
+    def restart(self, **settings):
+        """Start the app again over the same data folder, with these saved settings."""
+        self.cleanup()
+        (Path(self.temp.name) / "settings.json").write_text(json.dumps(settings))
+        self.root = tk.Tk(); self.root.withdraw(); self.app = ui.App(self.root); self.root.update()
+        self.page = self.app.catalog_page
 
     def assigned(self):
         return [self.page.assigned.item(item, "values") for item in self.page.assigned.get_children()]
@@ -97,12 +105,70 @@ class CatalogPageTests(unittest.TestCase):
         self.assertTrue(self.page.compact.winfo_manager())
 
     def test_saved_github_library_stays_folded_until_it_fails(self):
-        self.page.mode.set("GitHub repository"); self.page.source.set("example/detections")
+        self.restart(github_owner="example", github_repo="detections")
+        self.assertEqual(self.page.mode.get(), "GitHub repository")
         self.assertTrue(self.page.compact.winfo_manager())
         self.assertIn("example/detections", self.page.status.get())
         self.page.failed("GitHub read failed (HTTP 404)")
         self.assertTrue(self.page.form.winfo_manager())
         self.assertEqual(self.page.error_banner.action_button.cget("text"), "Go to Connect")
+        self.page.source.set("example/detection")  # Fixing the name: the form stays open under the typing.
+        self.assertTrue(self.page.form.winfo_manager()); self.assertFalse(self.page.error_banner.winfo_manager())
+        self.assertFalse(self.page.compact.winfo_manager())
+
+    def test_source_form_stays_open_while_a_repository_is_typed(self):
+        self.page.mode.set("GitHub repository")  # Nothing saved on Connect: the form asks for a repository.
+        self.assertTrue(self.page.form.winfo_manager())
+        self.page.source.set("e")
+        self.assertTrue(self.page.form.winfo_manager()); self.assertFalse(self.page.compact.winfo_manager())
+        callbacks = []
+        with patch.object(self.app, "work", side_effect=lambda title, task, done, **kw: callbacks.append(done)):
+            self.page.load()
+        callbacks[0]((library(), None))  # A successful read folds it away.
+        self.assertTrue(self.page.compact.winfo_manager()); self.assertFalse(self.page.form.winfo_manager())
+
+    def test_enter_in_the_search_runs_the_pending_filter_first(self):
+        page = self.page; page.snapshot = library(); page.render()
+        self.root.deiconify(); self.app.show_page("rules"); self.app.rule_view.set("repository"); self.root.update()
+        page.search_entry.focus_force(); self.root.update()
+        page.search.set("zeta")  # Enter at once, before the debounced filter has run.
+        page.search_entry.event_generate("<Return>"); self.root.update()
+        self.assertEqual([row["name"] for row in page.visible], ["Zeta rule"])
+        self.assertEqual(page.tree.selection(), ("0",)); self.assertEqual(page.detail_card.title_var.get(), "Zeta rule")
+
+    def test_list_takes_the_room_of_the_commands_until_a_library_loads(self):
+        page = self.page
+        self.root.deiconify(); self.app.show_page("rules"); self.app.rule_view.set("repository"); self.root.update()
+        self.assertFalse(page.commands.winfo_manager()); self.assertFalse(page.filter_bar.winfo_manager())
+        page.say("Set the rule library once on Connect, then come back here.")
+        self.assertTrue(page.message.winfo_manager())  # Guidance still shows, right above the list.
+        page.snapshot = library(); page.render(); self.root.update()
+        self.assertTrue(page.commands.winfo_ismapped()); self.assertTrue(page.filter_bar.winfo_ismapped())
+        order = page.commands.master.pack_slaves()
+        self.assertLess(order.index(page.message), order.index(page.commands))
+        self.assertLess(order.index(page.commands), order.index(page.table_frame))
+        page.snapshot = None; page.render(); self.root.update()
+        self.assertFalse(page.commands.winfo_manager()); self.assertFalse(page.filter_bar.winfo_manager())
+
+    def test_opening_a_dialog_clears_old_guidance(self):
+        page = self.page
+        snapshot = dict(library(), repository="example/detections", revision="one", private=True, can_push=True)
+        page.snapshot = snapshot; page.render()
+        with patch("sentinel_app.catalog_page.filedialog.askopenfilename", return_value="missing.assignment.json"):
+            page.open_assignment_review()
+        self.assertIn("couldn't be opened", page.note.get())
+        self.assertEqual(page.message.cget("bg"), kit.TONES["danger"][1])
+        with patch("sentinel_app.catalog_page.filedialog.askopenfilename", return_value="saved.assignment.json"),                 patch("sentinel_app.catalog_page.load_assignment_request", return_value={}),                 patch("sentinel_app.catalog_page.AssignmentDialog") as dialog:
+            page.open_assignment_review()
+        dialog.assert_called_once()
+        self.assertEqual(page.note.get(), ""); self.assertFalse(page.message.winfo_manager())
+        page.note.set("Assignment submitted.")  # As AssignmentDialog reports a submission.
+        self.assertEqual(page.message.cget("bg"), kit.TONES["info"][1])
+        page.tree.selection_set("0"); page.selected()
+        for name, button in (("AssignmentDialog", page.assign_button), ("PreviewDialog", page.preview_button)):
+            page.say("Old guidance", tone="warning")
+            with patch("sentinel_app.catalog_page." + name) as dialog: button.invoke()
+            dialog.assert_called_once(); self.assertEqual(page.note.get(), "")
 
     def test_rule_can_be_opened_for_editing_from_the_list(self):
         self.page.view.set("Clients")
@@ -134,7 +200,9 @@ class CatalogPageTests(unittest.TestCase):
         self.assertFalse(self.page.message.winfo_manager())
 
     def test_sorting_and_selection_survive_a_search(self):
-        page = self.page; page.snapshot = library(); page.render()
+        page = self.page
+        self.assertEqual(page.tree.heading("name", "text"), "Rule ▲")  # Sorted by name from the start.
+        page.snapshot = library(); page.render()
         names = lambda: [page.tree.set(item, "name") for item in page.tree.get_children()]
         self.assertEqual(names(), ["Alpha rule", "Example sign in", "Zeta rule"])
         page.tree.toggle_sort("info")  # Severity, most severe first.

@@ -77,11 +77,12 @@ def saved_sort(value, keys, default=("name", False)):
 def flow(bar, item, column, room=220):
     """Keep ``item`` (a filter) at the end of a gridded toolbar row while the row leaves ``room``
     (96-DPI px) for the search box, and move it onto a second row in a narrow pane. Returns the
-    placing function, to call again when ``item`` changes width."""
-    state = {"wide": None}
+    placing function, to call again when ``item`` changes width; ``place.hide(True)`` takes
+    ``item`` off the bar until ``place.hide(False)`` puts it back."""
+    state = {"wide": None, "hidden": False}
     def place(event=None):
         width = bar.winfo_width()
-        if width <= 1: return
+        if width <= 1 or state["hidden"]: return
         taken = sum(widget.winfo_reqwidth() + px(12) for widget in bar.grid_slaves(row=0)
                     if widget is not item and not isinstance(widget, ttk.Entry))
         wide = width >= taken + item.winfo_reqwidth() + px(room)
@@ -89,7 +90,13 @@ def flow(bar, item, column, room=220):
         state["wide"] = wide
         if wide: item.grid(row=0, column=column, columnspan=1, sticky="e", padx=(px(12), 0), pady=0)
         else: item.grid(row=1, column=0, columnspan=column + 1, sticky="w", padx=0, pady=(px(8), 0))
+    def hide(hidden=True):
+        if hidden == state["hidden"]: return
+        state["hidden"], state["wide"] = hidden, None
+        if hidden: item.grid_remove()
+        else: place()
     bar.bind("<Configure>", place, add="+")
+    place.hide = hide
     return place
 
 
@@ -118,9 +125,30 @@ def fit_columns(tree, needs):
     tree.bind("<Configure>", update, add="+")
 
 
+def link_search(entry, tree, render_soon):
+    """kit.link_search for a debounced search: Down or Enter first runs a filter still waiting
+    for its pause, so the row they move to is the first row of the filtered list."""
+    for key in ("<Down>", "<Return>"):
+        entry.bind(key, lambda event: render_soon.flush(), add="+")  # Bound first, so it runs first.
+    kit.link_search(entry, tree)
+
+
+def keep_in_view(area, widget, margin=40):
+    """Scroll a kit.ScrollArea so ``widget`` (inside it) shows, ``margin`` (96-DPI px) below the
+    top of the view when it has to move; a widget already wholly in view stays put."""
+    canvas, inner = area.canvas, area.inner
+    canvas.update_idletasks()
+    height, view = inner.winfo_height(), canvas.winfo_height()
+    if height <= view: return
+    top, first = widget.winfo_rooty() - inner.winfo_rooty(), canvas.canvasy(0)
+    if first <= top and top + widget.winfo_height() <= first + view: return
+    canvas.yview_moveto(max(0, (top - px(margin)) / height))
+
+
 def detail_pane(card):
     """A details card body that scrolls by itself, with the scrollbar near the card's edge and
-    the empty-state message wrapped to the pane. Returns (scroll area, empty overlay)."""
+    the empty-state message wrapped to the pane. Keyboard focus moving onto a part scrolled out
+    of view brings it into view. Returns (scroll area, empty overlay)."""
     card.body.configure(padding=(px(20), px(16), px(8), px(20)))
     area = kit.ScrollArea(card.body)
     area.canvas.configure(width=px(200), height=px(120))  # The pane, not the content, sets the size.
@@ -128,6 +156,14 @@ def detail_pane(card):
     # Never empty: Tk keeps an emptied frame's last height, which would leave a scroll range behind.
     tk.Frame(area.inner, height=1, bg=COLORS["card"], bd=0, highlightthickness=0).pack(fill="x")
     area.frame.pack(fill="both", expand=True)
+    def follow(event):
+        widget = event.widget
+        if isinstance(widget, str) or str(widget.tk.call("focus")) != str(widget): return  # Not the focus itself.
+        try: under = str(widget.winfo_containing(*widget.winfo_pointerxy()))
+        except (KeyError, tk.TclError): under = ""
+        if under == str(widget) or under.startswith(str(widget) + "."): return  # Clicked, so already in view.
+        keep_in_view(area, widget)
+    area.frame.bind_class(area.tag, "<FocusIn>", follow, add="+")  # Every widget in the area carries the tag.
     empty = kit.EmptyOverlay(card.body, icon="document")
     card.body.bind("<Configure>", lambda event: empty.label.configure(wraplength=max(px(160), event.width - px(48))),
                    add="+")
@@ -243,9 +279,9 @@ class RulesPage:
         self.empty.line.configure(width=px(160))  # The loading line's own width stays inside a narrow pane.
         fit_columns(self.tree, OPTIONAL)
         self.tree.sort_state = self.sort; kit.set_headings(self.tree)
-        kit.link_search(self.search_entry, self.tree)
         self.build_detail()
         self.render_soon = kit.debounce(self.tree, 150, self.render)
+        link_search(self.search_entry, self.tree, self.render_soon)
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.tree.bind("<Return>", self.open_row)
         self.search.trace_add("write", self.render_soon)
@@ -306,7 +342,7 @@ class RulesPage:
         """Enter on a rule moves into its details: to Copy query, or to the configuration toggle."""
         if not self.tree.selection(): return None
         target = self.query_label.button if self.query_frame.winfo_manager() else self.raw.button
-        target.focus_set()
+        target.focus_set(); keep_in_view(self.detail_area, target)
         return "break"
 
     def show_notice(self, text):

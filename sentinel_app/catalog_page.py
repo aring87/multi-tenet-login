@@ -10,7 +10,7 @@ from .preview_dialog import PreviewDialog
 from .assignment_dialog import AssignmentDialog
 from .workflow_history_dialog import WorkflowHistoryDialog
 from .rule_assignments import load_request as load_assignment_request
-from .rules_page import STATES, STATE_ORDER, Split, RawConfig, detail_pane, flow, fit_columns
+from .rules_page import STATES, STATE_ORDER, Split, RawConfig, detail_pane, flow, fit_columns, link_search
 
 HEADINGS = {"Clients": ("Client", "State", "Workspace", "Target"), "Rules": ("Rule", "State", "Severity", "File")}
 # Narrow starting widths that stretch, as in the workspace list (see rules_page.COLUMNS).
@@ -66,6 +66,7 @@ class CatalogPage:
         self.build_library()
         self.build_detail()
         self.render_soon = kit.debounce(self.tree, 150, self.render)
+        link_search(self.search_entry, self.tree, self.render_soon)
         self.tree.bind("<<TreeviewSelect>>", self.selected)
         self.tree.bind("<Double-1>", self.open_row)
         self.tree.bind("<Return>", self.open_row)
@@ -133,7 +134,8 @@ class CatalogPage:
         self.search_entry.grid(row=0, column=1, sticky="ew", padx=(px(12), 0))
         app.controls.append((self.search_entry, "normal"))
         kit.placeholder(self.search_entry, self.search, "Search the library  (Ctrl+F)", search=True)
-        self.place_filters = flow(bar, kit.Segmented(bar, self.filter, STATES, compact=True), 2)
+        self.filter_bar = kit.Segmented(bar, self.filter, STATES, compact=True)
+        self.place_filters = flow(bar, self.filter_bar, 2)
         self.message = kit.Banner(body, self.note, "info")
         # The commands for the selected rule sit right above the list.
         self.commands = ttk.Frame(body, style="Card.TFrame"); self.commands.pack(fill="x", pady=(0, px(10)))
@@ -149,11 +151,11 @@ class CatalogPage:
         for button in (self.edit_button, self.assign_button, self.preview_button):
             button.pack(side="left", padx=(0, px(6)))
         self.rule_actions = [self.assign_button, self.preview_button]
-        frame, self.tree, self.empty = kit.table(body, COLUMNS, height=6, sort=self.sort_by, menu=self.row_menu)
-        frame.pack(fill="both", expand=True)
+        self.table_frame, self.tree, self.empty = kit.table(body, COLUMNS, height=6, sort=self.sort_by, menu=self.row_menu)
+        self.table_frame.pack(fill="both", expand=True)
+        self.tree.sort_state = self.sort  # The library lists rules by name; the heading says so.
         self.empty.line.configure(width=px(160))  # The loading line's own width stays inside a narrow pane.
         fit_columns(self.tree, OPTIONAL)
-        kit.link_search(self.search_entry, self.tree)
 
     def build_detail(self):
         detail = self.detail_card = kit.Card(self.split, "Details", DETAIL_SUBTITLE, icon="document", tone="neutral")
@@ -240,6 +242,7 @@ class CatalogPage:
 
     def invalidate(self, *args):
         self.snapshot = None; self.hide_error(); self.note.set("")
+        if self.form.winfo_manager(): self.source_open = True  # Keep the form open while the analyst edits it.
         source = self.source.get().strip()
         local = self.mode.get() == "Local folder"
         self.source_hint.set("Select Refresh library to load this source." if source and local else "")
@@ -260,7 +263,9 @@ class CatalogPage:
 
     def show_note(self):
         if self.note.get():
-            if not self.message.winfo_manager(): self.message.pack(fill="x", pady=(0, px(10)), before=self.commands)
+            if not self.message.winfo_manager():
+                self.message.pack(fill="x", pady=(0, px(10)),
+                                  before=self.commands if self.commands.winfo_manager() else self.table_frame)
         elif self.message.winfo_manager():
             self.message.pack_forget(); self.message.set_action(); self.message.tone("info")
 
@@ -319,7 +324,7 @@ class CatalogPage:
             return
         if self.snapshot["issues"]:
             self.say("Fix the library issues before starting a preview.", ("Library issues", self.issues), "warning"); return
-        PreviewDialog(self.app, self.snapshot, row)
+        self.note.set(""); PreviewDialog(self.app, self.snapshot, row)
 
     def open_workflow_history(self):
         if not self.app.busy: WorkflowHistoryDialog(self.app)
@@ -335,7 +340,7 @@ class CatalogPage:
             return
         if self.snapshot["issues"]:
             self.say("Fix the library issues before assigning rules.", ("Library issues", self.issues), "warning"); return
-        AssignmentDialog(self.app, self.snapshot, row)
+        self.note.set(""); AssignmentDialog(self.app, self.snapshot, row)
 
     def open_assignment_review(self):
         if self.app.busy: return
@@ -344,7 +349,8 @@ class CatalogPage:
             filetypes=[("Assignment review", "*.assignment.json")])
         if not path: return
         try:
-            AssignmentDialog(self.app, record=load_assignment_request(path))
+            record = load_assignment_request(path)
+            self.note.set(""); AssignmentDialog(self.app, record=record)
         except Exception as error:
             self.say("That saved assignment couldn't be opened: " + str(error), tone="danger")
 
@@ -447,7 +453,10 @@ class CatalogPage:
         for value in HEADINGS:
             count = len(self.snapshot[value.lower()]) if self.snapshot else None
             self.view_bar.set_label(value, value if count is None else f"{value} {count}")
-        self.place_filters()
+        # The state filter and the rule commands do nothing without a library: their room goes to the list.
+        self.place_filters.hide(self.snapshot is None); self.place_filters()
+        if self.snapshot is None: self.commands.pack_forget()
+        elif not self.commands.winfo_manager(): self.commands.pack(fill="x", pady=(0, px(10)), before=self.table_frame)
         if self.snapshot is None:
             self.summary_pill.set("Not loaded")
             self.summary_pill.configure(cursor=""); self.summary_pill.tooltip_text = ""

@@ -243,6 +243,29 @@ class DesignTests(unittest.TestCase):
         self.assertEqual(page.tree.selection(),("5",));self.assertEqual(page.detail_card.title_var.get(),"Rule 05")
         self.assertTrue(page.search_entry.bind("<Down>"))  # Joined to the list (kit.link_search).
 
+    def test_enter_in_rules_search_runs_the_pending_filter_first(self):
+        page=self.show_rules(self.sample_rules(12))
+        page.search_entry.focus_force();self.root.update()
+        page.search.set("rule 07")  # Enter at once, before the debounced filter has run.
+        page.search_entry.event_generate("<Return>");self.root.update()
+        self.assertEqual(page.tree.get_children(),("7",));self.assertEqual(page.tree.selection(),("7",))
+        self.assertEqual(page.detail_card.title_var.get(),"Rule 07");self.assertIs(self.root.focus_get(),page.tree)
+
+    def test_rule_details_scroll_to_the_keyboard_focus(self):
+        rows=self.sample_rules(2);rows[1]["properties"]["description"]=" ".join(["A long rule description."]*80)
+        self.root.geometry(f"{ui.px(1120)}x{ui.px(740)}");page=self.show_rules(rows)
+        page.tree.focus_force();page.tree.selection_set("1");page.selected();self.root.update()
+        canvas=page.detail_area.canvas
+        def in_view(widget):
+            top=widget.winfo_rooty()
+            return canvas.winfo_rooty()<=top and top+widget.winfo_height()<=canvas.winfo_rooty()+canvas.winfo_height()
+        self.assertFalse(in_view(page.query_label.button))
+        page.open_row();self.root.update()  # Enter on the rule.
+        self.assertGreater(canvas.yview()[0],0);self.assertTrue(in_view(page.query_label.button))
+        canvas.yview_moveto(0);self.root.update();self.assertFalse(in_view(page.raw.button))
+        page.raw.button.focus_force();self.root.update()  # Tab onwards: the focus comes into view too.
+        self.assertTrue(in_view(page.raw.button))
+
     def test_library_split_and_view_are_remembered(self):
         page=self.app.catalog_page
         self.assertEqual(page.view.get(),"Rules")  # Editing rules is the common task.

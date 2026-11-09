@@ -111,10 +111,29 @@ class ErrorLogTests(unittest.TestCase):
             self.assertTrue(text.splitlines()[0] in {"x" * 20} or text.splitlines()[0].startswith("error "))
 
 
+class CopyValuesTests(unittest.TestCase):
+    def test_resizing_keeps_working_and_copy_takes_the_whole_value(self):
+        # Side by side (Rules and Library details, About, dialogs): the kit measures its key labels on
+        # every resize, so the copy menu must not replace them with the key names.
+        from sentinel_app.desktop_theme import configure_theme
+        from sentinel_app.rules_page import CopyValues
+        root = tk.Tk(); configure_theme(root); self.addCleanup(root.destroy)
+        errors = []; root.report_callback_exception = lambda *exc: errors.append(exc[1])
+        facts = CopyValues(root, key_width=12); facts.pack(fill="x")
+        path = "rules/sentinel/" + "a-very-long-folder/" * 6 + "brute-force.yml"
+        facts.set([("File", path), ("Rule ID", "r8")])
+        root.geometry("300x200"); root.update(); facts.rewrap()
+        self.assertEqual(errors, [])
+        self.assertEqual(facts.names, ["File", "Rule ID"])
+        label = facts.values[0]; self.assertIn("…", label.cget("text"))
+        facts.copy("File", label); self.assertEqual(root.clipboard_get(), path)
+
+
 class ShellTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.data = Path(self.temp.name)
+        self.addCleanup(self.no_hidden_errors)
         for module in (backend, ui):
             p = patch.object(module, "DATA", self.data); p.start(); self.addCleanup(p.stop)
         p = patch.object(ui, "create_handoff", return_value=None); p.start(); self.addCleanup(p.stop)
@@ -140,13 +159,19 @@ class ShellTests(unittest.TestCase):
         except tk.TclError:
             pass
 
+    def no_hidden_errors(self):
+        """A failing Tk callback goes to the app's error log, not to the test runner: fail the test."""
+        log = self.data / "logs" / "errors.log"
+        if log.exists() and not getattr(self, "expect_errors", False):
+            self.fail("Unexpected Tk callback error:\n" + log.read_text(encoding="utf-8"))
+
     def activity(self, app=None):
         app = app or self.app; app.poll()
         return app.logbox.get("1.0", "end")
 
     # ------------------------------------------------------------ errors
     def test_unexpected_callback_errors_are_logged_to_a_file_and_the_status_bar(self):
-        app = self.app
+        app = self.app; self.expect_errors = True
         self.assertEqual(app.root.report_callback_exception, app.callback_failed)
         button = tk.Button(app.root, command=lambda: 1 / 0)
         with patch.object(sys, "stderr"): button.invoke()
@@ -324,11 +349,12 @@ class ShellTests(unittest.TestCase):
         self.assertTrue(app.details_panel.winfo_manager()); self.assertEqual(app.ids_button.cget("text"), "−  Hide workspace IDs")
         app.save_state()
         self.assertIs(json.loads((self.data / "ui-state.json").read_text())["show_ids"], True)
-        tenant = next(label for key, label in zip(app.details.keys, app.details.values) if key == "Tenant ID")
+        tenant = next(label for key, label in zip(app.details.names, app.details.values) if key == "Tenant ID")
         self.assertTrue(tenant.bind("<Button-3>"))  # Right-click copies one ID.
         app.details.copy("Tenant ID", tenant); self.assertEqual(app.root.clipboard_get(), TENANT)
         tenant.configure(text=TENANT[:8] + "…")  # Shown shortened in a narrow panel: Copy still takes the whole ID.
         app.details.copy("Tenant ID", tenant); self.assertEqual(app.root.clipboard_get(), TENANT)
+        app.details.rewrap()  # The kit's own .keys (the key labels) survive the copy menu's set().
         again = self.start(); self.connect(again)
         self.assertTrue(again.details_panel.winfo_manager())
 

@@ -177,13 +177,13 @@ class CopyValues(kit.KeyValues):
 
     def __init__(self, parent, copied=None, **options):
         super().__init__(parent, **options)
-        self.copied, self.keys, self.menu = copied, [], None
+        self.copied, self.names, self.menu = copied, [], None  # kit.KeyValues keeps its key labels in .keys.
 
     def set(self, rows, mono=None):
         rows = [tuple(row) for row in rows]
         super().set(rows, mono)
-        self.keys = [key for key, _ in rows]
-        for key, label in zip(self.keys, self.values):
+        self.names = [key for key, _ in rows]
+        for key, label in zip(self.names, self.values):
             label.bind("<Button-3>", lambda event, k=key, w=label: self.show_menu(event, k, w), add="+")
 
     def show_menu(self, event, key, label):

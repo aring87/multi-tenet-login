@@ -334,9 +334,15 @@ def main():
     for timer in root.tk.call("after", "info"):
         root.tk.call("after", "cancel", timer)
     root.destroy()
+    # A failing Tk callback only shows as 'Something went wrong' in a shot; print it here too.
+    log = data / "logs" / "errors.log"
+    errors = log.read_text(encoding="utf-8") if log.exists() else ""
     for p in patches: p.stop()
     temp.cleanup()
     print("Saved to", shots.folder.resolve())
+    if errors:
+        print("Unexpected errors during the capture:", errors, sep=chr(10), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

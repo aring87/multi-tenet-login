@@ -20,9 +20,15 @@ class DesignTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         p=patch.object(ui,"DATA",Path(self.temp.name));p.start();self.addCleanup(p.stop)
+        self.addCleanup(self.no_hidden_errors)
         self.root=tk.Tk();self.app=ui.App(self.root);self.root.geometry("1120x740")
         self.root.update()
         self.addCleanup(self.cleanup)
+
+    def no_hidden_errors(self):
+        # A failing Tk callback goes to the app's error log, not to the test runner.
+        log=Path(self.temp.name)/"logs"/"errors.log"
+        if log.exists():self.fail("Unexpected Tk callback error:\n"+log.read_text(encoding="utf-8"))
 
     def cleanup(self):
         for timer in self.root.tk.call("after","info"):

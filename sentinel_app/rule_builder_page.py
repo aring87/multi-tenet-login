@@ -21,6 +21,14 @@ LIFECYCLES = (("baseline", "Baseline"), ("production", "Production"), ("retired"
 OPERATORS = (("GreaterThan", "is more than"), ("LessThan", "is fewer than"), ("Equal", "equals"), ("NotEqual", "is not"))
 UNITS = (("minutes", 60), ("hours", 3600), ("days", 86400))
 RECENT_DRAFTS = 10
+TACTIC_COLUMNS = 3
+QUERY_LINES = 8
+MAX_SCHEDULE = 14 * 86400
+# The patterns rule_schema.validate checks inline. That module is a reviewed copy pinned by the hash in
+# docs/RULE-SCHEMA.md, so they are repeated here; test_quick_checks_agree_with_the_full_check catches drift.
+OWNER = re.compile(r"[a-z0-9][a-z0-9._@-]*")
+TECHNIQUE = re.compile(r"T\d{4}")
+SUB_TECHNIQUE = re.compile(r"T\d{4}\.\d{3}")
 
 
 def note_tone(text):
@@ -48,7 +56,8 @@ ISSUES = (
     ("Invalid triggerOperator", "triggerOperator", "Choose when an alert is raised."),
     ("NRT rules must omit", "advanced", "Remove schedule and threshold properties from Additional rule properties."),
     ("hreshold", "triggerThreshold", "Enter a whole number of 0 or more, such as 0."),
-    ("Unknown MITRE tactic", "tactics", "One of these isn't a MITRE tactic name. Clear the field and add tactics with Add tactic."),
+    ("Unknown MITRE tactic", "tactics", "Only MITRE tactic names can be used. Select Remove beside the values that "
+                                        "aren't, then tick the tactics that apply."),
     ("techniques accepts parent IDs", "techniques",
      "Parent techniques look like T1562. Put IDs with a dot, such as T1562.004, under Sub-techniques."),
     ("subTechniques requires IDs", "subTechniques", "Sub-techniques look like T1562.004."),
@@ -66,13 +75,58 @@ def locate(form, message):
             frequency = rule_schema.seconds(form["queryFrequency"])
         except ValueError:
             return "queryFrequency", SCHEDULE_ADVICE
-        if not 300 <= frequency <= 14 * 86400:
+        if not 300 <= frequency <= MAX_SCHEDULE:
             return "queryFrequency", SCHEDULE_ADVICE
         return "queryPeriod", SCHEDULE_ADVICE
     for words, key, advice in ISSUES:
         if words in message:
             return key, advice or message
     return None, message
+
+
+def entries(value):
+    """A comma- or line-separated list field, split the way drafts.to_rule reads it."""
+    return [x.strip() for x in str(value).replace("\n", ",").split(",") if x.strip()]
+
+
+def seconds_or_none(value):
+    try: return rule_schema.seconds(value)
+    except (ValueError, TypeError): return None
+
+
+def collect_issues(form):
+    """Every problem a quick look at the fields finds, as (key, advice) pairs in form order, so all of
+    them can be flagged at once. drafts.validated_yaml still runs afterwards and has the last word."""
+    found = {}
+    def add(words, key=None):
+        located, advice = locate(form, words)
+        found.setdefault(key or located, advice)
+    text = lambda key: str(form.get(key, "")).strip()
+    if not text("name"): add("name must be nonempty")
+    if not text("description"): add("description must be nonempty")
+    elif len(text("description")) < 20: add("description must be at least 20")
+    if not text("owner"): add("owner must be nonempty")
+    elif not OWNER.fullmatch(form["owner"]): add("owner must be a team")
+    if form.get("status") == "retired" and form.get("enabled"): add("Retired rules must be disabled")
+    if not text("query"): add("query must be nonempty")
+    elif text("query").endswith("|"): add("dangling pipe")
+    if form.get("kind") != "NRT":
+        frequency, period = seconds_or_none(form.get("queryFrequency")), seconds_or_none(form.get("queryPeriod"))
+        if frequency is None or not 300 <= frequency <= MAX_SCHEDULE:
+            found.setdefault("queryFrequency", SCHEDULE_ADVICE); frequency = None
+        if period is None or period > MAX_SCHEDULE or (frequency is not None and period < frequency):
+            found.setdefault("queryPeriod", SCHEDULE_ADVICE)
+        if not text("triggerThreshold").isdigit(): add("triggerThreshold must be")
+    tactics, techniques = entries(form.get("tactics", "")), entries(form.get("techniques", ""))
+    if any(x not in rule_schema.TACTICS for x in tactics): add("Unknown MITRE tactic")
+    if any(not TECHNIQUE.fullmatch(x) or x == "T0000" for x in techniques): add("techniques accepts parent IDs")
+    for tech in entries(form.get("subTechniques", "")):
+        if not SUB_TECHNIQUE.fullmatch(tech): add("subTechniques requires IDs")
+        elif tech.split(".")[0] not in techniques: add("Include the parent technique")
+    if not form.get("allow_missing_mitre"):
+        if not tactics: add("Missing MITRE metadata")
+        if not techniques: add("Missing MITRE metadata", "techniques")
+    return list(found.items())
 
 
 def split_duration(value):
@@ -94,6 +148,20 @@ def draft_name(name):
     return (re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:80] or "new-rule") + ".rule-draft.json"
 
 
+def tactic_label(name):
+    """'DefenseEvasion' -> 'Defense Evasion'."""
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", name)
+
+
+def short_label(label):
+    """'Owner (team identifier)' -> 'Owner', for lists of fields."""
+    return re.sub(r"\s*\(.*\)$", "", label)
+
+
+def plural(count, word):
+    return f"{count} {word}" + ("" if count == 1 else "s")
+
+
 class RuleBuilderPage:
     def __init__(self, app, parent, data_dir):
         self.app, self.data_dir = app, Path(data_dir)
@@ -103,33 +171,52 @@ class RuleBuilderPage:
         self.source_uploaded = False  # Source was matched from an uploaded rule file, not a library edit.
         self.submitted_url = None
         self.vars, self.texts = {}, {}
-        self.widgets, self.labels, self.flagged = {}, {}, None
+        self.widgets, self.labels = {}, {}
+        self.flagged, self.flag_labels = {}, {}  # Field key -> advice, and the advice label under the field.
+        self.quick_flags = set()  # Flagged by collect_issues, so any edit that resolves them clears them.
         self.github_user, self.github_checking = None, False
         self.saved = None
         enabled = lambda: not app.busy
+        # The toolbar sits on the page canvas, so its quiet buttons take the canvas colour, not the card's.
+        ground = COLORS["canvas"]
+        style = ttk.Style(app.root)
+        style.configure("Canvas.Small.Ghost.TButton", background=ground, bordercolor=ground, lightcolor=ground,
+                        darkcolor=ground, focuscolor=ground)
+        for option in ("background", "lightcolor", "darkcolor"):
+            style.map("Canvas.Small.Ghost.TButton", **{option: [("disabled", ground), ("pressed", COLORS["accent_line"]),
+                                                                ("active", COLORS["accent_soft"])]})
+        style.map("Canvas.Small.Ghost.TButton", bordercolor=[("disabled", ground), ("focus", COLORS["accent"])])
 
-        toolbar = ttk.Frame(parent); toolbar.pack(fill="x", pady=(0, px(14)))
+        toolbar = self.toolbar = ttk.Frame(parent); toolbar.pack(fill="x", pady=(0, px(12)))
+        toolbar.columnconfigure(1, weight=1)
+        self.toolbar_left, self.toolbar_right = ttk.Frame(toolbar), ttk.Frame(toolbar)
+        self.toolbar_left.grid(row=0, column=0, sticky="w")
         self.open_menu = tk.Menu(app.root, tearoff=0, font=FONTS["body"], bg=COLORS["card"], fg=COLORS["ink"], bd=0,
                                  activebackground=COLORS["accent_soft"], activeforeground=COLORS["ink"])
         for title, command, tip in (("New rule", self.new, "Start an empty rule (Ctrl+N)"),
                                     ("Edit existing rule…", self.app.open_rule_library, "Pick a rule from the library to change"),
                                     ("Open…", self.show_open_menu, "Recent drafts, or a rule file from disk"),
                                     ("Save draft", self.save, "Keep this draft on this PC (Ctrl+S)")):
-            button = app.button(toolbar, title, command)
-            button.pack(side="left", padx=(0, px(8))); kit.tooltip(button, tip)
+            button = app.button(self.toolbar_left, title, command, "Small.Secondary.TButton")
+            button.pack(side="left", padx=(0, px(6))); kit.tooltip(button, tip)
             if title == "Open…": self.open_button = button
+        for title, command, tip in (("Export rule file…", self.export, "Check the rule, then save its file on this PC"),
+                                    ("My submissions…", self.review_history, "Rules you submitted and their approval status")):
+            button = app.button(self.toolbar_right, title, command, "Canvas.Small.Ghost.TButton")
+            button.pack(side="left", padx=(0, px(2))); kit.tooltip(button, tip)
+        self.github_message = tk.StringVar()  # The GitHub check's full explanation, shown on the pill's tooltip.
+        self.github_pill = kit.Pill(self.toolbar_right, "GitHub: not checked")
+        self.github_pill.pack(side="left", padx=(px(8), 0)); kit.tooltip(self.github_pill, "")
+        self.github_message.trace_add("write", lambda *args: setattr(self.github_pill, "tooltip_text", self.github_message.get()))
+        self.github_action = ttk.Button(self.toolbar_right, style="Canvas.Small.Ghost.TButton")  # Packed when needed.
+        # Re-flow when the window resizes, and when the GitHub status changes the right-hand group's width.
+        toolbar.bind("<Configure>", self.flow_toolbar, add="+")
+        self.toolbar_right.bind("<Configure>", self.flow_toolbar, add="+")
+        self.flow_toolbar()
         self.note = tk.StringVar()
         self.banner = kit.Banner(parent, self.note)
         self.banner.pack(fill="x", pady=(0, kit.space("lg")))
         self.note.trace_add("write", lambda *args: self.banner.tone(note_tone(self.note.get())))
-        self.github_message = tk.StringVar()
-        self.github_bar = kit.Banner(parent, self.github_message, "warning")
-        self.github_action = ttk.Button(self.github_bar.actions, style="Small.Secondary.TButton")
-        self.github_action.pack(side="right")
-        self.github_retry = ttk.Button(self.github_bar.actions, text="Check again", style="Small.Ghost.TButton",
-                                       command=lambda: self.check_github(force=True))
-        self.github_retry.pack(side="right", padx=(0, px(6)))
-        self.github_bar.action_button = self.github_action  # So the banner's wrap leaves room for the buttons.
 
         layout = self.layout = ttk.Frame(parent); layout.pack(fill="both", expand=True)
         layout.columnconfigure(1, weight=1); layout.rowconfigure(0, weight=1)
@@ -145,8 +232,8 @@ class RuleBuilderPage:
         for name, _ in STEPS:
             page = ttk.Frame(self.steps, style="Card.TFrame")
             self.steps.add(page, text=name); pages.append(page)
-        kit.Stepper(steps_card.body, self.steps, STEPS, enabled).pack(fill="x")
-        self.steps.bind("<<NotebookTabChanged>>", self.step_changed, add="+")
+        self.stepper = kit.Stepper(steps_card.body, self.steps, STEPS, enabled)
+        self.stepper.pack(fill="x")
         basics, query, mitre, advanced, review = self.pages = pages
 
         self.field(basics, "Rule name", "name")
@@ -162,8 +249,9 @@ class RuleBuilderPage:
         self.check(flags, "Create incidents from alerts", "createIncident")
         self.field(basics, "Rule ID", "id", readonly=True, hint="Kept when you edit a rule; New rule creates a new one")
 
-        self.textbox(query, "Query (KQL)", "query", 12,
-                     "Write the query in KQL. It runs against the client's workspace after approval.", font="mono",
+        # The query keeps its natural height, so the schedule below it stays in view at the smallest window size.
+        self.textbox(query, "Query (KQL)", "query", QUERY_LINES, label_hint="Runs against the client's workspace after approval",
+                     font="mono", expand=False,
                      placeholder="SigninLogs\n| where ResultType != 0\n| summarize Attempts = count() by UserPrincipalName")
         self.schedule = ttk.Frame(query, style="Card.TFrame"); self.schedule.pack(fill="x")
         row = ttk.Frame(self.schedule, style="Card.TFrame"); row.pack(fill="x")
@@ -177,14 +265,7 @@ class RuleBuilderPage:
         self.hint(query, "Scheduled rules run every 5 minutes to 14 days. Near real-time rules have no schedule or "
                          "threshold. The query is tested against the workspace after approval.")
 
-        self.field(mitre, "Tactics", "tactics", hint="Comma-separated; add them with the picker below")
-        picker = ttk.Frame(mitre, style="Card.TFrame"); picker.pack(fill="x", pady=(0, kit.space("lg")))
-        self.tactic_choice = tk.StringVar(value="DefenseEvasion")
-        choices = ttk.Combobox(picker, textvariable=self.tactic_choice,
-                               values=sorted(rule_schema.TACTICS), state="readonly")
-        choices.pack(side="left", fill="x", expand=True, padx=(0, px(8)))
-        app.controls.append((choices, "readonly"))
-        app.button(picker, "Add tactic", self.add_tactic).pack(side="left")
+        self.tactics(mitre)
         self.field(mitre, "Parent techniques", "techniques", hint="For example T1562, T1003")
         self.field(mitre, "Sub-techniques", "subTechniques", hint="For example T1562.004 — include its parent above")
         self.check(mitre, "Allow missing MITRE details for a migrated rule", "allow_missing_mitre")
@@ -200,33 +281,162 @@ class RuleBuilderPage:
                                       placeholder="The rule file appears here once the check passes.")
 
         self.footer = kit.Card(app.footer_slot, padding=12)
+        self.footer_pad = (kit.space("page"), kit.space("page"))
         actions = self.footer.body
-        app.button(actions, "My submissions…", self.review_history, "Ghost.TButton").pack(side="left")
-        self.github_label = ttk.Label(actions, style="Hint.TLabel")
-        self.github_label.pack(side="left", padx=(px(8), 0))
+        self.back_button = app.button(actions, "←  Back", lambda: self.step_by(-1))
+        self.next_button = app.button(actions, "Next  →", lambda: self.step_by(1))
+        kit.tooltip(self.back_button, "Previous step (Ctrl+Page Up)"); kit.tooltip(self.next_button, "Next step (Ctrl+Page Down)")
         app.button(actions, "Submit for approval", self.review, "Primary.TButton").pack(side="right")
         app.button(actions, "Check rule", self.validate).pack(side="right", padx=(0, px(8)))
-        app.button(actions, "Export rule file…", self.export).pack(side="right", padx=(0, px(8)))
+        # The footer lines up with the content column above it, whatever the window width.
+        self.canvas = next(canvas for canvas, content in zip(app.page_canvases, app.page_contents) if content is parent)
+        app.footer_slot.bind("<Configure>", self.align_footer, add="+")
+        self.canvas.bind("<Configure>", self.align_footer, add="+")
+        for sequence, step in (("<Control-Next>", 1), ("<Control-Prior>", -1)):
+            app.root.bind(sequence, lambda event, s=step: self.step_key(s) if app.current_page() == "builder" else None, add="+")
+        self.steps.bind("<<NotebookTabChanged>>", self.step_changed, add="+")
         self.vars["kind"].trace_add("write", self.kind_changed)
         self.load_form(drafts.new_form())
+        self.step_changed()
 
     # ------------------------------------------------------------ widgets
     def set_footer_visible(self, visible):
-        if visible and not self.footer.frame.winfo_manager():
-            self.footer.frame.pack(fill="x", padx=kit.space("page"), pady=(0, kit.space("md")))
-        elif not visible and self.footer.frame.winfo_manager():
-            self.footer.frame.pack_forget()
+        """Pin the footer under the builder only. The slot itself is hidden elsewhere: Tk keeps an
+        emptied pack master at its last size, which would leave a blank band above the status bar."""
+        slot, frame = self.app.footer_slot, self.footer.frame
+        if visible:
+            if not slot.winfo_manager(): slot.pack(side="bottom", fill="x", before=self.app.tabs)
+            if not frame.winfo_manager(): frame.pack(fill="x", padx=self.footer_pad, pady=(0, kit.space("md")))
+            self.app.root.after_idle(self.align_footer)
+        else:
+            frame.pack_forget(); slot.pack_forget()
+
+    def align_footer(self, event=None):
+        """Give the footer the same left and right edges as the content column (fit_page centres a capped
+        column on wide windows, and the page scrollbar narrows the canvas)."""
+        canvas, slot = self.canvas, self.app.footer_slot
+        items = canvas.find_all()
+        if not items or not self.footer.frame.winfo_manager(): return
+        x = canvas.winfo_rootx() - slot.winfo_rootx() + int(canvas.coords(items[0])[0])
+        column = int(float(canvas.itemcget(items[0], "width")))
+        pad = (max(0, x + kit.space("page")), max(0, slot.winfo_width() - x - column + kit.space("page")))
+        if slot.winfo_width() > 1 and pad != self.footer_pad:
+            self.footer_pad = pad
+            self.footer.frame.pack_configure(padx=pad)
+
+    def flow_toolbar(self, event=None):
+        """Keep the toolbar on one row while it fits, and move its right-hand group under it when it doesn't.
+        The query box then gives up that row's height, so the schedule stays in view at the smallest size."""
+        left, right = self.toolbar_left, self.toolbar_right
+        width = self.toolbar.winfo_width()
+        wraps = width > 1 and left.winfo_reqwidth() + right.winfo_reqwidth() + px(16) > width
+        place = dict(row=1, column=0, columnspan=2, sticky="w", pady=(px(8), 0)) if wraps else \
+            dict(row=0, column=1, columnspan=1, sticky="e", pady=0)
+        info = right.grid_info()
+        if not info or int(info["row"]) != place["row"]: right.grid(**place)
+        query = self.texts.get("query")
+        if query is None: return
+        lines = QUERY_LINES
+        if wraps:  # Enough whole lines to cover the second row.
+            line = int(query.tk.call("font", "metrics", query.cget("font"), "-linespace"))
+            lines -= -(-(right.winfo_reqheight() + px(8)) // line)
+        if int(query.cget("height")) != lines: query.configure(height=lines)
 
     def step_changed(self, event=None):
-        title, description = STEPS[self.steps.index("current")]
+        index = self.steps.index("current")
+        title, description = STEPS[index]
         self.form_card.title_var.set(title); self.form_card.subtitle_var.set(description)
+        focused = self.app.root.focus_lastfor()
+        self.back_button.pack_forget(); self.next_button.pack_forget()
+        if index > 0: self.back_button.pack(side="left", padx=(0, px(8)))
+        if index < len(STEPS) - 1:
+            self.next_button.configure(text="Next: " + STEPS[index + 1][0] + "  →")
+            self.next_button.pack(side="left")
+        # The keyboard mustn't stay on a button that just went away: hand it to the one that stays.
+        keep = self.back_button if focused is self.next_button and index == len(STEPS) - 1 else \
+            self.next_button if focused is self.back_button and index == 0 else None
+        if keep is not None: self.app.root.update_idletasks(); keep.focus_set()
 
-    def add_tactic(self):
-        if self.app.busy: return
-        current = [value.strip() for value in self.vars["tactics"].get().split(",") if value.strip()]
-        if self.tactic_choice.get() not in current:
-            current.append(self.tactic_choice.get())
-            self.vars["tactics"].set(", ".join(current))
+    def step_by(self, step):
+        index = self.steps.index("current") + step
+        if not self.app.busy and 0 <= index < len(STEPS): self.steps.select(index)
+
+    def step_key(self, step):
+        """Ctrl+Page Down / Ctrl+Page Up: move a step and take the keyboard to its first field."""
+        before = self.steps.index("current")
+        self.step_by(step)
+        if self.steps.index("current") != before:
+            self.app.root.update_idletasks()
+            target = self.pages[self.steps.index("current")].tk_focusNext()
+            if target is not None: target.focus_set()
+        return "break"
+
+    def tactics(self, parent):
+        """MITRE tactics as a grid of check boxes, kept in step with the comma-separated vars['tactics']
+        that drafts read and write. Values that aren't tactics are listed with a way to remove them."""
+        kit.field_label(parent, "Tactics", "Tick every tactic the rule detects")
+        grid = tk.Frame(parent, bg=COLORS["card"], bd=0, highlightthickness=1, highlightbackground=COLORS["line"],
+                        highlightcolor=COLORS["line"], padx=px(12), pady=px(6))
+        grid.pack(fill="x", pady=(0, px(14)))
+        var = tk.StringVar(); self.vars["tactics"] = var
+        names = sorted(rule_schema.TACTICS)
+        self.tactic_vars, self.tactic_boxes, self.tactic_columns = {}, [], None
+        for name in names:
+            ticked = self.tactic_vars[name] = tk.BooleanVar()
+            box = ttk.Checkbutton(grid, text=tactic_label(name), variable=ticked)
+            self.tactic_boxes.append(box); self.app.controls.append((box, "normal"))
+        grid.focus_target = self.tactic_boxes[0]
+        self.flow_tactics(TACTIC_COLUMNS, grid)
+        grid.bind("<Configure>", lambda event: self.flow_tactics(None, grid), add="+")
+        self.unknown_tactics = ttk.Frame(parent, style="Card.TFrame")  # Packed under the grid when needed.
+        self.unknown_text = tk.StringVar()
+        kit.wrap_to_parent(ttk.Label(self.unknown_tactics, textvariable=self.unknown_text, style="Hint.TLabel",
+                                     justify="left", width=1)).pack(side="left", fill="x", expand=True)
+        remove = ttk.Button(self.unknown_tactics, text="Remove", style="Small.Ghost.TButton", command=self.remove_unknown_tactics)
+        remove.pack(side="right", padx=(px(8), 0)); self.app.controls.append((remove, "normal"))
+        guard = {"busy": False}
+        def compose(*args):
+            if guard["busy"]: return
+            guard["busy"] = True
+            try:
+                kept = [x for x in entries(var.get()) if x not in self.tactic_vars or self.tactic_vars[x].get()]
+                var.set(", ".join(kept + [x for x in names if self.tactic_vars[x].get() and x not in kept]))
+            finally: guard["busy"] = False
+        def decompose(*args):
+            current = entries(var.get())
+            unknown = list(dict.fromkeys(x for x in current if x not in rule_schema.TACTICS))
+            self.unknown_text.set(("Not a MITRE tactic: " if len(unknown) == 1 else "Not MITRE tactics: ") + ", ".join(unknown))
+            if unknown and not self.unknown_tactics.winfo_manager():
+                self.unknown_tactics.pack(fill="x", after=grid, pady=(0, px(14)))
+            elif not unknown: self.unknown_tactics.pack_forget()
+            if guard["busy"]: return
+            guard["busy"] = True
+            try:
+                for name, ticked in self.tactic_vars.items():
+                    if ticked.get() != (name in current): ticked.set(name in current)
+            finally: guard["busy"] = False
+        for ticked in self.tactic_vars.values(): ticked.trace_add("write", compose)
+        var.trace_add("write", decompose)
+        self.widgets["tactics"], self.labels["tactics"] = grid, "Tactics"
+        var.trace_add("write", lambda *args: self.changed("tactics"))
+
+    def flow_tactics(self, columns, grid):
+        """Lay the tactic boxes out down each column, then across, so the names read alphabetically: in
+        three columns, or two when the window is too narrow for the longest name."""
+        if columns is None:
+            room = grid.winfo_width() - 2 * (px(12) + int(grid.cget("highlightthickness")))
+            widest = max(box.winfo_reqwidth() for box in self.tactic_boxes) + px(12)
+            columns = max(2, min(TACTIC_COLUMNS, room // widest))
+        if columns == self.tactic_columns: return
+        self.tactic_columns, rows = columns, -(-len(self.tactic_boxes) // columns)
+        for index, box in enumerate(self.tactic_boxes):
+            box.grid(row=index % rows, column=index // rows, sticky="w", padx=(0, px(12)))
+        for column in range(TACTIC_COLUMNS):
+            grid.columnconfigure(column, weight=int(column < columns), uniform="tactics" if column < columns else "")
+
+    def remove_unknown_tactics(self):
+        if not self.app.busy:
+            self.vars["tactics"].set(", ".join(x for x in entries(self.vars["tactics"].get()) if x in rule_schema.TACTICS))
 
     def hint(self, parent, text):
         label = ttk.Label(parent, text=text, style="Hint.TLabel", wraplength=px(600), justify="left")
@@ -241,6 +451,7 @@ class RuleBuilderPage:
             pairs = [(c, c) if isinstance(c, str) else tuple(c) for c in choices]
             shown = tk.StringVar()
             control = ttk.Combobox(frame, textvariable=shown, values=[text for _, text in pairs], state="readonly")
+            control.bind("<MouseWheel>", lambda event: "break")  # Scrolling the page must not change a selection.
             def to_value(*args):
                 for value, text in pairs:
                     if text == shown.get() and var.get() != value: var.set(value)
@@ -252,7 +463,7 @@ class RuleBuilderPage:
             control = ttk.Entry(frame, textvariable=var, state="readonly" if readonly else "normal")
         control.pack(fill="x"); self.app.controls.append((control, "readonly" if choices or readonly else "normal"))
         self.widgets[key], self.labels[key] = control, label
-        var.trace_add("write", self.changed)
+        var.trace_add("write", lambda *args: self.changed(key))
 
     def duration(self, parent, label, key, hint=None):
         """A number plus a unit, stored as an ISO 8601 duration in vars[key]."""
@@ -264,7 +475,7 @@ class RuleBuilderPage:
         spin = ttk.Spinbox(row, textvariable=amount, from_=1, to=20160, width=6)
         spin.pack(side="left", fill="x", expand=True)
         units = ttk.Combobox(row, textvariable=unit, values=[name for name, _ in UNITS], state="readonly", width=9)
-        units.pack(side="left", padx=(px(8), 0))
+        units.pack(side="left", padx=(px(8), 0)); units.bind("<MouseWheel>", lambda event: "break")
         self.app.controls.append((spin, "normal")); self.app.controls.append((units, "readonly"))
         guard = {"busy": False}
         def compose(*args):
@@ -283,7 +494,7 @@ class RuleBuilderPage:
         amount.trace_add("write", compose); unit.trace_add("write", compose)
         var.trace_add("write", decompose)
         self.widgets[key], self.labels[key] = spin, label
-        var.trace_add("write", self.changed)
+        var.trace_add("write", lambda *args: self.changed(key))
 
     def choice(self, parent, key, options, label, labels=None):
         var = tk.StringVar(); self.vars[key] = var
@@ -291,7 +502,7 @@ class RuleBuilderPage:
                                 enabled=lambda: not self.app.busy)
         control.pack(anchor="w", pady=(0, px(14)))
         self.widgets[key], self.labels[key] = control, label
-        var.trace_add("write", self.changed)
+        var.trace_add("write", lambda *args: self.changed(key))
 
     def pair(self, parent, left, right):
         row = ttk.Frame(parent, style="Card.TFrame"); row.pack(fill="x")
@@ -305,24 +516,24 @@ class RuleBuilderPage:
         control = ttk.Checkbutton(parent, text=label, variable=var)
         control.pack(anchor="w", pady=(0, px(6))); self.app.controls.append((control, "normal"))
         self.widgets[key], self.labels[key] = control, label
-        var.trace_add("write", self.changed)
+        var.trace_add("write", lambda *args: self.changed(key))
 
-    def make_text(self, parent, height, readonly=False, font="mono", placeholder=None):
+    def make_text(self, parent, height, readonly=False, font="mono", placeholder=None, expand=True):
         frame, text = kit.text_area(parent, height, readonly=readonly, undo=not readonly, font=font, placeholder=placeholder)
-        frame.pack(fill="both", expand=True, pady=(0, px(14)))
+        frame.pack(fill="both" if expand else "x", expand=expand, pady=(0, px(14)))
         if not readonly: self.app.controls.append((text, "normal"))
         return text
 
-    def textbox(self, parent, label, key, height, hint=None, font="body", placeholder=None):
-        kit.field_label(parent, label)
+    def textbox(self, parent, label, key, height, hint=None, font="body", placeholder=None, label_hint=None, expand=True):
+        kit.field_label(parent, label, label_hint)
         if hint: self.hint(parent, hint)
-        text = self.make_text(parent, height, font=font, placeholder=placeholder); self.texts[key] = text
+        text = self.make_text(parent, height, font=font, placeholder=placeholder, expand=expand); self.texts[key] = text
         self.widgets[key], self.labels[key] = text, label
-        text.bind("<<Modified>>", lambda event: self.text_changed(text), add="+")  # The kit's placeholder listens too.
+        text.bind("<<Modified>>", lambda event: self.text_changed(text, key), add="+")  # The kit's placeholder listens too.
 
-    def text_changed(self, text):
+    def text_changed(self, text, key):
         if text.edit_modified():
-            text.edit_modified(False); self.changed()
+            text.edit_modified(False); self.changed(key)
 
     # ------------------------------------------------------------ state
     def form(self):
@@ -332,13 +543,25 @@ class RuleBuilderPage:
     def dirty(self):
         return self.saved is not None and self.form() != self.saved
 
-    def changed(self, *args):
+    def changed(self, key=None):
+        """An edit (``key``) clears that field's flag, and any quick-check flag it resolved elsewhere (Lifecycle
+        for Enabled, say); flags from the full check wait for their own field. A new form (None) clears them all."""
         if self.loading: return
-        self.clear_flag()
+        self.clear_flag(key)
+        if key == "kind":
+            for name in drafts.SCHEDULE_FIELDS: self.clear_flag(name)
+        stale = [name for name in self.flagged if name in self.quick_flags]
+        if stale:
+            still = dict(collect_issues(self.form()))
+            for name in stale:
+                if name not in still: self.clear_flag(name)
+        self.render_issues()  # Also drops the ticks a passed check left on the steps.
         self.submitted_url = None
-        self.set_preview("")
-        self.note.set("Unsaved changes — select Check rule again before submitting." if self.dirty()
-                      else "Local draft. Select Check rule when it's ready, then Submit for approval.")
+        self.banner.set_action()  # A previous rule's "Open in GitHub" no longer applies.
+        kit.set_text(self.preview, "")
+        self.note.set(self.issue_note() or ("Unsaved changes — select Check rule again before submitting." if self.dirty()
+                                            else "Local draft. Select Check rule when it's ready, then Submit for approval."))
+        self.render_state()
 
     def kind_changed(self, *args):
         if self.vars["kind"].get() == "NRT": self.schedule.pack_forget()
@@ -347,7 +570,7 @@ class RuleBuilderPage:
     def render_state(self):
         if self.submitted_url: self.state_pill.set("Submitted", "success")
         elif self.preview.get("1.0", "end-1c"): self.state_pill.set("Checked", "success")
-        elif self.dirty(): self.state_pill.set("Unsaved changes", "warning")
+        elif self.dirty(): self.state_pill.set("Draft", "info")  # The banner already says the changes aren't saved.
         elif self.draft_path: self.state_pill.set("Saved draft", "neutral")
         else: self.state_pill.set("New draft", "info")
 
@@ -475,14 +698,21 @@ class RuleBuilderPage:
 
     # ------------------------------------------------------------ checks
     def validate(self):
+        """Flag every field a quick look finds wrong at once; when there are none, run the full check."""
         if self.app.busy: return None
+        self.clear_flag(); self.stepper.clear_status()
+        issues = collect_issues(self.form())
+        self.quick_flags = {key for key, _ in issues}
+        if issues: self.show_issues(issues); return None
         try:
             text, warnings = drafts.validated_yaml(self.form())
-            self.set_preview(text); self.steps.select(4)
-            self.note.set("Rule check passed. " + ("; ".join(warnings) + ". Each assigned client must allow this. " if warnings else "")
-                          + "Select Submit for approval when you're ready. The query is tested against the workspace after approval.")
-            return text, warnings
         except (ValueError, OSError, TypeError, RecursionError) as error: self.problem(error); return None
+        self.set_preview(text)
+        for index in range(len(STEPS) - 1): self.stepper.set_status(index, "done")
+        self.steps.select(len(STEPS) - 1)
+        self.note.set("Rule check passed. " + ("; ".join(warnings) + ". Each assigned client must allow this. " if warnings else "")
+                      + "Select Submit for approval when you're ready. The query is tested against the workspace after approval.")
+        return text, warnings
 
     def step_of(self, key):
         widget = self.widgets[key]
@@ -490,78 +720,105 @@ class RuleBuilderPage:
         return self.pages.index(widget) if widget is not None else 0
 
     def problem(self, error):
-        """Show a failed check next to the field it is about, instead of a dialog."""
+        """Show a failed full check next to the field it is about, instead of a dialog."""
         key, advice = locate(self.form(), str(error))
-        self.set_preview("")
         if key is None:
-            self.note.set("Needs attention: " + advice); return
-        step = self.step_of(key)
-        self.steps.select(step); self.flag(key, advice)
-        self.note.set("Needs attention — " + self.labels[key] + " (step " + str(step + 1) + ", " + STEPS[step][0] + "): " + advice)
+            self.set_preview(""); self.note.set("Needs attention: " + advice); return
+        self.show_issues([(key, advice)])
 
-    def flag(self, key, advice=""):
-        self.clear_flag()
+    def show_issues(self, issues):
+        """Outline each field in ``issues`` with its advice, mark their steps and open the first one."""
+        self.set_preview("")
+        self.steps.select(self.step_of(issues[0][0]))
+        for index, (key, advice) in enumerate(issues): self.flag(key, advice, focus=not index)
+        self.render_issues()
+        self.note.set(self.issue_note())
+
+    def render_issues(self):
+        """Mark each step that holds flagged fields with their count; every other step goes back to plain."""
+        counts = {}
+        for key in self.flagged: counts[self.step_of(key)] = counts.get(self.step_of(key), 0) + 1
+        self.stepper.clear_status()
+        for index, count in counts.items(): self.stepper.set_status(index, "error", plural(count, "issue"))
+
+    def issue_note(self):
+        """The banner text for the fields still flagged, or None."""
+        if not self.flagged: return None
+        if len(self.flagged) == 1:
+            key, advice = next(iter(self.flagged.items())); step = self.step_of(key)
+            return ("Needs attention — " + short_label(self.labels[key]) + " (step " + str(step + 1) + ", "
+                    + STEPS[step][0] + "): " + advice)
+        groups = {}
+        for key in self.flagged: groups.setdefault(self.step_of(key), []).append(short_label(self.labels[key]))
+        return ("Needs attention — " + plural(len(self.flagged), "field") + ": "
+                + "; ".join(", ".join(names) + " (" + STEPS[step][0] + ")" for step, names in sorted(groups.items())))
+
+    def flag(self, key, advice="", focus=True):
+        """Outline one field in red with its advice underneath; ``focus`` also scrolls to it and focuses it."""
+        self.clear_flag(key)
         widget = self.widgets[key]
         # Repeat the advice under the field: the banner may be scrolled out of view.
         anchor = widget.master if isinstance(widget, (tk.Text, ttk.Spinbox)) else widget
-        # The wrap width follows the field, not the label's own size, which would feed back into the grid.
-        self.flag_label = tk.Label(anchor.master, text=advice, font=FONTS["small"], fg=COLORS["danger"],
-                                   bg=COLORS["card"], justify="left", anchor="w", bd=0,
-                                   wraplength=max(px(120), anchor.winfo_width()))
-        self.flag_label.pack(fill="x", after=anchor, pady=(px(4), px(8)))
-        self.flag_binding = anchor.bind("<Configure>", lambda event: self.flag_label.winfo_exists() and
-                                        self.flag_label.configure(wraplength=max(px(120), event.width)), add="+")
-        self.flag_anchor = anchor
-        if isinstance(widget, (ttk.Entry, ttk.Combobox, ttk.Spinbox)):
-            widget.configure(style="Error.T" + widget.winfo_class()[1:])
-        elif isinstance(widget, tk.Text):
-            widget.master.error = True
-            widget.master.configure(highlightbackground=COLORS["danger"], highlightthickness=2)
-        elif isinstance(widget, kit.Segmented):
-            widget.configure(highlightbackground=COLORS["danger"], highlightthickness=2)
-        self.flagged = key
-        self.app.scroll_into_view(widget, only_if_hidden=True)
-        try: widget.focus_set()
-        except tk.TclError: pass
+        if key == "tactics" and self.unknown_tactics.winfo_manager(): anchor = self.unknown_tactics  # Under its Remove.
+        width = anchor.winfo_width() if anchor.winfo_width() > 1 else self.steps.winfo_width() // 2
+        # width=1: the label wraps to the width it is given, so its text never widens the field's column.
+        label = tk.Label(anchor.master, text=advice, font=FONTS["small"], fg=COLORS["danger"], bg=COLORS["card"],
+                         justify="left", anchor="w", bd=0, width=1, wraplength=max(px(120), width))
+        label.pack(fill="x", after=anchor, pady=(px(4), px(8)))
+        kit.wrap_to_parent(label, minimum=px(120))
+        self.flagged[key], self.flag_labels[key] = advice, label
+        self.outline(widget, True)
+        if focus:
+            self.app.scroll_into_view(widget, only_if_hidden=True)
+            try: getattr(widget, "focus_target", widget).focus_set()
+            except tk.TclError: pass
 
-    def clear_flag(self):
-        if self.flagged is None: return
-        widget = self.widgets[self.flagged]; self.flagged = None
-        self.flag_label.destroy()
-        try: self.flag_anchor.unbind("<Configure>", self.flag_binding)
-        except (tk.TclError, AttributeError): pass
+    def clear_flag(self, key=None):
+        """Remove the flag from one field, or from every field when ``key`` is None."""
+        for name in list(self.flagged) if key is None else [key] if key in self.flagged else []:
+            del self.flagged[name]
+            self.flag_labels.pop(name).destroy()
+            self.outline(self.widgets[name], False)
+
+    @staticmethod
+    def outline(widget, error):
         if isinstance(widget, (ttk.Entry, ttk.Combobox, ttk.Spinbox)):
-            widget.configure(style=widget.winfo_class())
+            widget.configure(style=("Error." if error else "") + widget.winfo_class())
         elif isinstance(widget, tk.Text):
-            widget.master.error = False
-            widget.master.configure(highlightbackground=COLORS["line"], highlightthickness=1)
-        elif isinstance(widget, kit.Segmented):
-            widget.configure(highlightbackground=COLORS["line"], highlightthickness=1)
+            widget.master.error = error
+            widget.master.configure(highlightbackground=COLORS["danger" if error else "line"], highlightthickness=2 if error else 1)
+        elif isinstance(widget, tk.Frame):  # A segmented choice, or the tactic grid.
+            widget.configure(highlightbackground=COLORS["danger" if error else "line"], highlightthickness=2 if error else 1)
 
     # ------------------------------------------------------------ GitHub sign-in
     @staticmethod
     def github_probe():
         return GitHubReader.get("user")["login"]
 
-    def show_github_bar(self, message, action, command):
+    def show_github(self, text, tone, message, action=None, command=None):
+        """Show the GitHub check in the toolbar: a status pill (its tooltip explains) and, when the
+        analyst can do something about it, one action beside it."""
+        self.github_pill.set(text, tone)
         self.github_message.set(message)
-        self.github_action.configure(text=action, command=command)
-        if not self.github_bar.winfo_manager(): self.github_bar.pack(fill="x", pady=(0, kit.space("lg")), before=self.layout)
-        self.github_bar.rewrap()
+        if action:
+            self.github_action.configure(text=action, command=command)
+            if not self.github_action.winfo_manager(): self.github_action.pack(side="left", padx=(px(4), 0))
+        else:
+            self.github_action.pack_forget()
 
     def check_github(self, force=False):
         """Make sure submitting will work before the analyst reaches the last step."""
         if self.github_checking or (self.github_user and not force): return
         repository = self.app.github_repository()
         if "/" not in repository:
-            self.github_user = None; self.github_label.configure(text="")
+            self.github_user = None
             self.app.github_pill.set("Not set")
-            self.show_github_bar("Set your team's rule library on Connect before submitting rules. You can still write and check rules.",
-                                 "Go to Connect", self.app.show_github_settings)
+            self.show_github("Rule library not set", "warning", "Set your team's rule library on Connect before "
+                             "submitting rules. You can still write and check rules.", "Go to Connect", self.app.show_github_settings)
             return
         self.github_checking = True
-        self.github_label.configure(text="Checking GitHub sign-in…")
-        self.app.github_pill.set("Checking…", "info")
+        self.show_github("GitHub: checking…", "info", "Checking your GitHub sign-in…")
+        self.app.github_pill.set("GitHub: checking…", "info")
         probe = self.github_probe
         def run():
             try: result = (probe(), None)
@@ -576,28 +833,26 @@ class RuleBuilderPage:
         missing = "not installed" in error
         offline = any(words in error.casefold() for words in ("timed out", "could not resolve", "connection", "network"))
         if user:
-            self.github_bar.pack_forget()
-            self.github_label.configure(text="Signed in to GitHub as " + user)
             self.app.github_status.set("Signed in to GitHub as " + user + ".")
-            self.app.github_pill.set("Signed in", "success")
-            return
-        self.github_label.configure(text="")
-        if missing:
+            self.app.github_pill.set("GitHub: " + user, "success")
+            self.show_github("GitHub: " + user, "success", "Signed in to GitHub as " + user + ". Rules are submitted to "
+                             + self.app.github_repository() + " for a teammate's approval.")
+        elif missing:
             self.app.github_status.set("GitHub CLI isn't installed on this PC.")
             self.app.github_pill.set("GitHub CLI missing", "danger")
-            self.show_github_bar("GitHub CLI isn't installed on this PC, so rules can't be submitted yet. "
-                                 "Ask your administrator to install it, then select Check again.",
-                                 "Help & prerequisites", lambda: self.app.open_help())
+            self.show_github("GitHub CLI missing", "danger", "GitHub CLI isn't installed on this PC, so rules can't be "
+                             "submitted yet. Ask your administrator to install it, then press F5 to check again.",
+                             "Help & prerequisites", lambda: self.app.open_help())
         elif offline:
             self.app.github_status.set("Couldn't reach GitHub. Check your network connection.")
-            self.app.github_pill.set("Can't reach GitHub", "warning")
-            self.show_github_bar("Couldn't reach GitHub. Check your network connection, then select Check again.",
-                                 "Check again", lambda: self.check_github(force=True))
+            self.app.github_pill.set("GitHub: can't reach", "warning")
+            self.show_github("GitHub: can't reach", "warning", "Couldn't reach GitHub. Check your network connection, "
+                             "then select Check again.", "Check again", lambda: self.check_github(force=True))
         else:
             self.app.github_status.set("Not signed in to GitHub. Select Sign in to GitHub.")
-            self.app.github_pill.set("Not signed in", "warning")
-            self.show_github_bar("You're not signed in to GitHub, so rules can't be submitted yet. You can still "
-                                 "write and check rules.", "Sign in to GitHub", self.app.github_login)
+            self.app.github_pill.set("GitHub: not signed in", "warning")
+            self.show_github("GitHub: not signed in", "warning", "You're not signed in to GitHub, so rules can't be "
+                             "submitted yet. You can still write and check rules.", "Sign in to GitHub", self.app.github_login)
 
     # ------------------------------------------------------------ actions
     def export(self):

@@ -296,7 +296,7 @@ def main():
 
     # ---- Rule builder
     app.show_page("builder"); root.update(); builder = app.rule_builder
-    builder.github_label.configure(text="Signed in to GitHub as aring"); builder.github_bar.pack_forget()
+    builder.github_checked("aring", None)
     shot(root, "24-builder-new")
     builder.load_form(valid_form()); builder.vars["name"].set("Brute force against Entra ID accounts")
     shot(root, "25-builder-basics-filled")
@@ -305,9 +305,8 @@ def main():
     builder.vars["name"].set(""); builder.validate(); root.update(); shot(root, "28-builder-error")
     builder.vars["name"].set("Brute force against Entra ID accounts"); builder.validate(); root.update()
     shot(root, "29-builder-review-checked")
-    builder.show_github_bar("You're not signed in to GitHub, so rules can't be submitted yet. You can still write and check rules.",
-                            "Sign in to GitHub", lambda: None)
-    shot(root, "30-builder-github-bar"); builder.github_bar.pack_forget()
+    builder.github_checked(None, "GitHub read failed. Run gh auth login")  # Not signed in: the toolbar says so.
+    shot(root, "30-builder-github-bar"); builder.github_checked("aring", None)
     review = ReviewDialog(builder); shot(review.window, "31-dialog-submit"); review.window.destroy()
     submissions = ReviewHistoryDialog(builder); settle(root, 800); shot(submissions.window, "32-dialog-my-submissions")
     submissions.window.destroy()

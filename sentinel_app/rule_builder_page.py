@@ -7,10 +7,15 @@ from datetime import datetime, timezone
 from tkinter import ttk, filedialog
 from pathlib import Path
 
+from . import advice
+from . import query_runner
 from . import rule_drafts as drafts
 from . import rule_schema
 from . import ui_kit as kit
+from .auth_recovery import AuthenticationRequired
 from .desktop_theme import COLORS, FONTS, px
+from .gov_onboarding import GOV_CLOUD
+from .lighthouse_onboarding import Stop
 from .rule_review_dialog import ReviewDialog
 from .repository_catalog import GitHubReader
 from .repository_reviews import load_request
@@ -167,6 +172,28 @@ def plural(count, word):
     return f"{count} {word}" + ("" if count == 1 else "s")
 
 
+def last_period(seconds):
+    """86400 -> 'the last day', 14400 -> 'the last 4 hours': the time range a test query covers."""
+    words = kit.duration_text(query_runner.iso_duration(seconds))
+    return "the last " + (words[2:] if words.startswith("1 ") and " " not in words[2:] else words)
+
+
+def elapsed_text(seconds):
+    return f"{seconds:.1f} s" if seconds < 60 else f"{int(seconds // 60)} min {int(seconds % 60)} s"
+
+
+def column_widths(tree, columns, rows):
+    """Starting widths for a test result's columns: each heading's or longest value's, kept between
+    90 and 320 (96-DPI px) so a long value doesn't push the other columns out of sight."""
+    measure, most = kit.font(tree, "body").measure, px(320)
+    widths = []
+    for index, name in enumerate(columns):
+        # Measured, not counted: 'megan.bowen' is wider than 'diego.silva'. A value this long fills the cap anyway.
+        wide = max([measure(name)] + [most if len(row[index]) > 80 else measure(row[index]) for row in rows])
+        widths.append(max(px(90), min(most, wide + px(28))))
+    return widths
+
+
 class RuleBuilderPage:
     def __init__(self, app, parent, data_dir):
         self.app, self.data_dir = app, Path(data_dir)
@@ -268,7 +295,8 @@ class RuleBuilderPage:
         self.pair(self.schedule, ("Alert when the number of results", "triggerOperator", OPERATORS),
                   ("Threshold", "triggerThreshold", None))
         self.hint(query, "Scheduled rules run every 5 minutes to 14 days. Near real-time rules have no schedule or "
-                         "threshold. The query is tested against the workspace after approval.")
+                         "threshold.")
+        self.test_panel(query)
 
         self.tactics(mitre)
         self.field(mitre, "Parent techniques", "techniques", hint="For example T1562, T1003")
@@ -281,7 +309,8 @@ class RuleBuilderPage:
         self.textbox(advanced, "Additional rule properties", "advanced", 16, font="mono")
 
         self.hint(review, "Select Check rule to build the file that will be submitted. The check covers the rule's "
-                          "format, not the query results or deployment permissions.")
+                          "format, not the query results (Run test query on Query & schedule shows those) or "
+                          "deployment permissions.")
         self.preview = self.make_text(review, 19, readonly=True,
                                       placeholder="The rule file appears here once the check passes.")
 
@@ -555,6 +584,8 @@ class RuleBuilderPage:
         """An edit (``key``) clears that field's flag, and any quick-check flag it resolved elsewhere (Lifecycle
         for Enabled, say); flags from the full check wait for their own field. A new form (None) clears them all."""
         if self.loading: return
+        if key is None: self.clear_test()  # Another rule: the last one's results don't apply.
+        self.sync_test()
         self.clear_flag(key)
         if key == "kind":
             for name in drafts.SCHEDULE_FIELDS: self.clear_flag(name)
@@ -883,6 +914,174 @@ class RuleBuilderPage:
             widget.master.configure(highlightbackground=COLORS["danger" if error else "line"], highlightthickness=2 if error else 1)
         elif isinstance(widget, tk.Frame):  # A segmented choice, or the tactic grid.
             widget.configure(highlightbackground=COLORS["danger" if error else "line"], highlightthickness=2 if error else 1)
+
+    # ------------------------------------------------------------ test query
+    def test_panel(self, parent):
+        """Run test query: the draft's KQL, read-only, against the workspace chosen on Connect (query_runner).
+        The results stay until the next run or a new rule; a change to the query, Look back or workspace marks
+        them out of date rather than clearing them, so they can be compared with the change."""
+        self.tested = None        # (session, query, seconds, workspace ID) the results shown came from.
+        self.test_outcome = None  # (pill text, tone, summary) for those results.
+        self.test_raw = ""        # Azure's full message for the last failure, for Copy details.
+        kit.section_label(parent, "Test the query")
+        row = ttk.Frame(parent, style="Card.TFrame"); row.pack(fill="x", pady=(0, px(12)))
+        self.test_button = ttk.Button(row, text="Run test query", style="Secondary.TButton", command=self.run_test)
+        self.test_button.pack(side="left", anchor="n")
+        kit.tooltip(self.test_button, "")
+        self.test_hint = tk.StringVar()
+        # width=1: the label wraps to the room beside the button instead of widening the row.
+        hint = ttk.Label(row, textvariable=self.test_hint, style="Hint.TLabel", justify="left", width=1)
+        hint.pack(side="left", fill="x", expand=True, padx=(px(12), 0), pady=(px(1), 0))
+        kit.wrap_to_parent(hint, minimum=px(160))
+        self.test_result = ttk.Frame(parent, style="Card.TFrame")  # Packed once a test has run.
+        head = ttk.Frame(self.test_result, style="Card.TFrame"); head.pack(fill="x", pady=(0, px(8)))
+        self.test_pill = kit.Pill(head, "")
+        self.test_pill.pack(side="left", anchor="n")
+        self.test_summary = tk.StringVar()
+        summary = ttk.Label(head, textvariable=self.test_summary, style="Muted.TLabel", justify="left", width=1)
+        summary.pack(side="left", fill="x", expand=True, padx=(px(10), 0))
+        kit.wrap_to_parent(summary, minimum=px(160))
+        self.test_message = tk.StringVar()
+        self.test_banner = kit.Banner(self.test_result, self.test_message, tone="danger")  # Packed for a problem.
+        self.test_frame = self.test_tree = None  # A table built for each result's columns.
+        self.texts["query"].bind("<Shift-Return>", self.test_key)
+        self.sync_test()
+
+    def test_blocked(self):
+        """Why a test query can't run now (no workspace, or an Azure Government one), or None."""
+        app = self.app
+        if app.session is None or not app.workspace:
+            return "Sign in on Connect and choose a workspace to test the query here."
+        if getattr(app.session, "cloud", None) == GOV_CLOUD:
+            return "Test queries aren't available for Azure Government (GCC High) workspaces yet."
+        return None
+
+    def test_seconds(self):
+        return query_runner.test_window(self.vars["kind"].get(), self.vars["queryPeriod"].get())
+
+    def sync_test(self):
+        """Enable Run test query only with a public-cloud workspace and no task running, say what it will do
+        (or why it can't), and mark results out of date once the query, Look back or workspace has changed."""
+        reason, app = self.test_blocked(), self.app
+        self.test_button.configure(state="disabled" if reason or app.busy else "normal")
+        self.test_button.tooltip_text = reason or             "Run the query read-only against the workspace (Shift+Enter in the Query box)"
+        if reason:
+            self.test_hint.set(reason)
+        else:
+            seconds = self.test_seconds()
+            period = seconds_or_none(self.vars["queryPeriod"].get())
+            why = (" (near real-time rules have no Look back)" if self.vars["kind"].get() == "NRT" else
+                   f" (Look back is {kit.duration_text(query_runner.iso_duration(period))}; tests stop at "
+                   f"{kit.duration_text(query_runner.iso_duration(query_runner.MAX_PERIOD))})"
+                   if period and period > seconds else "")
+            self.test_hint.set(f"Runs read-only against {app.workspace['workspace_name']} over {last_period(seconds)}"
+                               f"{why} and shows up to {query_runner.ROW_LIMIT} rows. Nothing is saved or deployed.")
+        if self.tested is None: return
+        if self.tested[0] is not app.session:  # Signed out, or another client: its results go too.
+            self.clear_test(); return
+        if self.test_outcome is None: return  # A failure stays as it is until the next run.
+        current = (self.texts["query"].get("1.0", "end-1c"), self.test_seconds(),
+                   (app.workspace or {}).get("workspace_id"))
+        if current != self.tested[1:]:
+            self.test_pill.set("Out of date", "neutral")
+            self.test_summary.set("The query, Look back or workspace changed after this test. Run it again to see "
+                                  "current results.")
+        else:
+            text, tone, summary = self.test_outcome
+            self.test_pill.set(text, tone); self.test_summary.set(summary)
+
+    def clear_test(self):
+        self.tested = self.test_outcome = None; self.test_raw = ""
+        if self.test_frame is not None: self.test_frame.destroy(); self.test_frame = self.test_tree = None
+        self.test_banner.pack_forget(); self.test_result.pack_forget()
+
+    def test_key(self, event=None):
+        """Shift+Enter in the Query box, as in Log Analytics."""
+        self.run_test()
+        return "break"
+
+    def run_test(self):
+        if self.app.busy: return
+        reason = self.test_blocked()
+        query = self.texts["query"].get("1.0", "end-1c")
+        try:
+            if reason: raise Stop(reason)
+            query_runner.capped_query(query)  # An empty query or a dangling | is explained without asking Azure.
+        except Stop as error:
+            self.test_failed(error, None, query); return
+        session, workspace, seconds = self.app.session, dict(self.app.workspace), self.test_seconds()
+        def task():
+            try: return query_runner.run_test_query(session, workspace, query, seconds), None
+            except AuthenticationRequired: raise  # The app offers a fresh sign-in.
+            except Stop as error: return None, error
+        def done(outcome):
+            result, error = outcome
+            if self.app.session is not session: return  # Signed out meanwhile: nothing to show it against.
+            if error is not None: self.test_failed(error, workspace, query, session, seconds)
+            else: self.test_passed(result, session, query, workspace)
+        self.app.work("Running the test query against " + workspace["workspace_name"] + "…", task, done,
+                      page="builder", failed="Couldn't run the test query")
+
+    def show_test_result(self):
+        if not self.test_result.winfo_manager():
+            self.test_result.pack(fill="x", pady=(0, px(14)))
+        self.app.root.update_idletasks()
+        self.app.scroll_into_view(self.test_result, only_if_hidden=True)
+
+    def test_failed(self, error, workspace, query, session=None, seconds=None):
+        """Explain a test that didn't run in plain words (advice.py), with Log Analytics' own reason under it."""
+        self.clear_test()
+        name = (workspace or self.app.workspace or {}).get("workspace_name")
+        problem, detail = getattr(error, "problem", None), getattr(error, "detail", None)
+        tip = advice.lookup(problem or str(error), workspace=name)
+        if tip and detail: text = tip + "\nLog Analytics: " + detail
+        elif problem is None and detail: text = "Log Analytics didn't run the query: " + detail
+        else: text = tip or str(error)
+        self.test_raw = getattr(error, "raw", None) or str(error)
+        self.tested, self.test_outcome = (session or self.app.session, query, seconds, None), None
+        self.test_pill.set("Didn't run", "danger")
+        self.test_summary.set("Nothing was read from " + name + "." if name else "Nothing was sent to Azure.")
+        self.test_message.set(text); self.test_banner.tone("danger")
+        self.test_banner.set_action("Copy details", self.copy_test_details)
+        self.test_banner.pack(fill="x", pady=(0, px(8)))
+        self.show_test_result()
+        if workspace is not None:  # It reached Azure; a local problem needs no log entry.
+            self.app.log("Test query against " + workspace["workspace_name"] + " didn't run: " + self.test_raw)
+            self.app.flash("The test query didn't run. The reason is under Run test query.", "warning")
+
+    def copy_test_details(self):
+        self.app.root.clipboard_clear(); self.app.root.clipboard_append(self.test_raw)
+        self.app.flash("Details copied.")
+
+    def test_passed(self, result, session, query, workspace=None):
+        """Show the row count, the time taken and the first rows of a test that ran."""
+        self.clear_test()
+        workspace_id = (workspace or self.app.workspace or {}).get("workspace_id")
+        columns, rows, more = result["columns"], result["rows"], result["more"]
+        count = len(rows)
+        text, tone = (f"{query_runner.ROW_LIMIT}+ rows", "info") if more else \
+            ("No rows", "neutral") if not count else (plural(count, "row"), "success")
+        summary = (("First " + str(count) + " rows from " if more else "From ") + last_period(result["seconds"])
+                   + " in " + result["workspace_name"] + " · took " + elapsed_text(result["elapsed"]))
+        self.tested, self.test_outcome = (session, query, result["seconds"], workspace_id), (text, tone, summary)
+        self.test_pill.set(text, tone); self.test_summary.set(summary)
+        if result["partial"]:
+            self.test_message.set("Log Analytics returned only part of the results: " + result["partial"])
+            self.test_banner.tone("warning"); self.test_banner.set_action()
+            self.test_banner.pack(fill="x", pady=(0, px(8)))
+        if columns:
+            self.test_frame, self.test_tree, empty = kit.table(
+                self.test_result, [("c%d" % index, name, 120, index == len(columns) - 1)
+                                   for index, name in enumerate(columns)], height=8, icon="search")
+            for index, width in enumerate(column_widths(self.test_tree, columns, rows)):
+                self.test_tree.column("c%d" % index, width=width)
+            for values in rows: self.test_tree.insert("", "end", values=values)
+            self.test_frame.pack(fill="x")
+            if not count: empty.show("No rows in " + last_period(result["seconds"]) + ".")
+        self.show_test_result()
+        self.app.log(f"Test query against {result['workspace_name']}: {text.lower()} from {last_period(result['seconds'])}"
+                     f" in {elapsed_text(result['elapsed'])}.")
+        self.app.flash("Test query: " + text.lower() + " in " + elapsed_text(result["elapsed"]) + ".")
 
     # ------------------------------------------------------------ GitHub sign-in
     @staticmethod

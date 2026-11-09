@@ -137,11 +137,14 @@ class Session:
     def authentication_tenant(self):
         return (self.account or {}).get("tenantId") or self.login_tenant
 
-    def az(self, *args):
+    def az(self, *args, timeout=None):
+        """Run Azure CLI and return its JSON. ``timeout`` (seconds) replaces execute's default for a
+        read that should give up sooner, such as a test query."""
         signing_in = bool(args and args[0] == "login")
         # Azure CLI emits its claims-challenge recovery command as a warning.
         flags = ["--output", "json"]
-        result = self.execute(self.az_exe, [*args, *flags])
+        extra = {} if timeout is None else {"timeout": timeout}
+        result = self.execute(self.az_exe, [*args, *flags], **extra)
         details = result.stderr.strip()
         if signing_in:
             self.login_diagnostics = details

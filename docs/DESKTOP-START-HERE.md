@@ -106,6 +106,20 @@ before you save, the next start offers to restore it: **Restore** opens it as un
 **Discard** deletes it, and Esc (or closing the question) keeps it for the next start unless
 you start new work first. Saving the draft or closing the app normally removes the copy.
 
+**Run test query**, under the schedule on Query & schedule, runs the draft's query read-only
+against the workspace chosen on Connect and shows how many rows came back, how long it took
+and the first 50 rows (point at a shortened value to see it in full; Ctrl+C copies the
+selected rows). It covers the rule's Look back, at most the last day (near real-time rules,
+which have no Look back, use the last day), and the line beside the button says which
+period it will use. A query Log Analytics can't run, a missing permission (Log Analytics
+Reader or Microsoft Sentinel Reader on the workspace's resource group) or a query that takes
+longer than 2 minutes is explained in plain words under the button, with Log Analytics' own
+reason and **Copy details**. Changing the query or Look back marks the results **Out of
+date** until you run the test again; a new rule, or signing out, removes them. The button is
+greyed, with the reason beside it, until you are signed in with a workspace chosen, and for
+Azure Government (GCC High) workspaces. Results are only shown, never saved, and nothing in
+the workspace changes. The query is still tested again by the pipeline after approval.
+
 When a check fails, the builder opens the step with the problem, outlines the field in red
 and explains the fix under it. On opening the Rule builder, the app checks GitHub sign-in: a
 pill in the toolbar shows **GitHub: <account>** (the Rule library card on Connect says the
@@ -188,8 +202,8 @@ folder can't be written (for example under Program Files).
   Rules, and the GitHub sign-in check in the Rule builder.
 - **Ctrl+N** starts a new rule, and **Ctrl+S** saves the draft in the Rule builder.
 - **Ctrl+Page Down** and **Ctrl+Page Up** move to the next and previous Rule builder step.
-- In the Query box, **Tab** indents and **Ctrl+Tab** moves on; in other text boxes **Tab**
-  moves on.
+- In the Query box, **Tab** indents, **Ctrl+Tab** moves on and **Shift+Enter** runs the test
+  query, as in Log Analytics; in other text boxes **Tab** moves on.
 - In the Rules page lists, the arrow keys move the selection and **Enter** opens the selected
   rule (Workspace rules: moves into its details; Rule library: opens it in the Rule builder);
   **Ctrl+C** copies the selected rows.

@@ -14,6 +14,27 @@ MISSING_REPOSITORY = ("GitHub couldn't find {repo} for your account. Check the s
 # (words, advice): a single string, or a tuple of strings that must all appear. First match wins,
 # so the specific entries come before the general ones.
 FRIENDLY = (
+    # Run test query in the Rule builder. query_runner names each problem; first, so the Log Analytics
+    # message it quotes can't match an entry below.
+    ("Test query needs a workspace",
+     "Sign in on Connect and choose the client's workspace first. The test query runs against that workspace."),
+    ("Test queries support Azure public cloud only",
+     "Test queries can't run against Azure Government (GCC High) workspaces yet."),
+    ("Test query syntax error",
+     "Log Analytics couldn't read the query because of a syntax error. Fix it at the place named below, then "
+     "run the test again."),
+    ("Test query semantic error",
+     "The query uses a table, column or function that {workspace} doesn't have, or uses one in a way KQL doesn't "
+     "allow. Check the names below against the workspace's tables."),
+    ("Test query access denied",
+     "Your account can't run queries in {workspace}. You need Log Analytics Reader or Microsoft Sentinel Reader on "
+     "its resource group. Activate access in CyberQP, wait a few minutes, then run the test again."),
+    ("Test query timed out",
+     "The query took too long, so the test stopped. Narrow it (start from one table and filter early), or "
+     "shorten Look back, then run the test again."),
+    ("Test query workspace not found",
+     "Log Analytics couldn't find {workspace}. It may have been moved or deleted. Select Refresh beside the "
+     "workspace list on Connect."),
     (("AuthorizationFailed", "alertRules/read"),
      "Your account can't read analytics rules in {workspace}. You need Microsoft Sentinel Reader on its resource "
      "group. Activate access in CyberQP, wait a few minutes, then select Refresh."),

@@ -4,6 +4,9 @@ Every colour, font and size used by the desktop lives here so the pages and
 dialogs read as one system. Fonts fall back gracefully when the Windows 11
 families are not installed.
 """
+import math
+import struct
+import zlib
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
@@ -79,6 +82,97 @@ def app_icon(root, size=32):
     """The product mark as a Tk image; see brand.py for the drawing."""
     from .brand import mark
     return mark(root, size)
+
+
+# ------------------------------------------------------------------ checkboxes
+# Checkbox state -> (fill, border, tick) as COLORS names; no tick draws an empty box.
+CHECKBOX = dict(off=("card", "subtle", None), hover=("hover", "muted", None), pressed=("line", "muted", None),
+                disabled=("raised", "line_strong", None), on=("accent", "accent", "#FFFFFF"),
+                on_hover=("accent_hover", "accent_hover", "#FFFFFF"),
+                on_pressed=("accent_pressed", "accent_pressed", "#FFFFFF"), on_disabled=("disabled", "disabled", "#FFFFFF"))
+# The ttk checkbox indicator: (widget states, CHECKBOX state, focus ring), first match wins; else 'off'.
+CHECK_INDICATOR = ((("disabled", "selected"), "on_disabled", False), (("disabled",), "disabled", False),
+                   (("pressed", "focus", "selected"), "on_pressed", True), (("pressed", "focus"), "pressed", True),
+                   (("pressed", "selected"), "on_pressed", False), (("pressed",), "pressed", False),
+                   (("active", "focus", "selected"), "on_hover", True), (("active", "focus"), "hover", True),
+                   (("focus", "selected"), "on", True), (("focus",), "off", True),
+                   (("active", "selected"), "on_hover", False), (("active",), "hover", False),
+                   (("selected",), "on", False))
+_TICK = ((3.6, 7.3), (6.0, 9.7), (10.6, 4.6))  # The tick's corners on a 14-unit box.
+_SHAPES, _PNGS = {}, {}
+
+
+def _segment_distance(x, y, a, b):
+    (ax, ay), (bx, by) = a, b
+    dx, dy = bx - ax, by - ay
+    t = max(0, min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+    return math.hypot(x - ax - t * dx, y - ay - t * dy)
+
+
+def _box_shape(box, margin, samples=4):
+    """How many of each pixel's samples² points fall on the tick, the 1px border, the fill and
+    the focus ring of a rounded ``box``-pixel square with ``margin`` pixels around it for the
+    ring. Worked out once per size and shared by every Tk root."""
+    if (box, margin) not in _SHAPES:
+        size, unit, centre = box + 2 * margin, box / 14, box / 2 + margin
+        inner, radius = box / 2 - 2.5 * box / 14, 2.5 * box / 14
+        tick = [(margin + x * unit, margin + y * unit) for x, y in _TICK]
+        cells = []
+        for row in range(size):
+            for column in range(size):
+                counts = [0, 0, 0, 0]
+                for i in range(samples):
+                    for j in range(samples):
+                        x, y = column + (i + .5) / samples, row + (j + .5) / samples
+                        qx, qy = abs(x - centre) - inner, abs(y - centre) - inner
+                        distance = math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - radius
+                        if distance > 0:
+                            if margin / 2 < distance <= margin: counts[3] += 1
+                        elif min(_segment_distance(x, y, tick[0], tick[1]),
+                                 _segment_distance(x, y, tick[1], tick[2])) <= .9 * unit: counts[0] += 1
+                        else: counts[1 if distance > -1 else 2] += 1
+                cells.append(counts)
+        _SHAPES[box, margin] = (size, samples * samples, cells)
+    return _SHAPES[box, margin]
+
+
+def _png(width, height, rgba):
+    """Encode RGBA bytes as a PNG, which Tk reads with its alpha channel."""
+    rows = b"".join(b"\0" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))
+    chunk = lambda kind, data: struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def checkbox_png(state, box, margin=0, focus=False):
+    """A CHECKBOX state drawn as PNG data: antialiased with real alpha, so its rounded edge blends
+    into any row or surface; ``focus`` adds an accent ring in the margin. Cached per process."""
+    key = (state, box, margin, focus)
+    if key not in _PNGS:
+        rgb = lambda name: tuple(int(COLORS.get(name, name)[i:i + 2], 16) for i in (1, 3, 5))
+        fill, border, tick = (rgb(name) if name else None for name in CHECKBOX.get(state, CHECKBOX["off"]))
+        ring = rgb("accent") if focus else None
+        size, total, cells = _box_shape(box, margin)
+        data = bytearray()
+        for counts in cells:
+            # A pixel's colour is the average of what its samples hit; its alpha, how many hit.
+            parts = [(color, n) for color, n in zip((tick or fill, border, fill, ring), counts) if n and color]
+            hits = sum(n for _, n in parts)
+            if not hits: data += b"\0\0\0\0"; continue
+            data += bytes(round(sum(color[k] * n for color, n in parts) / hits) for k in range(3))
+            data.append(round(255 * hits / total))
+        _PNGS[key] = _png(size, size, bytes(data))
+    return _PNGS[key]
+
+
+def checkbox_image(root, state, box, margin=0, focus=False):
+    """checkbox_png as a PhotoImage of ``root`` (images belong to one Tk interpreter), cached on it."""
+    cache = getattr(root, "_kit_images", None)
+    if cache is None: cache = root._kit_images = {}
+    key = ("checkbox", state, box, margin, focus)
+    if key not in cache:
+        cache[key] = tk.PhotoImage(master=root, data=checkbox_png(state, box, margin, focus))
+    return cache[key]
 
 
 def configure_theme(root):
@@ -188,16 +282,20 @@ def configure_theme(root):
         style.map(name, bordercolor=[("focus", c["danger"]), ("hover", c["danger"])],
                   lightcolor=[("focus", c["danger_line"])])
 
-    for name in ("TCheckbutton",):
-        style.configure(name, background=c["card"], foreground=c["ink_2"], padding=(0, px(4)),
-                        indicatorbackground=c["card"], indicatorforeground="#FFFFFF",
-                        upperbordercolor=c["line_strong"], lowerbordercolor=c["line_strong"],
-                        indicatormargin=(0, 0, px(8), 0), indicatorsize=px(15), focusthickness=0, font=f["body"])
-        style.map(name, background=[("active", c["card"])],
-                  foreground=[("disabled", c["disabled"])],
-                  indicatorbackground=[("disabled", c["raised"]), ("selected", c["accent"]), ("pressed", c["accent_soft"])],
-                  upperbordercolor=[("selected", c["accent"]), ("focus", c["accent"])],
-                  lowerbordercolor=[("selected", c["accent"]), ("focus", c["accent"])])
+    # Checkboxes: a drawn Fluent box in place of clam's cross, one image per state (CHECK_INDICATOR),
+    # with an accent ring for keyboard focus instead of a dotted one round the label. The element's
+    # width leaves the gap before the label.
+    box, ring = px(16), px(2)
+    if "Kit.Checkbutton.indicator" not in style.element_names():
+        image = lambda state, focus=False: checkbox_image(root, state, box, ring, focus)
+        style.element_create("Kit.Checkbutton.indicator", "image", image("off"),
+                             *[(*states, image(state, focus)) for states, state, focus in CHECK_INDICATOR],
+                             width=box + 2 * ring + px(6), sticky="w")
+    style.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
+        ("Kit.Checkbutton.indicator", {"side": "left", "sticky": ""}),
+        ("Checkbutton.label", {"side": "left", "sticky": "w"})]})])
+    style.configure("TCheckbutton", background=c["card"], foreground=c["ink_2"], padding=(0, px(2)), font=f["body"])
+    style.map("TCheckbutton", background=[("active", c["card"])], foreground=[("disabled", c["disabled"])])
 
     # Tables.
     row = max(px(30), int(tkfont.Font(root, font=f["body"]).metrics("linespace") * 1.85))

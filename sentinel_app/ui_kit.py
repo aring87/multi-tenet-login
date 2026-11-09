@@ -11,7 +11,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
 
-from .desktop_theme import COLORS, FONTS, TONES, ICONS, SPACE, px
+from .desktop_theme import COLORS, FONTS, TONES, ICONS, SPACE, checkbox_image, px
 
 # Widgets whose look depends on the app being idle; App.set_busy calls refresh_all().
 _REFRESHABLE = weakref.WeakSet()
@@ -218,6 +218,38 @@ def ellipsize(text, font, width):
     return text[:low].rstrip() + "…" if low else "…"
 
 
+def ellipsize_middle(text, font, width):
+    """Shorten ``text`` in the middle with an ellipsis so it fits ``width`` pixels in ``font``,
+    keeping both ends of an ID ('11111111-1…111111111111'). A path keeps its file name whole
+    while it can ('rules/sen…/brute-force.yml'). Text that fits is unchanged."""
+    if width <= 0 or font.measure(text) <= width:
+        return text
+    def longest(shorten, most):
+        low, high = 0, most
+        while low < high:
+            middle = (low + high + 1) // 2
+            if font.measure(shorten(middle)) <= width: low = middle
+            else: high = middle - 1
+        return shorten(low)
+    name = max(text.rfind("/"), text.rfind("\\"))
+    if name > 0 and font.measure("…" + text[name:]) <= width:
+        return longest(lambda kept: text[:kept] + "…" + text[name:], name - 1)
+    return longest(lambda kept: text[:kept // 2] + "…" + text[len(text) - (kept - kept // 2):], len(text) - 1)
+
+
+def _popup_tip(widget, text, x, y):
+    """A tooltip window showing ``text`` centred on screen position ``x`` with its top at ``y``."""
+    window = tk.Toplevel(widget); window.overrideredirect(True)
+    try: window.attributes("-topmost", True)
+    except tk.TclError: pass
+    window.configure(bg=COLORS["line_strong"])
+    tk.Label(window, text=text, font=FONTS["small"], bg=COLORS["card"], fg=COLORS["ink"],
+             padx=px(8), pady=px(4), bd=0, justify="left", wraplength=px(420)).pack(padx=1, pady=1)
+    window.update_idletasks()
+    window.geometry(f"+{max(0, x - window.winfo_reqwidth() // 2)}+{max(0, y)}")
+    return window
+
+
 def tooltip(widget, text):
     """Show ``text`` under the widget after a short hover, and on keyboard focus.
     The text is read from ``widget.tooltip_text`` when shown, so it can be updated;
@@ -228,17 +260,8 @@ def tooltip(widget, text):
         if state["window"] is not None or not widget.winfo_exists(): return
         current = getattr(widget, "tooltip_text", text)
         if not current: return
-        window = tk.Toplevel(widget); window.overrideredirect(True)
-        try: window.attributes("-topmost", True)
-        except tk.TclError: pass
-        window.configure(bg=COLORS["line_strong"])
-        tk.Label(window, text=current, font=FONTS["small"], bg=COLORS["card"], fg=COLORS["ink"],
-                 padx=px(8), pady=px(4), bd=0, justify="left", wraplength=px(420)).pack(padx=1, pady=1)
-        window.update_idletasks()
-        x = widget.winfo_rootx() + (widget.winfo_width() - window.winfo_reqwidth()) // 2
-        y = widget.winfo_rooty() + widget.winfo_height() + px(6)
-        window.geometry(f"+{max(0, x)}+{max(0, y)}")
-        state["window"] = window
+        state["window"] = _popup_tip(widget, current, widget.winfo_rootx() + widget.winfo_width() // 2,
+                                     widget.winfo_rooty() + widget.winfo_height() + px(6))
     def cancel(event=None):
         if state["timer"] is not None:
             try: widget._root().after_cancel(state["timer"])
@@ -382,39 +405,60 @@ class Segmented(tk.Frame):
                            cursor="hand2" if active else "arrow")
 
 
+def _one_token(text):
+    """True for an identifier, a GUID or a path: one line with no spaces, or a path (which may
+    have them) that is not a list."""
+    return "\n" not in text and (not re.search(r"\s", text) or (bool(re.search(r"[\\/]", text)) and ", " not in text))
+
+
 class KeyValues(ttk.Frame):
     """Two-column list of labelled values. Values named in ``mono`` use the
-    monospace font (identifiers); the rest read as prose."""
+    monospace font (identifiers); the rest read as prose and wrap.
+
+    A mono value that is one token (a path, rule ID or GUID) never wraps: it is shortened
+    in the middle with '…' to the room it has, shows the whole value on hover, and keeps
+    it in ``label.full_text`` (every value label has one) for copying."""
 
     def __init__(self, parent, key_width=16, surface="", stacked=False):
         super().__init__(parent, style=(surface or "Card") + ".TFrame")
         self.key_width, self.surface, self.stacked = key_width, surface, stacked
-        self.values = []
+        self.keys, self.values = [], []
         self.columnconfigure(1, weight=1)
         self.bind("<Configure>", self.rewrap, add="+")
 
     def rewrap(self, event=None):
-        width = max(px(160), self.winfo_width() - (0 if self.stacked else px(self.key_width * 8)))
+        width = self.winfo_width()
+        keys = 0 if self.stacked else max((key.winfo_reqwidth() for key in self.keys), default=0)
+        room = max(px(160), width - keys)
         for label in self.values:
-            label.configure(wraplength=width)
+            if not label.single_line: label.configure(wraplength=room); continue
+            # Before the first layout the width is unknown: show it whole, clipped, until it is.
+            text = label.full_text if width <= 1 else ellipsize_middle(label.full_text, font(self, "mono"), room - px(2))
+            label.configure(text=text)
+            label.tooltip_text = "" if text == label.full_text else label.full_text
 
     def set(self, rows, mono=None):
         for child in self.winfo_children():
             child.destroy()
-        self.values = []
+        self.keys, self.values = [], []
         for index, (key, value) in enumerate(rows):
             pad = (0 if index == 0 else px(10 if self.stacked else 7), 0)
-            style = self.surface + ("Value" if mono is None or key in mono else "Prose") + ".TLabel"
+            fixed = mono is None or key in mono
+            style = self.surface + ("Value" if fixed else "Prose") + ".TLabel"
             key_label = ttk.Label(self, text=key, style=self.surface + "Key.TLabel", anchor="w",
                                   width=0 if self.stacked else self.key_width)
             value_label = ttk.Label(self, text=value, style=style, justify="left", wraplength=px(320))
+            value_label.full_text, value_label.single_line = str(value), fixed and _one_token(str(value))
+            if value_label.single_line:
+                # width=1: the column, not the text, sets the width, and the text is shortened to it.
+                value_label.configure(wraplength=0, width=1); tooltip(value_label, "")
             if self.stacked:
                 key_label.grid(row=2 * index, column=0, columnspan=2, sticky="w", pady=pad)
                 value_label.grid(row=2 * index + 1, column=0, columnspan=2, sticky="ew", pady=(px(1), 0))
             else:
                 key_label.grid(row=index, column=0, sticky="nw", pady=pad)
                 value_label.grid(row=index, column=1, sticky="ew", pady=pad)
-            self.values.append(value_label)
+            self.keys.append(key_label); self.values.append(value_label)
         self.rewrap()
 
 
@@ -592,22 +636,136 @@ class StripedTreeview(ttk.Treeview):
     """A Treeview whose top-level rows are striped as they are inserted, so every
     list in the app alternates row tints without each page having to count. It keeps
     its own row count, so filling a long list costs the same per row however long it
-    gets; ``restripe()`` re-tints the rows after they are reordered."""
+    gets; ``restripe()`` re-tints the rows after they are reordered.
+
+    A cell too long for its column shows shortened with '…', worked out again (shortly
+    after, on the root) whenever a column changes width. The full values are kept: ``set``,
+    ``item`` and ``full_values`` return them, so sorting, copying and searching never see
+    the shortened text; ``shortened(iid, column)`` gives a cut cell's full text."""
+
+    PAD = 9  # 96-DPI pixels of a cell that text can't use: the cell's left padding and a gap.
 
     def __init__(self, master=None, **kw):
         super().__init__(master, **kw)
-        self._rows = 0
+        self._rows, self._cells, self._widths, self._font = 0, {}, {}, None
+        self._keys = tuple(self["columns"])
+        self.refit_soon = debounce(self, 50, self.refit)
+        # A resize, or a column edge dragged (Tk changes the width itself, not through column()).
+        for sequence in ("<Configure>", "<B1-Motion>", "<ButtonRelease-1>"):
+            self.bind(sequence, lambda event: self.refit_soon(), add="+")
 
+    # -- shortening
+    def _text_width(self, text):
+        chars = self._chars
+        try: return sum(map(chars.__getitem__, text))
+        except KeyError:
+            for char in set(text) - chars.keys(): chars[char] = self._font.measure(char)
+            return sum(map(chars.__getitem__, text))
+
+    def _fit(self, text, room):
+        """``text`` shortened with '…' to ``room`` pixels. Widths are summed from per-character
+        widths measured once per root: Tk's measure call is slow, and Windows text doesn't kern."""
+        if not text or self._text_width(text) <= room: return text
+        room -= self._text_width("…")
+        chars, total = self._chars, 0
+        for index, char in enumerate(text):
+            total += chars[char]
+            if total > room: return text[:index].rstrip() + "…"
+        return text
+
+    def _display(self, full):
+        if self._font is None:
+            # The rows' font (the Treeview style's), with its character widths shared per root.
+            root = self._root()
+            self._font = font(self, "body") if FONTS.get("body") else tkfont.nametofont("TkDefaultFont", root)
+            shared = root.__dict__.setdefault("_kit_char_widths", {})
+            self._chars = shared.setdefault(str(self._font), {})
+        if not self._widths:
+            self._widths = {key: int(self.column(key, "width")) for key in self._keys}
+        pad, widths, keys = px(self.PAD), self._widths, self._keys
+        return tuple(self._fit(value, widths[keys[index]] - pad) if index < len(keys) else value
+                     for index, value in enumerate(full))
+
+    def _values(self, values):
+        # As Tk stores them: every value as text.
+        if isinstance(values, str): values = self.tk.splitlist(values)
+        return tuple(str(value) for value in values)
+
+    def refit(self):
+        """Shorten the cells again for the columns' current widths."""
+        try:
+            self._keys = tuple(self["columns"])
+            widths = {key: int(self.column(key, "width")) for key in self._keys}
+        except tk.TclError:
+            return
+        if widths == self._widths: return
+        self._widths = widths
+        for item, (full, shown) in list(self._cells.items()):
+            fitted = self._display(full)
+            if fitted == shown: continue
+            try: super().item(item, values=fitted)
+            except tk.TclError: del self._cells[item]; continue  # Deleted along with its parent.
+            self._cells[item] = (full, fitted)
+
+    def full_values(self, item):
+        """A row's values in full, as ``item(iid, 'values')`` gives them: a tuple of text."""
+        cells = self._cells.get(item)
+        return cells[0] if cells else self._values(super().item(item, "values") or ())
+
+    def shortened(self, item, column):
+        """The full text of a cell shown shortened, or '' when it shows whole."""
+        cells = self._cells.get(item)
+        if not cells or column not in self._keys: return ""
+        index = self._keys.index(column)
+        full, shown = cells
+        return full[index] if index < len(full) and shown[index] != full[index] else ""
+
+    # -- Treeview, keeping the full values
     def insert(self, parent, index, iid=None, **kw):
+        full = self._values(kw.get("values") or ())
+        if full: kw["values"] = shown = self._display(full)
         if parent == "" and index == "end" and self._rows % 2:
             tags = kw.get("tags", ())
             kw["tags"] = ((tags,) if isinstance(tags, str) else tuple(tags)) + ("stripe",)
         item = super().insert(parent, index, iid, **kw)
+        if full: self._cells[item] = (full, shown)
         if parent == "": self._rows += 1
         return item
 
+    def item(self, item, option=None, **kw):
+        if "values" in kw:
+            full = self._values(kw["values"] or ())
+            if full: kw["values"] = shown = self._display(full)
+            result = super().item(item, option, **kw)
+            if full: self._cells[item] = (full, shown)
+            else: self._cells.pop(item, None)
+            return result
+        result = super().item(item, option, **kw)
+        cells = self._cells.get(item)
+        if cells and option == "values": return cells[0]
+        if cells and option is None and not kw: result["values"] = cells[0]
+        return result
+
+    def set(self, item, column=None, value=None):
+        if column is None:
+            full = self.full_values(item)
+            return {key: full[index] for index, key in enumerate(self._keys) if index < len(full)}
+        if column not in self._keys: return super().set(item, column, value)  # A '#n' column: as shown.
+        index, full = self._keys.index(column), list(self.full_values(item))
+        if value is None: return full[index] if index < len(full) else ""
+        full += [""] * (index + 1 - len(full))
+        full[index] = str(value)
+        self.item(item, values=full)
+        return ""
+
+    def column(self, column, option=None, **kw):
+        result = super().column(column, option, **kw)
+        if "width" in kw: self.refit_soon()
+        return result
+
     def delete(self, *items):
         super().delete(*items)
+        for item in items: self._cells.pop(item, None)
         self._rows = len(self.get_children(""))
 
     def restripe(self):
@@ -622,6 +780,11 @@ class StripedTreeview(ttk.Treeview):
 # Severity order for sorting: most severe first.
 SEVERITY_RANK = {"High": 0, "Medium": 1, "Low": 2, "Informational": 3}
 _BLANK = ("", "—")
+
+
+def _full_values(tree, item):
+    """A row's values in full, even where a kit table shows them shortened."""
+    return tree.full_values(item) if hasattr(tree, "full_values") else tree.item(item, "values") or ()
 
 
 def sort_value(value):
@@ -640,8 +803,8 @@ def sort_items(tree, key=None, descending=None):
     if key is None:
         if not getattr(tree, "sort_state", None): return
         key, descending = tree.sort_state
-    rows = tree.get_children("")
-    values = {item: tree.set(item, key) for item in rows}
+    rows, index = tree.get_children(""), tuple(tree["columns"]).index(key)
+    values = {item: (tuple(_full_values(tree, item))[index:index + 1] or ("",))[0] for item in rows}
     filled = [item for item in rows if str(values[item]).strip() not in _BLANK]
     ordered = sorted(filled, key=lambda item: sort_value(values[item]), reverse=bool(descending))
     for index, item in enumerate(ordered + [item for item in rows if str(values[item]).strip() in _BLANK]):
@@ -709,33 +872,12 @@ def dot(tone, master=None):
     return cache["dot", tone]
 
 
-def _segment_distance(x, y, a, b):
-    (ax, ay), (bx, by) = a, b
-    dx, dy = bx - ax, by - ay
-    t = max(0, min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
-    return math.hypot(x - ax - t * dx, y - ay - t * dy)
-
-
 def checkbox(state, master=None):
     """A 14px checkbox image for a table's check column: 'off' (an empty box), 'on'
-    (accent fill with a white tick) or 'disabled' (a greyed box). Cached per root."""
-    root, cache = _images(master)
-    if ("check", state) not in cache:
-        size = px(14)
-        border, fill = {"on": (COLORS["accent"], COLORS["accent"]),
-                        "disabled": (COLORS["line"], COLORS["raised"])}.get(state, (COLORS["line_strong"], COLORS["card"]))
-        edge, radius = 1 / size, 2.5 / 14
-        tick = ((3.6 / 14, 7.3 / 14), (6.0 / 14, 9.7 / 14), (10.6 / 14, 4.6 / 14))
-        def paint(x, y):
-            # Signed distance to a rounded square filling the image (negative inside).
-            qx, qy = abs(x - .5) - (.5 - radius), abs(y - .5) - (.5 - radius)
-            distance = math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - radius
-            if distance > 0: return None
-            if state == "on" and min(_segment_distance(x, y, tick[i], tick[i + 1]) for i in (0, 1)) <= .9 / 14:
-                return "#FFFFFF"
-            return border if distance > -edge else fill
-        cache["check", state] = _draw(root, size, paint)
-    return cache["check", state]
+    (accent fill with a white tick) or 'disabled' (a greyed box). It is drawn like the
+    ttk checkbox indicator (desktop_theme.CHECKBOX) and cached per root."""
+    root, _ = _images(master)
+    return checkbox_image(root, state, px(14))
 
 
 def blank_image(master):
@@ -749,11 +891,11 @@ def blank_image(master):
 
 
 def copy_rows(tree):
-    """Copy the selected rows to the clipboard, one tab-separated line per row."""
+    """Copy the selected rows to the clipboard in full, one tab-separated line per row."""
     rows = tree.selection()
     if rows:
         tree.clipboard_clear()
-        tree.clipboard_append("\n".join("\t".join(str(value) for value in tree.item(item, "values")) for item in rows))
+        tree.clipboard_append("\n".join("\t".join(str(value) for value in _full_values(tree, item)) for item in rows))
     return "break"
 
 
@@ -769,11 +911,43 @@ def _focus_row(tree):
     tree.see(item)
 
 
+def _cell_tips(tree):
+    """Show a shortened cell's full text under it after a short hover."""
+    root, state = tree._root(), {"cell": None, "timer": None, "window": None}
+    def hide(event=None):
+        if state["timer"] is not None:
+            try: root.after_cancel(state["timer"])
+            except tk.TclError: pass
+        if state["window"] is not None:
+            try: state["window"].destroy()
+            except tk.TclError: pass
+        state.update(timer=None, window=None)
+    def show():
+        state["timer"] = None
+        item, key = state["cell"]
+        text, box = tree.shortened(item, key), tree.winfo_exists() and tree.bbox(item, key)
+        if text and box:
+            state["window"] = _popup_tip(tree, text, tree.winfo_rootx() + box[0] + box[2] // 2,
+                                         tree.winfo_rooty() + box[1] + box[3] + px(2))
+    def motion(event):
+        item, column = tree.identify_row(event.y), tree.identify_column(event.x)
+        cell = (item, tree.column(column, "id")) if item and column not in ("", "#0") else None
+        if cell == state["cell"]: return
+        hide(); state["cell"] = cell
+        if cell and tree.shortened(*cell): state["timer"] = root.after(600, show)
+    tree.bind("<Motion>", motion, add="+")
+    for sequence in ("<Leave>", "<ButtonPress>", "<MouseWheel>", "<KeyPress>", "<Destroy>"):
+        tree.bind(sequence, lambda event: (hide(), state.update(cell=None)), add="+")
+
+
 def table(parent, columns, height=10, selectmode="browse", icon="rules", sort=None, menu=None, marker=False,
           check=False):
     """A bordered Treeview with striped rows, slim scrollbars and an empty-state overlay.
 
-    ``columns`` holds (key, heading, width[, stretch]) tuples.
+    ``columns`` holds (key, heading, width[, stretch]) tuples. A stretching column shares
+    the table's spare width; one left without the flag stretches only if it is the first
+    (the main text), so narrow fixed columns keep their width. Cells too long for their
+    column show shortened with '…' (StripedTreeview) and in full after a hover.
 
     ``sort`` makes the headings clickable: a callable is given (key, descending) and
     redraws the rows in that order; True sorts the rows already shown (sort_items). The
@@ -795,10 +969,12 @@ def table(parent, columns, height=10, selectmode="browse", icon="rules", sort=No
         tree.column("#0", width=px(28), minwidth=px(28), stretch=False, anchor="center")
         tree.heading("#0", text="")
     tree.base_headings, tree.sort_state = {}, None
-    for key, title, width, *stretch in columns:
+    for index, (key, title, width, *stretch) in enumerate(columns):
         tree.base_headings[key] = title
         tree.heading(key, text=title, anchor="w")
-        tree.column(key, width=px(width), minwidth=px(70), anchor="w", stretch=bool(stretch[0]) if stretch else True)
+        # A column dragged narrower stops at 70px, or at its own width if that is less.
+        tree.column(key, width=px(width), minwidth=px(min(70, width)), anchor="w",
+                    stretch=bool(stretch[0]) if stretch else index == 0)
     if sort:
         reorder = (lambda key, descending: sort_items(tree, key, descending)) if sort is True else sort
         def toggle(key):
@@ -856,6 +1032,7 @@ def table(parent, columns, height=10, selectmode="browse", icon="rules", sort=No
         # Scheduled on the root so a pending callback is owned by one widget only.
         tree._root().after_idle(lambda: tree.winfo_exists() and tree.xview_moveto(tree.xview()[0]))
     tree.bind("<Configure>", reflow, add="+")
+    _cell_tips(tree)
     frame.columnconfigure(0, weight=1); frame.rowconfigure(0, weight=1)
     tree.tag_configure("stripe", background=COLORS["stripe"])
     tree.tag_configure("muted", foreground=COLORS["muted"])

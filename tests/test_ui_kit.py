@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from tkinter import ttk
 
 from sentinel_app import ui_kit as kit
-from sentinel_app.desktop_theme import COLORS, FONTS, ICONS, configure_theme, px
+from sentinel_app.desktop_theme import (CHECK_INDICATOR, CHECKBOX, COLORS, FONTS, ICONS, checkbox_image,
+                                        configure_theme, px)
 
 
 def descendants(widget):
@@ -190,6 +191,202 @@ class TableTests(KitTestCase):
         middle = px(7)
         self.assertEqual("#%02X%02X%02X" % on.get(1, middle), COLORS["accent"])
         self.assertEqual("#%02X%02X%02X" % off.get(middle, middle), COLORS["card"])
+        self.assertIs(on, kit.checkbox("on", self.root))
+
+    def test_default_stretch_and_minimum_widths(self):
+        frame, tree, _ = kit.table(self.root, (("name", "Name", 200), ("state", "State", 100), ("batch", "Batch", 60, False),
+                                               ("note", "Note", 120, True)))
+        stretch = lambda key: tree.tk.getboolean(tree.column(key, "stretch"))
+        # The main text column takes the spare width; narrow columns keep theirs unless asked.
+        self.assertEqual([stretch(key) for key in ("name", "state", "batch", "note")], [True, False, False, True])
+        self.assertEqual(int(tree.column("batch", "minwidth")), px(60))
+        self.assertEqual(int(tree.column("name", "minwidth")), px(70))
+
+
+class EllipsisTests(KitTestCase):
+    LONG = "Anomalous Azure resource deployment across every subscription"
+
+    def make(self, width=150, **options):
+        frame, tree, _ = kit.table(self.root, (("name", "Name", width), ("state", "State", 90)), **options)
+        frame.place(x=0, y=0, width=px(width + 90), height=px(300))
+        return tree
+
+    def shown(self, tree, item):
+        return tree.tk.splitlist(tree.tk.call(tree._w, "item", item, "-values"))  # What Tk draws.
+
+    def room(self, tree, key):
+        return int(tree.column(key, "width")) - px(tree.PAD)
+
+    def test_long_cells_show_an_ellipsis_but_keep_their_values(self):
+        tree = self.make()
+        tree.insert("", "end", iid="a", values=(self.LONG, "Enabled"))
+        tree.insert("", "end", iid="b", values=("Brute force", 3))
+        name = self.shown(tree, "a")[0]
+        self.assertTrue(name.endswith("…")); self.assertTrue(self.LONG.startswith(name[:-1]))
+        self.assertLessEqual(kit.font(tree, "body").measure(name), self.room(tree, "name"))
+        self.assertEqual(self.shown(tree, "b"), ("Brute force", "3"))
+        # Every reader gets the full text, as Tk would store it.
+        self.assertEqual(tree.item("a", "values"), (self.LONG, "Enabled"))
+        self.assertEqual(tree.item("a")["values"], (self.LONG, "Enabled"))
+        self.assertEqual((tree.set("a", "name"), tree.set("b", "state")), (self.LONG, "3"))
+        self.assertEqual(tree.set("a"), {"name": self.LONG, "state": "Enabled"})
+        self.assertEqual(tree.full_values("a"), (self.LONG, "Enabled"))
+        self.assertEqual((tree.shortened("a", "name"), tree.shortened("b", "name"), tree.shortened("a", "state")),
+                         (self.LONG, "", ""))
+        # Writes through set() and item() are shortened and kept in full too.
+        tree.set("b", "name", self.LONG + " (copy)")
+        self.assertEqual(tree.set("b", "name"), self.LONG + " (copy)"); self.assertIn("…", self.shown(tree, "b")[0])
+        tree.item("a", values=("Short", "Disabled"))
+        self.assertEqual((self.shown(tree, "a"), tree.shortened("a", "name")), (("Short", "Disabled"), ""))
+        tree.insert("", "end", iid="c")
+        self.assertEqual((tree.item("c", "values"), tree.set("c", "name"), tree.full_values("c")), ("", "", ()))
+
+    def test_copy_and_sort_use_the_full_values(self):
+        tree = self.make(sort=True, selectmode="extended")
+        # Both show as the same shortened text; only the end tells them apart.
+        tree.insert("", "end", iid="zeta", values=(self.LONG + " zeta", "Enabled"))
+        tree.insert("", "end", iid="alpha", values=(self.LONG + " alpha", "Enabled"))
+        self.assertEqual(self.shown(tree, "zeta"), self.shown(tree, "alpha"))
+        tree.toggle_sort("name")
+        self.assertEqual(tree.get_children(), ("alpha", "zeta"))
+        tree.selection_set("zeta"); kit.copy_rows(tree)
+        self.assertEqual(self.root.clipboard_get(), self.LONG + " zeta\tEnabled")
+
+    def test_a_width_change_shortens_the_cells_again(self):
+        tree = self.make()
+        tree.insert("", "end", iid="a", values=(self.LONG, "Enabled"))
+        self.root.update()
+        tree.column("name", width=px(700)); tree.refit_soon.flush()
+        self.assertEqual((self.shown(tree, "a")[0], tree.shortened("a", "name")), (self.LONG, ""))
+        tree.column("name", width=px(110)); tree.refit_soon.flush()
+        narrow = self.shown(tree, "a")[0]
+        self.assertTrue(narrow.endswith("…"))
+        self.assertLessEqual(kit.font(tree, "body").measure(narrow), self.room(tree, "name"))
+        # A column edge dragged with the mouse: Tk sets the width itself, the release re-fits.
+        tree.tk.call(tree._w, "column", "name", "-width", px(260))
+        tree.event_generate("<ButtonRelease-1>", x=1, y=1)
+        self.assertTrue(self.root.tk.call("after", "info"))  # Debounced on the root, like every kit timer.
+        tree.refit_soon.flush()
+        wider = self.shown(tree, "a")[0]
+        self.assertGreater(len(wider), len(narrow)); self.assertTrue(self.LONG.startswith(wider.rstrip("…")))
+
+    def test_two_thousand_rows_stay_quick(self):
+        import time
+        tree = self.make()
+        start = time.perf_counter()
+        for index in range(2000):
+            tree.insert("", "end", iid=str(index), values=(self.LONG + " " + str(index), "Enabled"))
+        tree.column("name", width=px(400)); tree.refit_soon.flush()
+        kit.sort_items(tree, "name", True)
+        self.assertLess(time.perf_counter() - start, 1.5)  # About 0.05s on a laptop.
+        self.assertEqual(tree.set(tree.get_children()[0], "name"), self.LONG + " 999")
+
+    def test_hovering_a_shortened_cell_shows_it_in_full(self):
+        tree = self.make()
+        tree.insert("", "end", iid="a", values=(self.LONG, "Enabled"))
+        self.root.deiconify(); self.root.update()
+        x, y, width, height = tree.bbox("a", "name")
+        tree.event_generate("<Motion>", x=x + 5, y=y + height // 2)
+        deadline = self.root.tk.call("clock", "milliseconds") + 3000
+        tips = lambda: [w for w in tree.winfo_children() if isinstance(w, tk.Toplevel)]
+        while not tips() and self.root.tk.call("clock", "milliseconds") < deadline: self.root.update()
+        self.assertEqual([w.winfo_children()[0].cget("text") for w in tips()], [self.LONG])
+        tree.event_generate("<Leave>"); self.root.update()
+        self.assertEqual(tips(), [])
+
+
+class KeyValueTests(KitTestCase):
+    PATH = "rules/sentinel/identity-and-access/brute-force-against-entra-id-accounts.yml"
+
+    def test_ellipsize_middle_keeps_both_ends(self):
+        mono = kit.font(self.root, "mono")
+        self.assertEqual(kit.ellipsize_middle("short", mono, px(300)), "short")
+        text = kit.ellipsize_middle(self.PATH, mono, px(200))
+        self.assertLessEqual(mono.measure(text), px(200))
+        head, tail = text.split("…")
+        self.assertTrue(self.PATH.startswith(head) and self.PATH.endswith(tail) and head and tail)
+        # A path whose file name fits keeps it whole, after as much of the start as fits.
+        path = "rules/sentinel/identity-and-access/brute-force.yml"
+        text = kit.ellipsize_middle(path, mono, mono.measure(path) - 1)
+        self.assertTrue(text.endswith("…/brute-force.yml") and path.startswith(text.split("…")[0]))
+        self.assertLessEqual(mono.measure(text), mono.measure(path) - 1)
+        self.assertGreater(len(text), len("rules/…/brute-force.yml"))
+
+    def test_mono_values_shorten_in_the_middle_instead_of_wrapping(self):
+        facts = kit.KeyValues(self.root, key_width=12)
+        facts.place(x=0, y=0, width=px(360))
+        prose = "Detects anomalous deployments across sign-in and audit telemetry for the analyst."
+        facts.set([("File", self.PATH), ("Description", prose), ("Used by", "3: acme-primary, bluestone-primary")],
+                  mono={"File", "Used by"})
+        self.root.update()
+        path, description, used = facts.values
+        text = path.cget("text")
+        self.assertIn("…", text); self.assertTrue(text.startswith("rules/") and text.endswith(".yml"))
+        self.assertLessEqual(kit.font(facts, "mono").measure(text), path.winfo_width())
+        self.assertEqual(int(str(path.cget("wraplength")) or 0), 0)
+        self.assertEqual((path.full_text, path.tooltip_text), (self.PATH, self.PATH))
+        # Prose, and a mono list of names, still wrap whole; every value keeps its full text.
+        for label, value in ((description, prose), (used, "3: acme-primary, bluestone-primary")):
+            self.assertEqual((label.cget("text"), label.full_text), (value, value))
+            self.assertGreater(int(str(label.cget("wraplength"))), 0)
+        facts.place_configure(width=px(900)); self.root.update()
+        self.assertEqual((path.cget("text"), path.tooltip_text), (self.PATH, ""))
+
+    def test_stacked_values_use_the_whole_width(self):
+        facts = kit.KeyValues(self.root, surface="Raised", stacked=True)
+        facts.place(x=0, y=0, width=px(200))
+        guid = "11111111-1111-4111-8111-111111111111"
+        facts.set([("Tenant ID", guid)]); self.root.update()
+        label = facts.values[0]
+        self.assertIn("…", label.cget("text")); self.assertEqual(label.full_text, guid)
+        self.assertLessEqual(kit.font(facts, "mono").measure(label.cget("text")), px(200))
+
+
+class CheckboxTests(KitTestCase):
+    STATES = {(): ("off", False), ("selected",): ("on", False), ("active",): ("hover", False),
+              ("active", "selected"): ("on_hover", False), ("focus",): ("off", True), ("focus", "selected"): ("on", True),
+              ("active", "focus"): ("hover", True), ("pressed",): ("pressed", False),
+              ("pressed", "selected"): ("on_pressed", False), ("focus", "pressed", "selected"): ("on_pressed", True),
+              ("disabled",): ("disabled", False), ("disabled", "selected"): ("on_disabled", False),
+              ("disabled", "focus", "selected"): ("on_disabled", False)}
+
+    def test_every_checkbox_uses_the_drawn_indicator(self):
+        style = ttk.Style(self.root)
+        self.assertIn("Kit.Checkbutton.indicator", style.element_names())
+        def names(layout):
+            for name, options in layout:
+                yield name; yield from names(options.get("children", ()))
+        parts = list(names(style.layout("TCheckbutton")))
+        self.assertIn("Kit.Checkbutton.indicator", parts)
+        self.assertNotIn("Checkbutton.indicator", parts); self.assertNotIn("Checkbutton.focus", parts)
+        box = ttk.Checkbutton(self.root, text="Allow missing MITRE details"); box.pack(); self.root.update()
+        self.assertGreaterEqual(box.winfo_reqheight(), px(16) + 2 * px(2))
+        configure_theme(self.root)  # Theming a root again keeps the element it made.
+
+    def test_each_state_has_its_own_image(self):
+        # Tk picks the first entry whose states all hold; CHECK_INDICATOR is that list.
+        pick = lambda states: next(((state, ring) for spec, state, ring in CHECK_INDICATOR if set(spec) <= set(states)),
+                                   ("off", False))
+        for states, expected in self.STATES.items():
+            self.assertEqual(pick(states), expected, states)
+        size, ring = px(16), px(2)
+        image = lambda state, focus=False: checkbox_image(self.root, state, size, ring, focus)
+        color = lambda img, x, y: "#%02X%02X%02X" % img.get(x, y)
+        inside, middle = ring + px(3), ring + size // 2
+        ticked = lambda img: any(color(img, x, y) == "#FFFFFF" for x in range(img.width()) for y in range(img.height())
+                                 if not img.transparency_get(x, y))
+        for state, (fill, border, tick) in CHECKBOX.items():
+            self.assertEqual(color(image(state), inside, inside), COLORS[fill], state)
+            self.assertEqual(color(image(state), ring, middle), COLORS[border], state)
+            if tick: self.assertTrue(ticked(image(state)), state)  # Their fills aren't white; only the tick is.
+        self.assertIs(image("on"), image("on"))
+        for state in ("off", "on"):
+            plain, focused = image(state), image(state, True)
+            self.assertIsNot(plain, focused)
+            self.assertTrue(plain.transparency_get(0, middle))
+            self.assertFalse(focused.transparency_get(0, middle))
+            self.assertEqual(color(focused, 0, middle), COLORS["accent"])
+            self.assertTrue(focused.transparency_get(0, 0))
 
 
 class SearchTests(KitTestCase):

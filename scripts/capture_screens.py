@@ -240,7 +240,11 @@ def main():
     dialog.reviewed = dialog.config(); dialog.controls()
     dialog.say("GCC High onboarding plan ready. Nothing changed. Review the plan, then select Apply reviewed setup.", "success")
     shot(dialog.window, "06-dialog-gcc-high-previewed")
-    dialog.say("Stopped. The reason is at the end of the plan below.", "danger"); shot(dialog.window, "07-dialog-gcc-high-error")
+    dialog.failed(dialog.review.get("1.0", "end-1c").replace("\n\nNothing changed.", "") +
+                  "\nSTOPPED: Role assignment failed: AuthorizationFailed. The signed-in account can't assign roles on "
+                  "rg-example-sentinel.\nAsk the client's administrator for Owner or User Access Administrator, then "
+                  "select Preview again.")
+    dialog.controls(); shot(dialog.window, "07-dialog-gcc-high-error")
     dialog.window.destroy(); session.cloud = "AzureCloud"; app.sync_connection()
 
     form = kit.FormDialog(root, "New client", "Clients are saved on this PC only. They never contain credentials.",

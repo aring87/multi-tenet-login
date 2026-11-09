@@ -26,12 +26,11 @@ class DeploymentDialog:
             fill="x", pady=(px(2), px(14)))
         # Bottom-anchored controls are packed first so they always have room; the review takes what remains.
         self.actions, buttons = kit.action_row(body, primary=("Start deployment", self.start),
-                                               secondary=(("Refresh status", self.refresh), ("Open GitHub", self.open_run)),
-                                               close=("Close", self.close))
+                                               secondary=(("Refresh status", self.refresh),), close=("Close", self.close),
+                                               aux=(("Open GitHub", self.open_run),))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.start_button, self.status_button, self.open_button, self.close_button = buttons
+        self.start_button, self.status_button, self.close_button, self.open_button = buttons
         self.buttons = tuple(buttons)
-        self.start_button.configure(state="disabled"); self.status_button.configure(state="disabled")
         runs_frame, self.runs, self.runs_empty = kit.table(body, (("batch", "Batch", 60, False), ("run", "GitHub run", 120, False),
                                                                   ("state", "Last checked state", 530, True)), height=4)
         runs_frame.pack(side="bottom", fill="x")
@@ -41,9 +40,9 @@ class DeploymentDialog:
         review_frame, self.review = kit.text_area(body, 12, readonly=True); review_frame.pack(fill="both", expand=True)
         kit.place_dialog(self.window, parent.window, 940, 690, 800, 620)
         kit.modal(self.window, parent.window, self.close)
-        self.render_runs()
+        self.render_runs(); self.controls()
         if self.record:
-            self.render(); self.controls()
+            self.render()
             self.say("Saved request for this preview. Submission and run status are shown below.")
         else:
             self.work("Checking previews and preparing the deployment…", lambda: self.service.prepare(parent.record), self.prepared)
@@ -67,9 +66,15 @@ class DeploymentDialog:
         self.say("Review the exact clients and configured rule states. No deployment has been submitted.")
 
     def controls(self):
-        self.start_button.configure(state="normal" if self.record and not self.record["attempted"] else "disabled")
-        self.status_button.configure(state="normal" if self.record and any(r.get("run_id") for r in self.record["results"]) else "disabled")
+        startable = bool(self.record and not self.record["attempted"])
+        refreshable = bool(self.record and any(r.get("run_id") for r in self.record["results"]))
+        self.start_button.configure(state="normal" if startable else "disabled")
+        self.status_button.configure(state="normal" if refreshable else "disabled")
         self.open_button.configure(state="normal"); self.close_button.configure(state="normal")
+        # Blue marks the next step, Start deployment and then Refresh status. Only the colour moves:
+        # Enter starts nothing here, so a deployment is never started from the keyboard by accident.
+        for button, lead in ((self.start_button, startable), (self.status_button, refreshable and not startable)):
+            button.configure(style="Primary.TButton" if lead else "Secondary.TButton")
 
     def work(self, title, task, done):
         def after():

@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from sentinel_app import desktop_app as ui
+from sentinel_app import ui_kit as kit
+from sentinel_app.assignment_dialog import mixed_box
 from sentinel_app.preview_dialog import PreviewDialog
 from sentinel_app.preview_workflow import PreviewService
 from sentinel_app.repository_catalog import GitHubReader
@@ -36,17 +38,64 @@ class PreviewDialogTests(unittest.TestCase):
         self.dialog.select_all()
         with patch.object(self.app, "work", side_effect=self.work): self.dialog.prepare()
 
+    def item(self, target):
+        return next(k for k, v in self.dialog.visible.items() if v == target)
+
+    def box(self, item):
+        return str(self.root.tk.splitlist(self.dialog.clients.item(item, "image"))[0])
+
+    def heading_box(self):
+        return str(self.root.tk.splitlist(self.dialog.clients.heading("#0", "image"))[0])
+
     def test_all_selects_only_eligible_and_filter_does_not_lose_selection(self):
         self.dialog.select_all()
         self.assertEqual(self.dialog.selected, {"client-1-primary", "example-primary"})
         self.dialog.search.set("example-primary")
+        self.assertEqual(len(self.dialog.visible), 3)  # The list filters once typing pauses…
+        self.dialog.filter.flush()
         self.assertEqual(len(self.dialog.visible), 1)
         self.assertEqual(len(self.dialog.selected), 2)
         self.dialog.clear(); self.assertFalse(self.dialog.selected)
 
     def test_disabled_row_cannot_be_selected(self):
-        item = next(k for k, v in self.dialog.visible.items() if v == "client-0-primary")
+        item = self.item("client-0-primary")
+        self.assertEqual(self.box(item), str(kit.checkbox("disabled", self.root)))
         self.dialog.toggle(item); self.assertFalse(self.dialog.selected)
+
+    def test_rows_tick_in_place_and_heading_box_selects_shown_eligible_rows(self):
+        self.assertNotIn("selected", self.dialog.clients.cget("columns"))
+        rows = self.dialog.clients.get_children()
+        item = self.item("example-primary")
+        self.dialog.toggle(item)
+        self.assertEqual(self.dialog.clients.get_children(), rows)  # Not rebuilt.
+        self.assertEqual(self.box(item), str(kit.checkbox("on", self.root)))
+        self.assertEqual(self.heading_box(), str(mixed_box(self.root)))
+        self.assertEqual(self.dialog.count.get(), "1 selected of 2 eligible")
+        self.dialog.toggle_shown()
+        self.assertEqual(self.dialog.selected, {"client-1-primary", "example-primary"})
+        self.assertEqual(self.heading_box(), str(kit.checkbox("on", self.root)))
+        self.dialog.toggle_shown()
+        self.assertFalse(self.dialog.selected)
+        self.assertEqual(self.box(item), str(kit.checkbox("off", self.root)))
+
+    def test_blue_button_follows_the_next_step_and_runs_show_once_started(self):
+        style = lambda button: str(button.cget("style"))
+        self.assertEqual(style(self.dialog.prepare_button), "Primary.TButton")
+        self.assertEqual(style(self.dialog.start_button), "Secondary.TButton")
+        self.assertIs(self.dialog.window._enter_target, self.dialog.prepare_button)
+        self.assertEqual(str(self.dialog.status_button.cget("style")), "Ghost.TButton")
+        self.assertFalse(self.dialog.runs_frame.winfo_manager())
+        self.prepare()
+        self.assertEqual((style(self.dialog.start_button), style(self.dialog.prepare_button)),
+                         ("Primary.TButton", "Secondary.TButton"))
+        self.assertIs(self.dialog.window._enter_target, self.dialog.start_button)
+        self.assertFalse(self.dialog.runs_frame.winfo_manager())
+        with patch.object(self.app, "work", side_effect=self.work): self.dialog.start()
+        self.assertTrue(self.dialog.runs_frame.winfo_manager())
+        self.assertIsNone(self.dialog.window._enter_target)  # Refresh status comes next; nothing is blue.
+        self.assertEqual(style(self.dialog.start_button), "Secondary.TButton")
+        with patch.object(self.app, "work", side_effect=self.work): self.dialog.refresh_status()
+        self.assertEqual(style(self.dialog.deploy_button), "Primary.TButton")
 
     def test_prepare_reviews_exact_targets_without_running_and_selection_invalidates(self):
         self.prepare(); self.assertFalse(self.remote.dispatched)

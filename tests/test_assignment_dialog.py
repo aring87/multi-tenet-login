@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from sentinel_app import desktop_app as ui
-from sentinel_app.assignment_dialog import AssignmentDialog
+from sentinel_app import ui_kit as kit
+from sentinel_app.assignment_dialog import AssignmentDialog, mixed_box
 from sentinel_app.rule_assignments import AssignmentService, load_request
 from sentinel_app.repository_catalog import GitHubReader
 from test_rule_assignments import AssignmentGitHub, REPO
@@ -42,6 +43,42 @@ class AssignmentDialogTests(unittest.TestCase):
         self.assertEqual(len(self.dialog.selected), 2)
         self.assertIn('1 hidden', self.dialog.count.get())
         self.dialog.clear(); self.assertFalse(self.dialog.selected)
+
+    def test_search_waits_for_a_pause_and_enter_moves_into_the_list(self):
+        self.root.deiconify(); self.dialog.window.deiconify(); self.dialog.search_box.focus_force(); self.root.update()
+        self.dialog.search.set('413'); self.assertEqual(len(self.dialog.visible), 2)
+        self.dialog.search_box.event_generate('<Return>'); self.root.update()  # Filters now, then selects the match.
+        self.assertEqual(list(self.dialog.visible.values()), ['413-workspace-commercial'])
+        self.assertEqual(self.dialog.clients.selection(), tuple(self.dialog.visible))
+        self.assertFalse(self.dialog.selected)  # Moving into the list ticks nothing.
+
+    def test_rows_tick_in_place_and_the_blue_button_moves_to_submit(self):
+        style = lambda button: str(button.cget('style'))
+        image = lambda value: str(self.root.tk.splitlist(value)[0])
+        self.assertNotIn('pick', self.dialog.clients.cget('columns'))
+        self.assertEqual((style(self.dialog.prepare_button), style(self.dialog.submit_button)),
+                         ('Primary.TButton', 'Secondary.TButton'))
+        self.assertEqual(self.dialog.open_button.pack_info()['side'], 'left')
+        rows = self.dialog.clients.get_children(); item = rows[0]
+        self.dialog.toggle(item)
+        self.assertEqual(self.dialog.clients.get_children(), rows)
+        self.assertEqual(image(self.dialog.clients.item(item, 'image')), str(kit.checkbox('on', self.root)))
+        self.assertEqual(image(self.dialog.clients.heading('#0', 'image')), str(mixed_box(self.root)))
+        self.assertEqual(self.dialog.count.get(), '1 selected')
+        self.dialog.toggle_shown(); self.assertEqual(len(self.dialog.selected), len(rows))
+        self.assertEqual(image(self.dialog.clients.heading('#0', 'image')), str(kit.checkbox('on', self.root)))
+        with patch.object(self.app, 'work', side_effect=self.work): self.dialog.prepare()
+        self.assertEqual((style(self.dialog.prepare_button), style(self.dialog.submit_button)),
+                         ('Secondary.TButton', 'Primary.TButton'))
+        self.assertIs(self.dialog.window._enter_target, self.dialog.submit_button)
+        with patch.object(self.app, 'work', side_effect=self.work): self.dialog.submit()
+        self.assertIsNone(self.dialog.window._enter_target)  # Submitted: Open in GitHub is what's left.
+
+    def test_submit_without_a_check_runs_the_check_first(self):
+        self.dialog.select_shown()
+        with patch.object(self.app, 'work', side_effect=self.work): self.dialog.submit()
+        self.assertIsNotNone(self.dialog.record)
+        self.assertFalse(self.remote.writes())
 
     def test_review_is_read_only_and_state_changes_invalidate_it(self):
         self.prepare()

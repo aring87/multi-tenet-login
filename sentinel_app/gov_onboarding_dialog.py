@@ -25,6 +25,7 @@ class GovOnboardingDialog:
         self.workspace = dict(app.workspace)
         self.reviewed = None
         self.pull_request = None
+        self.applied = False  # True only right after a successful apply, until settings change or a step fails.
         self.window = tk.Toplevel(app.root)
         self.window.title("Onboard GCC High client"); self.window.configure(bg=COLORS["card"])
         body = ttk.Frame(self.window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
@@ -38,10 +39,10 @@ class GovOnboardingDialog:
 
         # Bottom-anchored controls are packed first so they always keep their room.
         self.actions, buttons = kit.action_row(body, primary=("Apply reviewed setup", self.apply),
-                                               secondary=(("Preview", self.preview), ("Open pull request", self.open_pr)),
-                                               close=("Close", self.close))
+                                               secondary=(("Preview", self.preview),), close=("Close", self.close),
+                                               aux=(("Open pull request", self.open_pr),))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.apply_button, self.preview_button, self.pr_button, self.close_button = buttons
+        self.apply_button, self.preview_button, self.close_button, self.pr_button = buttons
         self.buttons = tuple(buttons)
         self.notice = tk.StringVar(value="Check the client folder name, then select Preview.")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
@@ -69,6 +70,7 @@ class GovOnboardingDialog:
         review_frame, self.review = kit.text_area(body, 12, readonly=True,
                                                   placeholder="The plan appears here after Preview. Nothing changes until you apply it.")
         review_frame.pack(fill="both", expand=True)
+        self.review.tag_configure("danger", foreground=COLORS["danger"])
         kit.place_dialog(self.window, app.root, 900, 760, 760, 600)
         kit.modal(self.window, app.root, self.close)
         self.controls()
@@ -90,6 +92,7 @@ class GovOnboardingDialog:
         self.notice.set(text); self.banner.tone(tone)
 
     def changed(self):
+        self.applied = False
         if self.reviewed is not None:
             self.reviewed = None
             self.say("Settings changed. Preview again before applying.", "warning")
@@ -100,6 +103,12 @@ class GovOnboardingDialog:
         self.apply_button.configure(state="normal" if self.reviewed else "disabled")
         self.pr_button.configure(state="normal" if self.pull_request else "disabled")
         self.close_button.configure(state="normal")
+        # Blue marks the next step: Preview, then Apply reviewed setup; none right after an apply (open the pull
+        # request next), and Preview again once settings change or a step fails. Only the colour moves; Enter
+        # keeps doing nothing in this dialog.
+        lead = self.apply_button if self.reviewed else None if self.applied else self.preview_button
+        for button in (self.apply_button, self.preview_button):
+            button.configure(style="Primary.TButton" if button is lead else "Secondary.TButton")
 
     def show(self, text):
         kit.set_text(self.review, text)
@@ -117,6 +126,7 @@ class GovOnboardingDialog:
             self.show(output)
             match = PR_LINK.search(output)
             if match: self.pull_request = match.group(1)
+            self.applied = apply
             if apply:
                 self.reviewed = None
                 self.say(summary + " Merge it, then run preview for the new target on main.", "success")
@@ -124,14 +134,25 @@ class GovOnboardingDialog:
             else:
                 self.reviewed = config
                 self.say(summary + " Review the plan, then select Apply reviewed setup.", "success")
-        def failed(error):
-            self.reviewed = None
-            self.show(error)
-            self.say("Stopped. The reason is at the end of the plan below.", "danger")
         kit.run_in_dialog(self.app, self.window,
                           "Applying GCC High onboarding…" if apply else "Checking the GCC High tenant and repository…",
                           lambda: gov_run(session, config, apply), done, controls=self.buttons, say=self.say,
-                          page="connect", on_error=failed, after=self.controls, log_as="GCC High onboarding:")
+                          page="connect", on_error=self.failed, after=self.controls, log_as="GCC High onboarding:")
+
+    def failed(self, error):
+        """Show the output with the reason at its end in red and scrolled into view, and name it in the banner."""
+        self.reviewed = None; self.applied = False
+        self.show(error)
+        lines = error.split("\n")  # As the text area counts lines.
+        # gov_run ends a stopped plan with 'STOPPED: <reason>' and any advice; other errors are all reason.
+        start = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].startswith("STOPPED:")), 0)
+        reason = next((line.strip() for line in lines[start:] if line.strip()), "")
+        reason = (reason[len("STOPPED:"):].strip() if reason.startswith("STOPPED:") else reason).rstrip(".")
+        self.review.tag_add("danger", f"{start + 1}.0", "end")
+        self.say("Stopped: " + ((reason[:200] + "…" if len(reason) > 200 else reason + ".") if reason else "the step failed.")
+                 + " The details are at the end of the plan above.", "danger")
+        self.window.update_idletasks()  # Let a taller banner shrink the plan first, so its end stays in view.
+        self.review.see("end")
 
     def preview(self):
         self.run(False)

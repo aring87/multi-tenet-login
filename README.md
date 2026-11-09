@@ -9,9 +9,9 @@ The desktop app has three sections: **Connect** (Microsoft sign-in and workspace
 1. Start the desktop app. Azure CLI and Python must be installed; no terminal commands are needed during use. GitHub CLI is only needed for the rule library and for submitting rules for approval.
 2. Use **Open CyberQP** if applicable and activate the client's JIT account there.
 3. Leave the tenant blank (select **Change** beside the saved tenant to edit it). Creating a saved client is optional.
-4. Click **Sign in with Microsoft**. Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one.
-5. The app automatically selects the default accessible subscription and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which includes the tenant ID. Selecting another subscription automatically reloads its workspaces.
-6. Select the intended workspace if several are available. The **Workspace** card shows **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**. Workspace ID is the Log Analytics customer GUID, not the ARM resource path.
+4. Click **Sign in with Microsoft** (**Sign in to <client>** when a client is chosen). Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one. If sign-in fails, the Sign in card explains why, with **Copy details** for the full message.
+5. The app selects the subscription and workspace you used last for this client, or else the default accessible subscription, and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which includes the tenant ID. Selecting another subscription automatically reloads its workspaces.
+6. Select the intended workspace if several are available. Select **+ Show workspace IDs** on the **Workspace** card to see **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**; right-click one to copy it. Workspace ID is the Log Analytics customer GUID, not the ARM resource path. The header names the client and workspace on every page.
 7. Click **Copy details** to copy the displayed values. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
 
 **Cancel sign-in** stays available while Microsoft authentication is pending. If you
@@ -42,6 +42,7 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 - Browses clients, rules and assignments in your team's rule library, and opens library rules in the Rule builder.
 - Builds, checks and exports detection rules, and submits them for a teammate's approval as pull requests.
 - Deletes saved client entries without deleting cloud resources.
+- Keeps a recovery copy of unsaved Rule builder work and offers it after a crash; runs as a single copy, with in-app help (F1) and a list of keyboard shortcuts.
 - Command-line onboarding (`py -m sentinel_app.lighthouse_onboarding`) onboards external tenants through Azure Lighthouse. It requires a successful matching preview before Apply.
 
 The app is independent of any employer, customer, or privileged-access provider. CyberQP is optional; activate access through your own provider if your organization requires it. The app starts with an empty client list and blank GitHub settings.
@@ -100,6 +101,7 @@ Runtime data lives in desktop-data/, which is excluded from Git:
 - Saved client mappings.
 - Per-session Azure CLI configuration and authentication caches.
 - Onboarding state and generated parameter files.
+- Window layout and the last workspace used for each client (`ui-state.json`), rule drafts and their recovery copy (`drafts/`), and `logs/errors.log` for unexpected errors (capped at 1 MB).
 
 Do not commit or share this folder. The application has no password-entry field. Microsoft manages authentication through its normal broker/browser flow. Signing out of the app's Azure session does not deactivate access at your privileged-access provider or sign out other browser/Windows sessions.
 

@@ -8,27 +8,38 @@ The app has three sections in the sidebar: **Connect**, **Rules** and **Rule bui
 not part of the desktop app at present; onboarding remains available from the command line
 (`py -m sentinel_app.lighthouse_onboarding --help`). The status bar shows the app version,
 **About Sentinel Workspace** at the foot of the sidebar shows the version, the Python and Tk
-builds and the app data folder, and a welcome banner on Connect points a new analyst at the
-two things to set up until a client or a rule library exists.
+builds (Tk with its patch level, such as 8.6.15) and the app data folder, and a welcome banner
+on Connect points a new analyst at the two things to set up until a client or a rule library
+exists. **Help & prerequisites** (or F1) opens this guide inside the app, in the packaged exe
+too; **Open license** in About shows the license the same way.
+
+Only one copy of the app runs at a time: starting it again brings the open window forward.
 
 ## Connect
 
 1. Choose a saved **Client**, or select **New client** to add one with a name and an
-   optional tenant ID or domain. The **⋯** menu saves an edited tenant to the client or
-   removes the client (only the local entry). Switching clients while connected asks first.
+   optional tenant ID or domain. With the list focused, type the first letters of a client's
+   name to jump to it. The **⋯** menu saves an edited tenant to the client or removes the
+   client (only the local entry, after a red **Remove** confirmation). Switching clients
+   clears the selection without asking; Session activity notes the switch.
 2. The tenant line shows the client's saved tenant; select **Change** to edit it. Leave it
    blank to discover every directory your account can access. Choose **Browser** or
    **Windows account** as the sign-in method.
-3. Select **Sign in with Microsoft** (or press Enter in the tenant field) and complete
-   sign-in and MFA. While Microsoft is waiting, a panel offers **Bring window forward**
-   and **Cancel sign-in**.
+3. Select **Sign in to <client>** (**Sign in with Microsoft** when no client is chosen), or
+   press Enter in the tenant field, and complete sign-in and MFA. While Microsoft is
+   waiting, a panel offers **Bring window forward** and **Cancel sign-in**. If sign-in
+   fails, a red banner under the button explains why in plain words; **Copy details**
+   copies Microsoft's full message.
 4. Select the subscription and Log Analytics workspace. Workspaces refresh when the
-   subscription changes. The **Workspace** card lists the tenant, subscription, resource
-   group, workspace name and workspace ID; **Copy details** copies them. The lists,
-   **Copy details** and **View analytics rules** become available once there is something
-   to select. **Refresh** beside each list asks Azure again (for example after access was
-   just granted), and **Can't see a subscription?** runs a read-only check for a
-   subscription ID copied from the portal.
+   subscription changes. After sign-in the app picks the subscription and workspace you
+   used last for that client (remembered on this PC), or else the default subscription and
+   its first workspace. **Copy details**, **View analytics rules** (the one blue button
+   once you are connected) and, for Azure Government, **Onboard GCC High…** sit right
+   under the lists. **+ Show workspace IDs** opens the tenant, subscription, resource group,
+   workspace name and workspace ID (the app remembers whether it is open); right-click an
+   ID to copy just that one, or use **Copy details** for all of them. **Refresh** beside
+   each list asks Azure again (for example after access was just granted), and **Can't see
+   a subscription?** runs a read-only check for a subscription ID copied from the portal.
 
 **Open CyberQP** at the foot of the Sign in card opens the CyberQP portal. Activate JIT
 access through your organization's normal process before connecting; opening CyberQP does
@@ -54,15 +65,19 @@ severity or type (Ctrl+F), filter by state, and select a row to see its descript
 schedule, MITRE mapping, query and raw configuration. **Refresh** (F5) reads Azure again;
 **Export all…** writes a ZIP with raw JSON, CSV and collection details for every loaded
 rule. Missing enabled flags are shown as Not specified; incomplete or denied reads are
-labelled. This view does not list generated alerts or modify rules. Azure public cloud only.
+labelled, with a plain explanation when the reason is known (for example, which role your
+account needs). This view does not list generated alerts or modify rules. Azure public
+cloud only. Right-click a value in the details, such as the rule ID, to copy it.
 
 **Rule library** reads clients, rules and assignments from the GitHub repository set on
 Connect (**GitHub**) or from a **Folder on this PC**. It needs no Azure sign-in.
-**Refresh library** (F5) reads it again. Select a rule and choose **Edit selected rule**,
+**Refresh library** (F5) reads it again; if it can't be read, a red banner in the source
+card says why and how to fix it. Select a rule and choose **Edit selected rule**,
 or double-click it, to open it in the Rule builder. The Library section offers
 **Assign to clients…**, **Preview and deploy…**, **Library issues**, **Open saved
 assignment…** and **Preview & deployment history…**; see
-[the repository pilot guide](REPOSITORY-PILOT.md).
+[the repository pilot guide](REPOSITORY-PILOT.md). The history lists request and check times
+in your local time; point at a time to see it in UTC, as the receipts store it.
 
 ## Rule builder
 
@@ -81,12 +96,17 @@ the rule against the library, shows exactly what will change (added lines green,
 lines red) and the clients that use the rule, asks why the rule is changing, then opens a
 pull request that is ready for a teammate's review; your note becomes its description.
 The library and file path sit under **Where it will be saved**. New rules start disabled.
-Closing the app asks before discarding an unsaved draft.
+Closing the app asks before discarding an unsaved draft. Every 30 seconds the builder also
+keeps a recovery copy of unsaved work (`desktop-data/drafts/.autosave.rule-draft.json`). If
+the app or the PC stops before you save, the next start offers to restore it once; saving the
+draft or closing the app normally removes the copy.
 
 When a check fails, the builder opens the step with the problem, outlines the field in red
-and explains the fix under it. On opening the Rule builder, the app checks GitHub sign-in:
-a bar offers **Sign in to GitHub** (or **Go to Connect** when no library is set), and the
-footer shows the signed-in account. **My submissions…** lists what you submitted from this
+and explains the fix under it. On opening the Rule builder, the app checks GitHub sign-in: a
+pill in the toolbar shows **GitHub: <account>** (the Rule library card on Connect says the
+same) or **GitHub: not signed in** with a **Sign in to GitHub** action (**Go to Connect**
+when no library is set). The form stays editable while the app reads something in the
+background. **My submissions…** lists what you submitted from this
 PC and asks GitHub for each one's current state (GET requests only): waiting for review,
 changes requested, approved, merged or closed. **View changes** reopens one and **Open in
 GitHub** opens its pull request.
@@ -123,17 +143,46 @@ login fails with AADSTS700213, compare it with **Actions > Inspect Azure trust s
 
 Tab navigates controls; Enter/Space activates a focused sidebar item or option, and the
 arrow keys move within a view switch. Dialogs close with Esc and run their main action
-with Enter. Pages scroll at smaller window sizes; the window size is remembered. The
-header shows the selected workspace and tenant, and the sidebar shows the signed-in
-account. The status bar reports Ready or Working; a thin activity line glides under the
-header while work runs, and lists show the same line in place of their rows while they
-load. The status bar keeps to one line: a long message is shortened with an ellipsis, and
-pointing at it shows the full text. Full errors remain in their dialogs and Session
-activity. Empty lists and text areas say what will appear in them and, where it helps,
-offer the action that fills them.
+with Enter. Pages scroll at smaller window sizes, smoothly with a touchpad. The window
+always fits the screen's work area at any display scaling (it opens maximised when the
+default size doesn't fit), reopens where you left it on whichever monitor that was, and
+remembers whether it was maximised. The header names the client and workspace on every
+page (point at it for the tenant and subscription IDs), the window title and taskbar name
+the client once a workspace is chosen, and the sidebar shows the signed-in Microsoft
+account. The status bar reports Ready or Working; tasks that take more than a moment show a
+thin activity line under the header and grey the buttons that start work, while search
+boxes and the Rule builder's fields stay usable. Lists show the same line in place of their
+rows while they load. The status bar keeps to one line: a long message is shortened with an
+ellipsis, and pointing at it shows the full text. When a task fails, a dialog explains what
+to do in plain words, with the full message under **Copy details** and in Session activity.
+Empty lists and text areas say what will appear in them and, where it helps, offer the
+action that fills them.
+
+If something unexpected goes wrong inside the app, the status bar says so, Session activity
+shows the details, and they are also written to `desktop-data/logs/errors.log` (kept under
+1 MB) for whoever supports you.
 
 Client profiles, settings, drafts and submission records stay in desktop-data. Exports are
-written to the folder you choose.
+written to the folder you choose. The window layout, the last workspace per client and
+similar view choices are kept in `desktop-data/ui-state.json`.
+
+## Keyboard shortcuts
+
+- **F1** opens this guide.
+- **Ctrl+1**, **Ctrl+2** and **Ctrl+3** open Connect, Rules and Rule builder.
+- **Ctrl+F** goes to the search box on Rules, or to the client list on Connect.
+- **F5** refreshes the current page: subscriptions on Connect, the rules or the library on
+  Rules, and the GitHub sign-in check in the Rule builder.
+- **Ctrl+N** starts a new rule, and **Ctrl+S** saves the draft in the Rule builder.
+- **Ctrl+Page Down** and **Ctrl+Page Up** move to the next and previous Rule builder step.
+- In the Query box, **Tab** indents and **Ctrl+Tab** moves on; in other text boxes **Tab**
+  moves on.
+- In a list, the arrow keys move the selection, **Enter** opens the row's details (in the rule
+  library, the rule in the Rule builder) and **Ctrl+C** copies the selected rows.
+- In the client list, type the first letters of a name to choose that client.
+- In a dialog, **Enter** runs the blue button and **Esc** closes the dialog.
+- Right-click a text box for Cut, Copy, Paste and Select all, a list row for its copy actions,
+  or an ID in a details panel to copy it.
 
 ## Build a Windows app (.exe)
 
@@ -144,7 +193,9 @@ PyInstaller. It first runs `scripts\make_build_assets.py`, which draws the app i
 uses, so the icon in Explorer, the taskbar and the window title bar match and the file's
 Details tab shows the product name and version. The .exe keeps its data in a `desktop-data`
 folder beside it (or under `%LOCALAPPDATA%\Sentinel Workspace` when that folder is
-read-only). Azure CLI and GitHub CLI are still needed on each PC.
+read-only). The guide, the templates and the LICENSE are bundled inside it, and it is built
+without UPX compression, which antivirus tools often flag. Azure CLI and GitHub CLI are
+still needed on each PC.
 
 ### Client slug and workspace label length
 
@@ -176,7 +227,7 @@ applications. No sign-in credentials or page contents are read by this helper.
 ## Microsoft asks for MFA after sign-in
 
 If Azure returns AADSTS50076, InteractionRequired, or a recognized revoked-session
-error, the app offers **Complete Microsoft authentication**. Accept to open a fresh
+error, the app asks **Complete Microsoft authentication?**. Select **Open sign-in** to open a fresh
 app session for the affected client, using the selected browser/account-window
 method and the appropriate Azure management or Microsoft Graph scope. If Azure CLI
 provides a supported claims challenge, it is passed through without logging its payload.

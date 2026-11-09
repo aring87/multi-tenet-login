@@ -7,7 +7,8 @@ from unittest.mock import patch
 from sentinel_app import desktop_app as ui
 from sentinel_app.preview_workflow import PreviewService
 from sentinel_app.workflow_history import WorkflowHistoryService
-from sentinel_app.workflow_history_dialog import WorkflowHistoryDialog
+from sentinel_app.workflow_history_dialog import WorkflowHistoryDialog, local_time, utc_time
+from datetime import datetime, timezone
 from test_preview_workflow import PreviewGitHub, REPO, EXISTING
 
 
@@ -57,9 +58,21 @@ class WorkflowHistoryDialogTests(unittest.TestCase):
         self.dialog.rows.append(dict(file='older.preview.json',record=record,mode='preview'));self.dialog.render()
         created=lambda:[self.dialog.table.set(item,'created') for item in self.dialog.table.get_children()]
         self.dialog.table.toggle_sort('created')
-        self.assertEqual(created(),sorted(created()));self.assertEqual(self.dialog.table.heading('created','text'),'Requested (UTC) ▲')
+        self.assertEqual(created(),sorted(created()));self.assertEqual(self.dialog.table.heading('created','text'),'Requested ▲')
         self.dialog.table.toggle_sort('created');self.assertEqual(created(),sorted(created(),reverse=True))
         self.search('example');self.assertEqual(created(),sorted(created(),reverse=True))
+
+    def test_times_are_local_with_utc_behind_them(self):
+        moment=datetime(2026,11,2,14,20,tzinfo=timezone.utc)
+        self.assertEqual(local_time(moment.isoformat()),moment.astimezone().strftime('%Y-%m-%d %H:%M'))
+        self.assertEqual(utc_time(moment.isoformat()),'2026-11-02 14:20 UTC')
+        self.assertEqual(utc_time('2026-11-02T14:20:00Z'),'2026-11-02 14:20 UTC')
+        self.assertEqual((local_time('soon'),utc_time('soon')),('soon',''))
+        record=self.dialog.rows[0]['record']
+        self.assertEqual(self.dialog.table.set('0','created'),local_time(record['created_at']))
+        self.select();self.assertIn('Requested: '+local_time(record['created_at'])+' ('+utc_time(record['created_at'])+')',
+                                    self.dialog.detail.get('1.0','end'))
+        self.assertNotIn('UTC',self.dialog.runs.heading('checked','text'))
 
     def test_selected_request_shows_targets_inputs_and_original_revision(self):
         self.assertFalse(self.dialog.runs_frame.winfo_manager())  # The details have the room until there are runs.

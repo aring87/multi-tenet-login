@@ -11,48 +11,14 @@ from tkinter import ttk
 import webbrowser
 
 from . import ui_kit as kit
+from .advice import FRIENDLY, friendly  # noqa: F401  (FRIENDLY kept for older imports)
 from .desktop_theme import COLORS, FONTS, px
 from .repository_reviews import ReviewService, diff
 from .rule_drafts import validated_yaml
+from .rules_page import CopyValues
 
 STAGES = ("Check", "Submit", "Teammate approves", "Deployed")
 PULL_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)")
-
-# Plain-language guidance for the review errors analysts meet most often.
-# The original message is always kept in Session activity for engineers.
-FRIENDLY = (
-    ("already exists or its source is stale",
-     "This rule's file is already in the library, or the library changed since you opened the rule. "
-     "Use Edit existing rule in the Rule builder to start from the latest version."),
-    ("rule ID already exists",
-     "This rule is already in the library. Use Edit existing rule in the Rule builder to change it instead of adding a copy."),
-    ("original repository rule is missing",
-     "The rule you started from is no longer at that location in the library. Use Edit existing rule to open it again."),
-    ("needs write access",
-     "Your GitHub account can view the rule library but cannot submit to it. Ask a repository admin for write access."),
-    ("catalog is incomplete or invalid",
-     "Submissions are paused because some library files have problems. Ask an engineer to check "
-     "Rules > Rule library > Library issues."),
-    ("no file changes to submit",
-     "Nothing has changed compared with the library version of this rule."),
-    ("repository changed after preview",
-     "Someone updated the library while you were reviewing. Select Check again, then submit."),
-    ("private detection repository",
-     "That repository is not the private rule library. Check the repository under Where it will be saved."),
-    ("GitHub read failed", "Couldn't read the rule library with your GitHub account. Check that you are signed in "
-     "(Connect > Rule library > Sign in to GitHub) and have access to the repository."),
-    ("GitHub request failed", "GitHub did not accept the request. Check that you are signed in "
-     "(Connect > Rule library > Sign in to GitHub) and have write access to the repository."),
-    ("GitHub CLI is not installed", "GitHub CLI is not installed on this PC. Ask your administrator to install it."),
-    ("timed out", "GitHub took too long to answer. Check your connection, then try again."),
-)
-
-
-def friendly(message):
-    for needle, advice in FRIENDLY:
-        if needle.casefold() in message.casefold():
-            return advice
-    return message
 
 
 def pull_reference(url):
@@ -100,7 +66,8 @@ class ReviewDialog:
 
         self.notice = tk.StringVar()
         self.banner = kit.Banner(body, self.notice); self.banner.pack(fill="x", pady=(0, px(14)))
-        self.summary = kit.KeyValues(body, key_width=16); self.summary.pack(fill="x")
+        self.summary = CopyValues(body, key_width=16, copied=lambda key: self.app.flash(key + " copied."))
+        self.summary.pack(fill="x")
 
         self.actions, buttons = kit.action_row(body, primary=("Submit for approval", self.submit),
                                                secondary=(("Check", self.prepare),), close=("Close", self.close),

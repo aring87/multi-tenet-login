@@ -3,6 +3,7 @@ import tempfile
 import tkinter as tk
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sentinel_app import desktop_app as ui
@@ -32,10 +33,58 @@ class DesignTests(unittest.TestCase):
         self.app.workspace=dict(WORKSPACE);self.app.identity.set("Synthetic workspace")
         self.assertIn(WORKSPACE["workspace_name"],self.app.workspace_context.get())
         self.app.clear_selection()
-        self.assertIn("No workspace selected",self.app.workspace_context.get())
+        self.assertEqual(self.app.workspace_context.get(),"No client selected")
+
+    def test_header_chip_names_the_client_on_every_page(self):
+        app=self.app;chip=app.workspace_context.get
+        app.clients=[dict(name="Acme Corporation",tenant=WORKSPACE["tenant_id"])];app.refresh_clients()
+        self.assertEqual(chip(),"Acme Corporation  ·  not signed in");self.assertEqual(self.root.title(),"Sentinel Workspace")
+        self.assertEqual(app.signin_main.cget("text"),"Sign in to Acme Corporation")
+        app.session=SimpleNamespace(signed_in=True,account={"user":{"name":"analyst@example.com"}});app.render_session()
+        self.assertEqual(chip(),"Acme Corporation  ·  choose a workspace")
+        self.assertEqual(app.session_detail.cget("text"),"analyst@example.com")  # The sidebar names the account only.
+        app.workspace=dict(WORKSPACE);app.identity.set("Synthetic workspace")
+        for page,view in (("connect","workspace"),("rules","workspace"),("rules","repository"),("builder","workspace")):
+            app.show_page(page);app.rule_view.set(view);self.root.update()
+            self.assertEqual(chip(),"Acme Corporation  ·  law-example-sentinel",(page,view))
+        self.assertEqual(self.root.title(),"Acme Corporation — Sentinel Workspace")
+        tip=app.context_label.tooltip_text
+        self.assertIn(WORKSPACE["tenant_id"],tip);self.assertIn(WORKSPACE["subscription_id"],tip)
+        self.assertEqual(app.session_detail.cget("text"),"analyst@example.com")
+        # One blue button once connected: View analytics rules leads and sign-in steps back.
+        self.assertEqual(str(app.signin_main.cget("style")),"Secondary.TButton")
+        self.assertEqual(app.signin_main.cget("text"),"Sign in with Microsoft")
+        app.clear_selection();self.assertEqual(str(app.signin_main.cget("style")),"Primary.TButton")
+        self.assertEqual(self.root.title(),"Sentinel Workspace")
+
+    def test_busy_visuals_wait_so_quick_tasks_do_not_flash(self):
+        app=self.app;button=app.signin_main
+        app.set_busy(True)
+        self.assertTrue(app.busy);self.assertIn("Ready",app.activity_badge.cget("text"))
+        self.assertEqual(str(button.cget("state")),"normal");self.assertFalse(app.progress.winfo_manager())
+        app.set_busy(False)  # Done within the delay: nothing was greyed.
+        self.root.after(ui.BUSY_DELAY_MS+60);self.root.update()
+        self.assertIn("Ready",app.activity_badge.cget("text"));self.assertEqual(str(button.cget("state")),"normal")
+        app.set_busy(True);self.root.after(ui.BUSY_DELAY_MS+60);self.root.update()
+        self.assertIn("Working",app.activity_badge.cget("text"));self.assertEqual(str(button.cget("state")),"disabled")
+        self.assertTrue(app.progress.winfo_manager())
+        app.set_busy(False)
+        self.assertEqual(str(button.cget("state")),"normal");self.assertFalse(app.progress.winfo_manager())
+
+    def test_searching_and_editing_stay_available_while_busy(self):
+        app=self.app
+        self.assertIn(app.rules_page.search_entry,app.inputs);self.assertIn(app.catalog_page.search_entry,app.inputs)
+        self.assertNotIn(app.catalog_page.source_entry,app.inputs)  # The source names what a load reads.
+        app.set_busy(True,immediate=True)
+        for widget in (app.rules_page.search_entry,app.catalog_page.search_entry,app.rule_builder.widgets["name"],
+                       app.rule_builder.texts["query"]):
+            self.assertEqual(str(widget.cget("state")),"normal",widget)
+        self.assertEqual(str(app.catalog_page.source_entry.cget("state")),"disabled")
+        self.assertEqual(str(app.clientbox.cget("state")),"disabled")
+        app.set_busy(False)
 
     def test_busy_state_disables_controls_and_restores_readonly_fields(self):
-        self.app.set_busy(True)
+        self.app.set_busy(True,immediate=True)
         self.assertIn("Working",self.app.activity_badge.cget("text"))
         self.assertEqual(str(self.app.subbox.cget("state")),"disabled")
         self.app.subscriptions=[{"id":"synthetic"}]
@@ -89,29 +138,40 @@ class DesignTests(unittest.TestCase):
             if change=="workspace":self.app.workspace=dict(WORKSPACE,workspace_id="other")
             elif change=="session":self.app.session=object()
             else:page.reset()
-            with patch("sentinel_app.rules_page.messagebox.showinfo") as info, \
+            with patch("sentinel_app.rules_page.kit.alert") as info, \
                  patch("sentinel_app.rules_page.filedialog.asksaveasfilename") as dialog:
                 page.export()
             info.assert_called_once(); dialog.assert_not_called()
 
     def test_partial_export_requires_acknowledgment_and_cancel_writes_nothing(self):
         page=self.load_rules_for_export("partial")
-        with patch("sentinel_app.rules_page.messagebox.askyesno",return_value=False) as confirm, \
+        with patch("sentinel_app.rules_page.kit.confirm",return_value=False) as confirm, \
              patch("sentinel_app.rules_page.filedialog.asksaveasfilename") as dialog, \
              patch("sentinel_app.rules_page.export_rules") as export:
             page.export()
         confirm.assert_called_once(); dialog.assert_not_called(); export.assert_not_called()
-        with patch("sentinel_app.rules_page.messagebox.askyesno",return_value=True), \
+        with patch("sentinel_app.rules_page.kit.confirm",return_value=True), \
              patch("sentinel_app.rules_page.filedialog.asksaveasfilename",return_value=""), \
              patch("sentinel_app.rules_page.export_rules") as export:
             page.export()
         export.assert_not_called()
 
+    def test_rule_read_errors_say_what_to_do(self):
+        app=self.app;app.session=object();app.workspace=dict(WORKSPACE)
+        for raw,words in (("AuthorizationFailed: no authorization to perform action 'Microsoft.SecurityInsights/alertRules/read'",
+                           "Microsoft Sentinel Reader"),
+                          ("Evidence collection supports Azure public cloud only.","Azure Government (GCC High)")):
+            with patch.object(app,"work",side_effect=lambda title,task,done,**kw:done(dict(records=[],status="error",error=raw))):
+                app.rules_page.load()
+            self.assertIn(words,app.rules_page.notice.get());self.assertTrue(app.rules_page.banner.winfo_manager())
+        self.assertNotIn("Evidence collection",app.rules_page.notice.get())
+
     def test_repository_view_needs_no_workspace_and_switches_back(self):
         self.app.workspace=dict(WORKSPACE);self.app.show_page("rules");self.root.update()
         self.assertIn(WORKSPACE["workspace_name"],self.app.workspace_context.get())
         self.app.rule_view.set("repository");self.root.update()
-        self.assertIn("Azure sign-in is not required",self.app.workspace_context.get())
+        # The library needs no Azure sign-in, but the chip still names where the analyst is connected.
+        self.assertIn(WORKSPACE["workspace_name"],self.app.workspace_context.get())
         self.assertTrue(self.app.catalog_page.tree.winfo_ismapped())
         self.assertFalse(self.app.rules_page.tree.winfo_ismapped())
         self.app.rule_view.set("workspace");self.root.update()

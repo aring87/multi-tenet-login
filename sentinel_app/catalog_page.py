@@ -4,13 +4,14 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog
 from . import ui_kit as kit
+from .advice import friendly
 from .desktop_theme import px
 from .repository_catalog import GitHubReader, load_local, state
 from .preview_dialog import PreviewDialog
 from .assignment_dialog import AssignmentDialog
 from .workflow_history_dialog import WorkflowHistoryDialog
 from .rule_assignments import load_request as load_assignment_request
-from .rules_page import STATES, STATE_ORDER, Split, RawConfig, detail_pane, flow, fit_columns, link_search
+from .rules_page import STATES, STATE_ORDER, CopyValues, Split, RawConfig, detail_pane, flow, fit_columns, link_search
 
 HEADINGS = {"Clients": ("Client", "State", "Workspace", "Target"), "Rules": ("Rule", "State", "Severity", "File")}
 # Narrow starting widths that stretch, as in the workspace list (see rules_page.COLUMNS).
@@ -132,7 +133,7 @@ class CatalogPage:
         self.view_bar.grid(row=0, column=0, sticky="w")
         self.search_entry = ttk.Entry(bar, textvariable=self.search)
         self.search_entry.grid(row=0, column=1, sticky="ew", padx=(px(12), 0))
-        app.controls.append((self.search_entry, "normal"))
+        app.inputs.append(self.search_entry)  # Searching stays possible while a task runs.
         kit.placeholder(self.search_entry, self.search, "Search the library  (Ctrl+F)", search=True)
         self.filter_bar = kit.Segmented(bar, self.filter, STATES, compact=True)
         self.place_filters = flow(bar, self.filter_bar, 2)
@@ -162,7 +163,7 @@ class CatalogPage:
         self.split.add(detail.frame, weight=2)
         self.detail_area, self.detail_empty = detail_pane(detail)
         inner = self.detail_area.inner
-        self.facts = kit.KeyValues(inner, key_width=12)
+        self.facts = CopyValues(inner, key_width=12, copied=lambda key: self.app.flash(key + " copied."))
         self.assigned_label = kit.section_label(inner, "Assigned rules")
         self.assigned_frame, self.assigned, _ = kit.table(
             inner, (("who", "Rule", 80, True), ("state", "Effective state", 110, False), ("overrides", "Overrides", 110, False)),
@@ -222,7 +223,7 @@ class CatalogPage:
     def failed(self, error):
         """The library couldn't be read: say why in the source card, with the way to fix it."""
         github = self.mode.get() == "GitHub repository"
-        self.error.set("The rule library couldn't be read. " + str(error))
+        self.error.set("The rule library couldn't be read. " + friendly(error, repo=self.source.get().strip() if github else None))
         self.error_banner.set_action(*(("Go to Connect", self.app.show_github_settings) if github
                                        else ("Choose folder…", self.choose)))
         if not self.error_banner.winfo_manager(): self.error_banner.pack(fill="x", pady=(px(12), 0))

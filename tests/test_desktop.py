@@ -154,15 +154,15 @@ class DesktopTests(unittest.TestCase):
     def test_invalid_tenant_stops_before_session_or_login(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root);app.vars["tenant"].set("azure.portal.com")
-        with patch.object(ui.messagebox,"showerror") as error,patch.object(ui,"Session") as session:
+        with patch.object(ui.kit,"alert") as error,patch.object(ui,"Session") as session:
             app.login()
             session.assert_not_called()
-            self.assertIn("Directory (tenant) ID",error.call_args.args[1])
+            self.assertIn("Directory (tenant) ID",error.call_args.args[2])
 
     def test_invalid_tenant_not_saved(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.vars["tenant"].set("portal.azure.com")
-        with patch.object(ui.messagebox,"showerror"):
+        with patch.object(ui.kit,"alert"):
             app.save_client()
         self.assertFalse(app.clientfile.exists())
 
@@ -311,7 +311,7 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         before=copy.deepcopy(app.clients)
-        with patch.object(ui.messagebox,"askyesno",return_value=False):
+        with patch.object(ui.kit,"confirm",return_value=False):
             app.delete_client()
         self.assertEqual(app.clients,before)
         self.assertFalse(app.clientfile.exists())
@@ -325,8 +325,10 @@ class DesktopTests(unittest.TestCase):
         state=retained/"onboarding.state.json"
         state.write_text('{"keep":true}')
         app.session=FakeSession()
-        with patch.object(ui.messagebox,"askyesno",return_value=True):
+        with patch.object(ui.kit,"confirm",return_value=True) as confirm:
             app.delete_client()
+        # Removing is the red button, and the keyboard starts on Cancel.
+        self.assertEqual(confirm.call_args.kwargs,dict(ok="Remove",destructive=True))
         self.assertEqual(json.loads(app.clientfile.read_text()),[])
         self.assertEqual(app.clients,[])
         self.assertEqual(app.vars["client_name"].get(),"")
@@ -339,7 +341,7 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         app.clients.append({"name":"Second client","slug":"second-client","tenant":TENANT})
-        with patch.object(ui.messagebox,"askyesno",return_value=True):
+        with patch.object(ui.kit,"confirm",return_value=True):
             app.delete_client()
         self.assertEqual(app.vars["client_name"].get(),"Second client")
         self.assertEqual(app.vars["tenant"].get(),TENANT)
@@ -347,7 +349,7 @@ class DesktopTests(unittest.TestCase):
     def test_delete_blocked_during_running_operation(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.busy=True
-        with patch.object(ui.messagebox,"askyesno") as prompt:
+        with patch.object(ui.kit,"confirm") as prompt:
             app.delete_client();prompt.assert_not_called()
         self.assertEqual(len(app.clients),1)
 

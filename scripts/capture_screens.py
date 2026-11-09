@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 try:
-    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-2))  # System aware, as main() is.
 except (AttributeError, OSError):
     pass
 
@@ -34,6 +34,7 @@ from sentinel_app import desktop_app as ui  # noqa: E402
 from sentinel_app import desktop_backend as backend  # noqa: E402
 from sentinel_app import catalog_page, rule_builder_page  # noqa: E402
 from sentinel_app import ui_kit as kit  # noqa: E402
+from sentinel_app import advice  # noqa: E402
 from sentinel_app.repository_catalog import catalog  # noqa: E402
 from sentinel_app.gov_onboarding import GOV_CLOUD  # noqa: E402
 from sentinel_app.gov_onboarding_dialog import GovOnboardingDialog  # noqa: E402
@@ -204,7 +205,7 @@ def main():
     app.signin_active = True; app.signin_cancel = threading.Event(); app.signin_handoff = object()
     app.cancel_signin_button.configure(state="normal"); app.signin_button.configure(state="normal")
     app.signin_panel.pack(fill="x", pady=(ui.px(12), 0), after=app.signin_main)
-    app.set_busy(True); app.status.set("Waiting for Microsoft sign-in…"); app.render_session()
+    app.set_busy(True, immediate=True); app.status.set("Waiting for Microsoft sign-in…"); app.render_session()
     app.log("Waiting for Microsoft sign-in…"); app.log("Sign-in window check: msedge.exe — Sign in to your account (sign-in window)")
     shot(root, "02-connect-signing-in")
     app.set_busy(False); app.finish_signin()
@@ -217,16 +218,17 @@ def main():
     app.wsbox.configure(values=[r["workspace_name"] + "  ·  " + r["resource_group"] for r in app.workspaces]); app.wsbox.current(0)
     app.workspace = dict(WORKSPACE)
     app.identity.set("Signed in: analyst@example.com\n" + app.workspace_rows(dict(tenantId=TENANT, id=SUB), app.workspace))
-    app.github_pill.set("Signed in", "success"); app.github_status.set("Signed in to GitHub as aring.")
+    app.github_pill.set("GitHub: aring", "success"); app.github_status.set("Signed in to GitHub as aring.")
     app.log("Signed in. Found 2 subscriptions."); app.log("Loading workspaces…")
     app.log("Found 2 workspaces in this subscription. Selected law-example-sentinel.")
     shot(root, "03-connect-connected")
     session.cloud = GOV_CLOUD; app.sync_connection()
-    app.status.set("Couldn't finish: AADSTS50076: Due to a configuration change made by your administrator, you must use "
-                   "multi-factor authentication.")
-    app.activity_badge.set("Stopped", "danger")
+    mfa = ("AADSTS50076: Due to a configuration change made by your administrator, or because you moved to a new "
+           "location, you must use multi-factor authentication to access the resource.")
+    app.status.set("Couldn't finish: " + advice.first_sentence(advice.friendly(mfa)))
+    app.activity_badge.set("Stopped", "danger"); app.show_signin_error(mfa, advice.lookup(mfa))
     shot(root, "04-connect-gcc-high-error")
-    app.status.set("Ready."); app.activity_badge.set("Ready", "success")
+    app.status.set("Ready."); app.activity_badge.set("Ready", "success"); app.hide_signin_error()
 
     # ---- Dialogs reached from Connect
     dialog = GovOnboardingDialog(app); shot(dialog.window, "05-dialog-gcc-high-empty")
@@ -260,7 +262,8 @@ def main():
     app.show_page("rules"); app.rule_view.set("workspace"); root.update()
     page = app.rules_page; page.reset(); shot(root, "11-rules-empty")
     page.summary.set("Loading rules from law-example-sentinel…"); page.empty.show("Loading rules from law-example-sentinel…", busy=True)
-    app.set_busy(True); app.status.set("Reading analytics rules…"); shot(root, "12-rules-loading"); app.set_busy(False)
+    app.set_busy(True, immediate=True); app.status.set("Reading analytics rules…"); shot(root, "12-rules-loading")
+    app.set_busy(False)
     page.rows = RULES; page.collection = dict(records=RULES, status="collected")
     page.loaded_session = session; page.loaded_workspace = dict(WORKSPACE)
     page.build_cache(); page.render(); page.label_filters()
@@ -268,8 +271,8 @@ def main():
     shot(root, "13-rules-populated")
     first = page.tree.get_children()[0]
     page.tree.selection_set(first); page.tree.focus(first); page.selected(); root.update(); shot(root, "14-rules-detail")
-    page.show_notice("Couldn't read all the analytics rules: AuthorizationFailed: the client does not have authorization to "
-                     "perform action 'Microsoft.SecurityInsights/alertRules/read'")
+    page.show_notice(advice.friendly("AuthorizationFailed: the client does not have authorization to perform action "
+                                     "'Microsoft.SecurityInsights/alertRules/read'", workspace="law-example-sentinel"))
     page.summary.set("Some rules couldn't be read. 10 rules from law-example-sentinel.")
     shot(root, "15-rules-error"); page.banner.pack_forget()
     page.search.set("zzz"); shot(root, "16-rules-no-match"); page.search.set("")
@@ -311,7 +314,19 @@ def main():
     submissions = ReviewHistoryDialog(builder); settle(root, 800); shot(submissions.window, "32-dialog-my-submissions")
     submissions.window.destroy()
 
+    # ---- Help, a failed task, and the offer to restore unsaved builder work
+    help_window = app.open_help(); shot(help_window, "36-dialog-help"); help_window.destroy()
+    raw = "AuthorizationFailed: the client does not have authorization to perform action 'Microsoft.SecurityInsights/alertRules/read'"
+    alert = kit.MessageDialog(root, "Reading analytics rules", advice.friendly(raw, workspace="law-example-sentinel"),
+                              details=raw, tone="danger")
+    shot(alert.window, "37-dialog-task-error"); alert.window.destroy()
+    restore = kit.MessageDialog(root, "Restore unsaved rule?", "Sentinel Workspace closed before your changes to "
+                                "“Brute force against Entra ID accounts” were saved. Restore the copy kept on "
+                                "02 Nov 2026 at 14:20?", tone="info", icon="help", ok="Restore", cancel="Discard")
+    shot(restore.window, "38-dialog-restore"); restore.window.destroy()
+
     # ---- A large window (the shots above are at the smallest size the app allows)
+    if not app.show_ids: app.toggle_ids()  # The workspace IDs, opened.
     root.geometry("1700x1100+20+10"); app.show_page("connect"); settle(root, 500); shot(root, "33-connect-wide")
     app.show_page("rules"); app.rule_view.set("workspace"); settle(root, 500); shot(root, "34-rules-wide")
     app.show_page("builder"); settle(root, 500); shot(root, "35-builder-wide")

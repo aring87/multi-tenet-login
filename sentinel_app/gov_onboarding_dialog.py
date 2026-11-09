@@ -8,6 +8,7 @@ from . import ui_kit as kit
 from .desktop_backend import gov_config_from_workspace, gov_run
 from .desktop_theme import COLORS, px
 from .gov_onboarding import DEFAULT_LABEL
+from .rules_page import CopyValues
 
 DEFAULT_RULE = "rules/sentinel/testing/pipeline-connection-test.yml"
 PR_LINK = re.compile(r"Review pull request: (https://github\.com/\S+)")
@@ -47,7 +48,7 @@ class GovOnboardingDialog:
         self.notice = tk.StringVar(value="Check the client folder name, then select Preview.")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
 
-        details = kit.KeyValues(body)
+        details = CopyValues(body, copied=lambda key: app.flash(key + " copied."))  # Right-click a value to copy it.
         details.set([["Tenant", self.workspace["tenant_id"]], ["Subscription", self.workspace["subscription_id"]],
                      ["Resource group", self.workspace["resource_group"]], ["Workspace", self.workspace["workspace_name"]]])
         details.pack(fill="x", pady=(0, px(12)))

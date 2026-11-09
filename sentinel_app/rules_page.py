@@ -3,8 +3,9 @@ import json
 from copy import deepcopy
 from datetime import datetime, timezone
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
 from . import ui_kit as kit
+from .advice import lookup as advice_for
 from .desktop_theme import COLORS, px
 from .rule_export import export_rules
 from .workspace_tools import list_rules, rule_values
@@ -170,6 +171,35 @@ def detail_pane(card):
     return area, empty
 
 
+class CopyValues(kit.KeyValues):
+    """kit.KeyValues whose values each copy from a right-click menu, so a single ID can be taken
+    without copying every row. ``copied(key)`` is called after a copy, to confirm it."""
+
+    def __init__(self, parent, copied=None, **options):
+        super().__init__(parent, **options)
+        self.copied, self.keys, self.menu = copied, [], None
+
+    def set(self, rows, mono=None):
+        rows = [tuple(row) for row in rows]
+        super().set(rows, mono)
+        self.keys = [key for key, _ in rows]
+        for key, label in zip(self.keys, self.values):
+            label.bind("<Button-3>", lambda event, k=key, w=label: self.show_menu(event, k, w), add="+")
+
+    def show_menu(self, event, key, label):
+        if self.menu is None: self.menu = kit.popup_menu(self.winfo_toplevel())  # Outlives set(), which clears children.
+        self.menu.delete(0, "end")
+        name = key if key[:2].isupper() else key[:1].lower() + key[1:]  # 'Copy tenant ID', 'Copy ID'.
+        self.menu.add_command(label="Copy " + name, command=lambda: self.copy(key, label))
+        try: self.menu.tk_popup(event.x_root, event.y_root)
+        finally: self.menu.grab_release()
+        return "break"
+
+    def copy(self, key, label):
+        self.clipboard_clear(); self.clipboard_append(str(label.cget("text")))
+        if self.copied: self.copied(key)
+
+
 class Split(ttk.Panedwindow):
     """A list beside its details. The sash starts at ``fraction`` of the width the first time the
     split is shown, keeps that share as the window is resized, and stays where both panes remain
@@ -267,7 +297,7 @@ class RulesPage:
         self.filter = tk.StringVar(value="All states")
         self.search_entry = ttk.Entry(bar, textvariable=self.search)
         self.search_entry.grid(row=0, column=0, sticky="ew")
-        app.controls.append((self.search_entry, "normal"))
+        app.inputs.append(self.search_entry)  # Searching stays possible while a task runs.
         kit.placeholder(self.search_entry, self.search, "Search rules  (Ctrl+F)", search=True)
         self.filter_bar = kit.Segmented(bar, self.filter, STATES, compact=True)
         self.place_filters = flow(bar, self.filter_bar, 1)
@@ -300,7 +330,7 @@ class RulesPage:
         self.description = tk.StringVar()
         self.description_label = kit.wrap_to_parent(ttk.Label(inner, textvariable=self.description, style="Body.TLabel",
                                                               justify="left", wraplength=px(300)), minimum=px(120))
-        self.overview = kit.KeyValues(inner, key_width=12)
+        self.overview = CopyValues(inner, key_width=12, copied=lambda key: self.app.flash(key + " copied."))
         self.query_label = kit.section_label(inner, "Query", action=("Copy query", lambda: self.copy(self.query, "Query")))
         self.query_frame, self.query = kit.text_area(inner, 8, readonly=True)
         self.raw = RawConfig(inner, lambda: self.copy(self.details, "Rule configuration"))
@@ -486,9 +516,11 @@ class RulesPage:
             count = len(self.rows)
             text = f"{count} rule{'s' if count != 1 else ''} from {workspace['workspace_name']}"
             if result["status"] not in ("collected", "no_records"):
-                reason = result.get("error", result["status"]).replace("_", " ")
+                raw = result.get("error", result["status"])
+                reason = raw.replace("_", " ")
                 text = "Some rules couldn't be read. " + text + "."
-                self.show_notice("Couldn't read all the analytics rules: " + reason)
+                advice = advice_for(raw, workspace=workspace["workspace_name"])
+                self.show_notice(advice or "Couldn't read all the analytics rules: " + reason)
                 app.log("Rules read for " + workspace["workspace_name"] + ": " + reason)
                 if not self.rows: self.empty.show("The rules couldn't be loaded. Select Refresh to try again.")
                 app.status.set("Couldn't read the rules for " + workspace["workspace_name"] + ".")
@@ -505,16 +537,16 @@ class RulesPage:
         app = self.app
         if app.busy: return
         if not self.current_collection():
-            messagebox.showinfo("Export all", "Load the rules for the current workspace before exporting.", parent=app.root)
+            kit.alert(app.root, "Export all", "Load the rules for the current workspace before exporting.", tone="info")
             return
         complete = self.collection.get("status") in ("collected", "no_records")
         if not complete:
             if not self.rows:
-                messagebox.showinfo("Export all", "The rules couldn't be read. Select Refresh before exporting.", parent=app.root)
+                kit.alert(app.root, "Export all", "The rules couldn't be read. Select Refresh before exporting.", tone="info")
                 return
-            if not messagebox.askyesno("Export all",
-                    "Some rules couldn't be read. Export the available rules and mark the export as incomplete?",
-                    parent=app.root): return
+            if not kit.confirm(app.root, "Export all",
+                               "Some rules couldn't be read. Export the available rules and mark the export as incomplete?",
+                               ok="Export anyway"): return
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         filename = "analytics-rules-" + self.loaded_workspace["workspace_id"] + "-" + stamp + ".zip"
         path = filedialog.asksaveasfilename(parent=app.root, title="Export all analytics rules",

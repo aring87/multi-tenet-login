@@ -111,6 +111,7 @@ class CatalogPageTests(unittest.TestCase):
         self.assertIn("example/detections", self.page.status.get())
         self.page.failed("GitHub read failed (HTTP 404)")
         self.assertTrue(self.page.form.winfo_manager())
+        self.assertIn("GitHub couldn't find example/detections for your account", self.page.error.get())  # Plain advice.
         self.assertEqual(self.page.error_banner.action_button.cget("text"), "Go to Connect")
         self.page.source.set("example/detection")  # Fixing the name: the form stays open under the typing.
         self.assertTrue(self.page.form.winfo_manager()); self.assertFalse(self.page.error_banner.winfo_manager())
@@ -185,7 +186,7 @@ class CatalogPageTests(unittest.TestCase):
             self.page.open_row()  # Enter or double-click on the row.
         self.assertEqual(edit.call_args.args[0], self.page.visible[0]["raw"])
         self.root.update(); self.assertEqual(self.app.current_page(), "builder")
-        self.app.set_busy(True)
+        self.app.set_busy(True, immediate=True)
         self.assertEqual(str(self.page.edit_button.cget("state")), "disabled")
         self.app.set_busy(False)
 

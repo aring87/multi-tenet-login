@@ -1,8 +1,10 @@
 """Guided local rule drafts with explicit validation and export."""
+import json
 import re
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from datetime import datetime, timezone
+from tkinter import ttk, filedialog
 from pathlib import Path
 
 from . import rule_drafts as drafts
@@ -21,6 +23,8 @@ LIFECYCLES = (("baseline", "Baseline"), ("production", "Production"), ("retired"
 OPERATORS = (("GreaterThan", "is more than"), ("LessThan", "is fewer than"), ("Equal", "equals"), ("NotEqual", "is not"))
 UNITS = (("minutes", 60), ("hours", 3600), ("days", 86400))
 RECENT_DRAFTS = 10
+AUTOSAVE_MS = 30000  # How often unsaved work is copied to the recovery draft.
+RECOVERY_NAME = ".autosave.rule-draft.json"  # In drafts/; never listed as a recent draft.
 TACTIC_COLUMNS = 3
 QUERY_LINES = 8
 MAX_SCHEDULE = 14 * 86400
@@ -298,6 +302,8 @@ class RuleBuilderPage:
         self.vars["kind"].trace_add("write", self.kind_changed)
         self.load_form(drafts.new_form())
         self.step_changed()
+        self.autosaved, self.recovery_offered = None, False
+        self.autosave_timer = app.root.after(AUTOSAVE_MS, self.autosave)
 
     # ------------------------------------------------------------ widgets
     def set_footer_visible(self, visible):
@@ -384,7 +390,7 @@ class RuleBuilderPage:
         for name in names:
             ticked = self.tactic_vars[name] = tk.BooleanVar()
             box = ttk.Checkbutton(grid, text=tactic_label(name), variable=ticked)
-            self.tactic_boxes.append(box); self.app.controls.append((box, "normal"))
+            self.tactic_boxes.append(box); self.app.inputs.append(box)
         grid.focus_target = self.tactic_boxes[0]
         self.flow_tactics(TACTIC_COLUMNS, grid)
         grid.bind("<Configure>", lambda event: self.flow_tactics(None, grid), add="+")
@@ -393,7 +399,7 @@ class RuleBuilderPage:
         kit.wrap_to_parent(ttk.Label(self.unknown_tactics, textvariable=self.unknown_text, style="Hint.TLabel",
                                      justify="left", width=1)).pack(side="left", fill="x", expand=True)
         remove = ttk.Button(self.unknown_tactics, text="Remove", style="Small.Ghost.TButton", command=self.remove_unknown_tactics)
-        remove.pack(side="right", padx=(px(8), 0)); self.app.controls.append((remove, "normal"))
+        remove.pack(side="right", padx=(px(8), 0)); self.app.inputs.append(remove)
         guard = {"busy": False}
         def compose(*args):
             if guard["busy"]: return
@@ -461,7 +467,7 @@ class RuleBuilderPage:
             shown.trace_add("write", to_value); var.trace_add("write", to_text)
         else:
             control = ttk.Entry(frame, textvariable=var, state="readonly" if readonly else "normal")
-        control.pack(fill="x"); self.app.controls.append((control, "readonly" if choices or readonly else "normal"))
+        control.pack(fill="x"); self.app.inputs.append(control)
         self.widgets[key], self.labels[key] = control, label
         var.trace_add("write", lambda *args: self.changed(key))
 
@@ -476,7 +482,7 @@ class RuleBuilderPage:
         spin.pack(side="left", fill="x", expand=True)
         units = ttk.Combobox(row, textvariable=unit, values=[name for name, _ in UNITS], state="readonly", width=9)
         units.pack(side="left", padx=(px(8), 0)); units.bind("<MouseWheel>", lambda event: "break")
-        self.app.controls.append((spin, "normal")); self.app.controls.append((units, "readonly"))
+        self.app.inputs.extend((spin, units))
         guard = {"busy": False}
         def compose(*args):
             if guard["busy"]: return
@@ -498,8 +504,7 @@ class RuleBuilderPage:
 
     def choice(self, parent, key, options, label, labels=None):
         var = tk.StringVar(); self.vars[key] = var
-        control = kit.Segmented(parent, var, [(value, (labels or {}).get(value, value)) for value in options],
-                                enabled=lambda: not self.app.busy)
+        control = kit.Segmented(parent, var, [(value, (labels or {}).get(value, value)) for value in options])
         control.pack(anchor="w", pady=(0, px(14)))
         self.widgets[key], self.labels[key] = control, label
         var.trace_add("write", lambda *args: self.changed(key))
@@ -514,14 +519,14 @@ class RuleBuilderPage:
     def check(self, parent, label, key):
         var = tk.BooleanVar(); self.vars[key] = var
         control = ttk.Checkbutton(parent, text=label, variable=var)
-        control.pack(anchor="w", pady=(0, px(6))); self.app.controls.append((control, "normal"))
+        control.pack(anchor="w", pady=(0, px(6))); self.app.inputs.append(control)
         self.widgets[key], self.labels[key] = control, label
         var.trace_add("write", lambda *args: self.changed(key))
 
     def make_text(self, parent, height, readonly=False, font="mono", placeholder=None, expand=True):
         frame, text = kit.text_area(parent, height, readonly=readonly, undo=not readonly, font=font, placeholder=placeholder)
         frame.pack(fill="both" if expand else "x", expand=expand, pady=(0, px(14)))
-        if not readonly: self.app.controls.append((text, "normal"))
+        if not readonly: self.app.inputs.append(text)
         return text
 
     def textbox(self, parent, label, key, height, hint=None, font="body", placeholder=None, label_hint=None, expand=True):
@@ -588,8 +593,9 @@ class RuleBuilderPage:
         self.changed(); self.steps.select(0)
 
     def can_discard(self):
-        return not self.dirty() or messagebox.askyesno("Discard changes?",
-            "This rule has unsaved changes. Discard them? Select No, then Save draft, to keep them.", parent=self.app.root)
+        return not self.dirty() or kit.confirm(self.app.root, "Discard changes?",
+            "This rule has unsaved changes. Discard them? To keep them, select Keep editing, then Save draft.",
+            ok="Discard", cancel="Keep editing", destructive=True)
 
     def new(self):
         if not self.app.busy and self.can_discard(): self.load_form(drafts.new_form())
@@ -601,7 +607,8 @@ class RuleBuilderPage:
     def recent_drafts(self):
         folder = self.data_dir / "drafts"
         if not folder.exists(): return []
-        files = sorted((p for p in folder.glob("*.rule-draft.json") if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
+        files = sorted((p for p in folder.glob("*.rule-draft.json") if p.is_file() and p.name != RECOVERY_NAME),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
         return files[:RECENT_DRAFTS]
 
     def show_open_menu(self):
@@ -694,7 +701,64 @@ class RuleBuilderPage:
             drafts.save_draft(path, self.form(), self.source); self.draft_path = str(path); self.saved = self.form()
             self.note.set("Draft saved on this PC as " + path.name.replace(".rule-draft.json", "") + ". Find it under Open….")
             self.render_state()
+            self.discard_recovery()
         except (ValueError, OSError) as error: self.error(error)
+
+    # ------------------------------------------------------------ recovery
+    def recovery_path(self):
+        return self.data_dir / "drafts" / RECOVERY_NAME
+
+    def autosave(self, schedule=True):
+        """Every AUTOSAVE_MS, copy unsaved work to the recovery draft, so a crash or a restart loses at most
+        that much; a form with nothing unsaved removes the copy. The timer is registered on the root."""
+        if schedule: self.autosave_timer = self.app.root.after(AUTOSAVE_MS, self.autosave)
+        try:
+            if not self.dirty():
+                self.discard_recovery(); return
+            form, path = self.form(), self.recovery_path()
+            if form == self.autosaved and path.exists(): return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            drafts.atomic_write(path, json.dumps({
+                "format": "sentinel-rule-draft", "version": 1, "form": form, "source": self.source,
+                "recovery": {"draft_path": self.draft_path, "saved_at": datetime.now(timezone.utc).isoformat()}},
+                indent=2) + "\n")
+            self.autosaved = form
+        except (OSError, ValueError, TypeError) as error:
+            self.app.log("Couldn't keep a recovery copy of the rule: " + str(error))
+
+    def discard_recovery(self):
+        self.autosaved = None
+        try: self.recovery_path().unlink(missing_ok=True)
+        except OSError: pass
+
+    def offer_recovery(self):
+        """At start-up, offer the recovery draft once, when it is newer than the draft it was copied from."""
+        path = self.recovery_path()
+        if self.recovery_offered or not path.is_file(): return False
+        self.recovery_offered = True
+        try:
+            form, source = drafts.read_draft(path), drafts.read_draft_source(path)
+            original = (json.loads(drafts.read_bounded(path)).get("recovery") or {}).get("draft_path")
+            original = Path(original) if isinstance(original, str) and original else None
+            kept = path.stat().st_mtime
+            if original is not None and original.is_file() and original.stat().st_mtime >= kept:
+                self.discard_recovery(); return False  # Saved normally after the copy was made.
+        except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+            self.discard_recovery(); return False
+        when = datetime.fromtimestamp(kept).strftime("%d %b %Y at %H:%M")
+        name = "“" + form["name"].strip() + "”" if form["name"].strip() else "an untitled rule"
+        if not kit.confirm(self.app.root, "Restore unsaved rule?",
+                           f"Sentinel Workspace closed before your changes to {name} were saved. Restore the copy "
+                           f"kept on {when}?", ok="Restore", cancel="Discard"):
+            self.discard_recovery(); return False
+        keep = original if original is not None and original.is_file() else None
+        self.load_form(form, str(keep) if keep else None, source)
+        try: self.saved = drafts.read_draft(keep) if keep else {}  # Unsaved compared with the last save.
+        except (OSError, ValueError): self.saved = {}
+        self.render_state()
+        self.note.set("Restored your unsaved changes from " + when + ". Select Save draft to keep them.")
+        self.app.show_page("builder")
+        return True
 
     # ------------------------------------------------------------ checks
     def validate(self):

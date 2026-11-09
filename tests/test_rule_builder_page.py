@@ -7,6 +7,7 @@ from unittest.mock import patch
 from sentinel_app import desktop_app as ui
 from sentinel_app import rule_drafts as drafts
 from sentinel_app import rule_schema
+from sentinel_app import rule_builder_page as rule_builder
 from sentinel_app.rule_builder_page import collect_issues, locate, tactic_label
 from test_rule_drafts import valid_form
 
@@ -33,13 +34,13 @@ class RuleBuilderPageTests(unittest.TestCase):
         self.assertEqual(self.page.preview.get("1.0", "end-1c"), "")
 
     def test_invalid_export_does_not_open_save_dialog(self):
-        with patch("sentinel_app.rule_builder_page.messagebox.showerror"), patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename") as save:
+        with patch("sentinel_app.rule_builder_page.kit.alert"), patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename") as save:
             self.page.export(); save.assert_not_called()
 
     def test_cancel_new_keeps_unsaved_form(self):
         self.page.vars["name"].set("Keep this")
         identity = self.page.vars["id"].get()
-        with patch("sentinel_app.rule_builder_page.messagebox.askyesno", return_value=False): self.page.new()
+        with patch("sentinel_app.rule_builder_page.kit.confirm", return_value=False): self.page.new()
         self.assertEqual(self.page.vars["name"].get(), "Keep this")
         self.assertEqual(self.page.vars["id"].get(), identity)
 
@@ -65,7 +66,7 @@ class RuleBuilderPageTests(unittest.TestCase):
 
     def test_close_can_be_cancelled_before_logout(self):
         self.page.vars["name"].set("Unsaved")
-        with patch("sentinel_app.rule_builder_page.messagebox.askyesno", return_value=False), patch.object(self.root, "destroy") as destroy:
+        with patch("sentinel_app.rule_builder_page.kit.confirm", return_value=False), patch.object(self.root, "destroy") as destroy:
             self.app.close(); destroy.assert_not_called()
 
     def test_rule_builder_has_no_azure_signin_requirement(self):
@@ -73,11 +74,14 @@ class RuleBuilderPageTests(unittest.TestCase):
         # The context chip may name the client, but the builder never asks for an Azure sign-in.
         self.assertNotIn("sign in", self.app.workspace_context.get().lower())
 
-    def test_busy_disables_authoring(self):
-        form = self.page.form(); self.app.set_busy(True)
+    def test_busy_blocks_builder_actions_but_not_typing(self):
+        form = self.page.form(); self.app.set_busy(True, immediate=True)
         self.page.new(); self.page.save(); self.page.export()
         self.assertEqual(self.page.form(), form)
-        self.assertEqual(str(self.page.texts["query"].cget("state")), "disabled")
+        # A background read no longer freezes the form; the buttons that start work wait.
+        self.assertEqual(str(self.page.texts["query"].cget("state")), "normal")
+        self.assertEqual(str(self.page.widgets["name"].cget("state")), "normal")
+        self.assertEqual(str(self.page.next_button.cget("state")), "disabled")
 
     def test_all_builder_steps_fit_at_minimum_width(self):
         from test_desktop_design import descendants
@@ -146,7 +150,7 @@ class RuleBuilderPageTests(unittest.TestCase):
         page = self.page; status = page.stepper.status
         form = valid_form(); form.update(name="", owner="Not Valid", query="SigninLogs |", tactics="DefenseEvasion, Bogus")
         page.load_form(form); self.root.update()
-        with patch("sentinel_app.rule_builder_page.messagebox.showerror") as dialog: self.assertIsNone(page.validate())
+        with patch("sentinel_app.rule_builder_page.kit.alert") as dialog: self.assertIsNone(page.validate())
         dialog.assert_not_called()
         self.assertEqual(list(page.flagged), ["name", "owner", "query", "tactics"])
         self.assertEqual(page.steps.index("current"), 0)  # The first failing step opens.
@@ -280,3 +284,86 @@ class RuleBuilderPageTests(unittest.TestCase):
                                          canvas.winfo_rooty() + canvas.winfo_height(), key)
         self.assertEqual(self.page.toolbar_right.grid_info()["row"], 0)  # Signed in, it fits on one row
         self.assertEqual(int(query.cget("height")), 8)  # and the query box is its full height again.
+
+
+class RecoveryDraftTests(unittest.TestCase):
+    """The 30-second recovery copy of unsaved builder work, and the offer to restore it."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.data = Path(self.temp.name)
+        p = patch.object(ui, "DATA", self.data); p.start(); self.addCleanup(p.stop)
+        # The start-up offer is a dialog; every test answers it explicitly.
+        self.confirm = patch.object(ui.kit, "confirm", return_value=False); self.answer = self.confirm.start()
+        self.addCleanup(self.confirm.stop)
+        self.root = None
+        self.page = self.start()
+
+    def start(self):
+        if self.root is not None: self.close()
+        self.root = tk.Tk(); self.root.withdraw(); self.app = ui.App(self.root); self.root.update()
+        self.addCleanup(self.close)
+        return self.app.rule_builder
+
+    def close(self):
+        try:
+            for timer in self.root.tk.call("after", "info"): self.root.after_cancel(timer)
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+    def test_unsaved_work_is_copied_every_30_seconds_and_a_clean_form_removes_the_copy(self):
+        page = self.page
+        self.assertEqual(rule_builder.AUTOSAVE_MS, 30000)
+        self.assertIn(page.autosave_timer, self.root.tk.call("after", "info"))  # Registered on the root.
+        page.autosave(schedule=False); self.assertFalse(page.recovery_path().exists())  # Nothing unsaved yet.
+        page.vars["name"].set("Unsaved detection")
+        page.autosave(schedule=False)
+        path = self.data / "drafts" / ".autosave.rule-draft.json"
+        self.assertEqual(page.recovery_path(), path)
+        self.assertEqual(drafts.read_draft(path)["name"], "Unsaved detection")
+        self.assertEqual(page.recent_drafts(), [])  # Never offered as a recent draft.
+        page.save(); self.assertFalse(path.exists())  # A normal save removes it.
+        page.vars["name"].set("Changed again"); page.autosave(schedule=False); self.assertTrue(path.exists())
+        page.vars["name"].set("Unsaved detection"); page.autosave(schedule=False)
+        self.assertFalse(path.exists())  # Back to what was saved: nothing to recover.
+
+    def test_next_start_offers_the_copy_once_and_restores_it_as_unsaved(self):
+        self.page.vars["name"].set("Crash survivor"); self.page.texts["query"].insert("1.0", "SigninLogs | take 5")
+        self.page.autosave(schedule=False)
+        self.answer.return_value = True
+        page = self.start()  # As if the app had stopped without closing.
+        self.assertTrue(page.offer_recovery())
+        title, message = self.answer.call_args.args[1:3]
+        self.assertEqual(title, "Restore unsaved rule?"); self.assertIn("Crash survivor", message)
+        self.assertEqual(page.vars["name"].get(), "Crash survivor")
+        self.assertIn("SigninLogs | take 5", page.texts["query"].get("1.0", "end"))
+        self.assertTrue(page.dirty()); self.assertIn("Restored your unsaved changes", page.note.get())
+        self.assertEqual(self.app.current_page(), "builder")
+        self.assertFalse(page.offer_recovery())  # Offered once.
+
+    def test_declining_discards_the_copy(self):
+        self.page.vars["name"].set("Not wanted"); self.page.autosave(schedule=False)
+        page = self.start()
+        self.assertFalse(page.offer_recovery()); self.answer.assert_called_once()
+        self.assertFalse(page.recovery_path().exists())
+        self.assertEqual(page.vars["name"].get(), "")
+
+    def test_a_draft_saved_after_the_copy_wins_without_asking(self):
+        page = self.page
+        page.vars["name"].set("Saved later"); page.save()
+        draft = Path(page.draft_path)
+        page.vars["name"].set("Saved later, edited"); page.autosave(schedule=False)
+        recovery = page.recovery_path(); stamp = recovery.stat().st_mtime
+        import os; os.utime(draft, (stamp + 5, stamp + 5))  # Saved normally after the copy was made.
+        page = self.start()
+        self.assertFalse(page.offer_recovery()); self.answer.assert_not_called()
+        self.assertFalse(recovery.exists())
+
+    def test_normal_close_removes_the_copy(self):
+        page = self.page
+        page.vars["name"].set("Closing"); page.autosave(schedule=False)
+        self.answer.return_value = True  # Discard changes? Discard.
+        with patch.object(self.root, "destroy"): self.app.close()
+        self.assertEqual(self.answer.call_args.kwargs.get("destructive"), True)
+        self.assertFalse(page.recovery_path().exists())

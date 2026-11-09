@@ -9,16 +9,18 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+import traceback
 import webbrowser
 from datetime import datetime
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from . import __version__
 from .desktop_theme import configure_theme, COLORS, FONTS, TONES, px
+from . import advice
 from . import brand
 from . import ui_kit as kit
 from .auth_recovery import AuthenticationRequired, SignInCancelled
 from .signin_process import check_cancelled
-from .rules_page import RulesPage
+from .rules_page import CopyValues, RulesPage
 from .catalog_page import CatalogPage
 from .rule_builder_page import RuleBuilderPage
 from .signin_window import create_handoff
@@ -49,6 +51,12 @@ CONTENT_MAX_WIDTH = 1320
 SCROLL_TARGET_OFFSET = 140
 PROGRESS_REPORT_EVERY = 5
 FLASH_SECONDS = 8
+BUSY_DELAY_MS = 250  # Busy visuals wait this long, so a quick local read doesn't flash every control.
+TYPEAHEAD_MS = 800  # Typing in the client box picks the first client starting with what was typed this soon.
+DEFAULT_SIZE, MINIMUM_SIZE = (1360, 900), (1120, 740)  # Window client area, 96-DPI px.
+ERROR_LOG_LIMIT = 1024 * 1024  # errors.log keeps its newest half once it reaches this size.
+TITLE = "Sentinel Workspace"
+CLIENT_CHARS = 40  # A longer client name is shortened on the sign-in button.
 
 
 def write_json(path, value):
@@ -65,20 +73,189 @@ def set_aside(path):
     except OSError: return None
 
 
+def append_error_log(path, text, limit=ERROR_LOG_LIMIT):
+    """Add ``text`` to the error log; once the log reaches ``limit`` bytes, keep only its newest half."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(text if text.endswith("\n") else text + "\n")
+    if path.stat().st_size > limit:
+        data = path.read_bytes()[-(limit // 2):]
+        newline = data.find(b"\n")
+        path.write_bytes(data[newline + 1:] if 0 <= newline < len(data) - 1 else data)  # Start on a whole line.
+
+
+# ------------------------------------------------------------------ help viewer
+INLINE = re.compile(r"(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\))")
+
+
+def markdown_blocks(source):
+    """The guide as (kind, text) blocks: h1-h3, item, code and para. Hard-wrapped lines join up,
+    so the viewer wraps them to its own width."""
+    blocks, code, joinable = [], None, False
+    for line in source.splitlines():
+        if line.strip().startswith("```"):
+            if code is None: code = []
+            else: blocks.append(("code", "\n".join(code))); code = None
+            joinable = False; continue
+        if code is not None: code.append(line); continue
+        heading = re.match(r"(#{1,3})\s+(.*)", line)
+        item = re.match(r"\s*([-*]|\d+\.)\s+(.*)", line)
+        if not line.strip(): joinable = False
+        elif heading: blocks.append(("h" + str(len(heading[1])), heading[2].strip())); joinable = False
+        elif item: blocks.append(("item", ("•" if item[1] in "-*" else item[1]) + "  " + item[2].strip())); joinable = True
+        elif joinable: blocks[-1] = (blocks[-1][0], blocks[-1][1] + " " + line.strip())
+        else: blocks.append(("para", line.strip())); joinable = True
+    if code is not None: blocks.append(("code", "\n".join(code)))
+    return blocks
+
+
+def render_markdown(text, source):
+    """Show the guide's Markdown in a Text widget: headings, bullets, **bold**, `code`, code blocks and
+    links (web links open in the browser)."""
+    c, f = COLORS, FONTS
+    text.tag_configure("h1", font=f.get("page", f["title"]), spacing1=px(4), spacing3=px(10))
+    text.tag_configure("h2", font=f["title"], spacing1=px(18), spacing3=px(6))
+    text.tag_configure("h3", font=f["strong"], spacing1=px(12), spacing3=px(4))
+    text.tag_configure("para", spacing3=px(8))
+    text.tag_configure("item", lmargin1=px(8), lmargin2=px(28), spacing3=px(4))
+    text.tag_configure("bold", font=f["strong"])
+    text.tag_configure("mono", font=f["mono"], background=c["hover"])
+    text.tag_configure("block", font=f["mono"], background=c["hover"], lmargin1=px(12), lmargin2=px(12), spacing3=px(8))
+    text.tag_configure("link", foreground=c["accent"], underline=True)
+    text.tag_bind("link", "<Enter>", lambda event: text.configure(cursor="hand2"))
+    text.tag_bind("link", "<Leave>", lambda event: text.configure(cursor=""))
+    text.configure(state="normal"); text.delete("1.0", "end")
+    links = {}
+    for kind, value in markdown_blocks(source):
+        if kind == "code":
+            text.insert("end", value + "\n", ("block",)); continue
+        for part in INLINE.split(value):
+            if not part: continue
+            if part.startswith("**") and part.endswith("**"): text.insert("end", part[2:-2], (kind, "bold"))
+            elif part.startswith("`") and part.endswith("`"): text.insert("end", part[1:-1], (kind, "mono"))
+            elif part.startswith("["):
+                label, url = re.match(r"\[([^\]]+)\]\(([^)\s]+)\)", part).groups()
+                if url.startswith("https://"):
+                    tag = "link%d" % len(links); links[tag] = url
+                    text.insert("end", label, (kind, "link", tag))
+                    text.tag_bind(tag, "<Button-1>", lambda event, u=url: webbrowser.open(u, new=2))
+                else: text.insert("end", label, (kind,))
+            else: text.insert("end", part, (kind,))
+        text.insert("end", "\n", (kind,))
+    text.configure(state="disabled")
+    return links
+
+
+# ------------------------------------------------------------------ window placement
+GEOMETRY = re.compile(r"(\d+)x(\d+)\+?(-?\d+)\+?(-?\d+)")
+
+
+def plan_geometry(remembered, area, frame, on_monitor, zoomed=False):
+    """Where the main window opens. ``area`` is the work area (left, top, width, height) of the monitor
+    it opens on, ``frame`` the title bar and borders (width, height) around the client area, and
+    ``on_monitor(x, y)`` whether a point is on any monitor. Sizes are clamped so the whole window,
+    frame included, fits the work area at any scaling; a saved position is kept when it is on a
+    monitor. Returns (width, height, x, y, min_width, min_height, zoom)."""
+    left, top, area_w, area_h = area
+    room_w, room_h = max(1, area_w - frame[0]), max(1, area_h - frame[1])
+    min_w, min_h = min(px(MINIMUM_SIZE[0]), room_w), min(px(MINIMUM_SIZE[1]), room_h)
+    width, height = px(DEFAULT_SIZE[0]), px(DEFAULT_SIZE[1])
+    x = y = None
+    match = GEOMETRY.fullmatch(str(remembered or ""))
+    if match:
+        width, height, x, y = (int(value) for value in match.groups())
+    # The default size doesn't fit (150% on a 1080p laptop, say): open maximised instead.
+    zoom = bool(zoomed) or (match is None and (width > room_w or height > room_h))
+    width, height = max(min_w, min(width, room_w)), max(min_h, min(height, room_h))
+    if x is None or not on_monitor(x + px(50), y + px(20)):
+        x, y = left + max(0, (room_w - width) // 2), top + max(0, (room_h - height) // 2)
+    else:  # On its monitor, but never under the taskbar or past an edge.
+        x, y = max(left, min(x, left + room_w - width)), max(top, min(y, top + room_h - height))
+    return width, height, x, y, min_w, min_h, zoom
+
+
+_USER32 = []
+
+
+def _user32():
+    """user32 with pointer-sized monitor handles (its own copy, so other modules' calls are unaffected)."""
+    if not _USER32:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32")
+        user32.MonitorFromPoint.restype = wintypes.HMONITOR
+        user32.MonitorFromPoint.argtypes = (wintypes.POINT, wintypes.DWORD)
+        _USER32.append(user32)
+    return _USER32[0]
+
+
+def work_area(root, x=None, y=None):
+    """The work area (left, top, width, height) of the monitor holding (x, y), or of the primary
+    monitor, without the taskbar; the whole screen when Windows can't say."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD)]
+        user32 = _user32()
+        rect = wintypes.RECT()
+        monitor = user32.MonitorFromPoint(wintypes.POINT(x, y), 0) if x is not None else None
+        info = MONITORINFO(); info.cbSize = ctypes.sizeof(info)
+        if monitor and user32.GetMonitorInfoW(wintypes.HMONITOR(monitor), ctypes.byref(info)):
+            rect = info.rcWork
+        elif not user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+            raise OSError("No work area")
+        if rect.right - rect.left > 0 and rect.bottom - rect.top > 0:
+            return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+    except (AttributeError, OSError, ImportError, ValueError, TypeError):
+        pass
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight() - px(40)
+
+
+def window_frame():
+    """The title bar and resize borders Windows adds around the client area: (width, height)."""
+    try:
+        metric = _user32().GetSystemMetrics
+        padded = metric(92)  # SM_CXPADDEDBORDER
+        sizes = (2 * (metric(32) + padded), metric(4) + 2 * (metric(33) + padded))  # SM_CXSIZEFRAME, SM_CYCAPTION, SM_CYSIZEFRAME
+        if all(0 <= size < 400 for size in sizes): return sizes
+    except (AttributeError, OSError, ImportError):
+        pass
+    return px(16), px(40)
+
+
+def on_a_monitor(x, y):
+    """Whether (x, y) is on any monitor, not just the primary one."""
+    try:
+        from ctypes import wintypes
+        return bool(_user32().MonitorFromPoint(wintypes.POINT(x, y), 0))  # MONITOR_DEFAULTTONULL
+    except (AttributeError, OSError, ImportError, ValueError, TypeError):
+        return x >= 0 and y >= 0
+
+
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Sentinel Workspace")
+        root.title(TITLE)
         configure_theme(root)
+        # Errors in Tk callbacks are logged instead of vanishing (the packaged exe has no console).
+        root.report_callback_exception = self.callback_failed
         self.state_file = DATA / "ui-state.json"
+        self.error_log = DATA / "logs" / "errors.log"
         DATA.mkdir(exist_ok=True)
         self.ui_state = self.read_state()
-        self.apply_geometry(self.ui_state.get("geometry"))
+        self.normal_geometry = None
+        self.apply_geometry(self.ui_state.get("geometry"), self.ui_state.get("zoomed") is True)
+        root.bind("<Configure>", self.track_geometry, add="+")
         self.events = queue.Queue()
         self.busy = False
+        self.busy_visual, self.busy_shown = None, False
         self.session = None
+        self.session_client = None  # The client the current Microsoft session was started for.
         self.auth_hint = None
         self.subscriptions = []
+        self.subscription_index = -1  # The subscription chosen last, restored when a choice must wait.
         self.workspaces = []
         self.workspace = None
         self.clientfile = DATA / "clients.json"
@@ -87,7 +264,10 @@ class App:
         self.clients = self.read_clients()
         self.settings = self.read_settings()
         self.vars = {}
-        self.controls = []
+        self.controls = []  # (widget, state) disabled while a task runs: buttons that start work, sign-in choices.
+        self.inputs = []  # Search boxes and form fields: left usable while a task runs (set_busy leaves them).
+        self.typed, self.typed_timer = "", None
+        self.wheel = 0
         self.operation_page = "connect"
         self.operation_title = ""
         self.flash_timer = None
@@ -107,6 +287,7 @@ class App:
         if "/" in self.github_repository():
             self.root.after(300, self.rule_builder.check_github)
         self.root.after(EVENT_POLL_MS, self.poll)
+        self.root.after(600, self.rule_builder.offer_recovery)  # Unsaved builder work from a crash, once.
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     # ---------------------------------------------------------------- storage
@@ -120,7 +301,11 @@ class App:
     def save_state(self):
         state = dict(self.ui_state)
         try:
-            if self.root.state() == "normal": state["geometry"] = self.root.geometry()
+            # A maximised window keeps the size it had before, so restoring it later returns there.
+            zoomed = self.root.state() == "zoomed"
+            if not zoomed and self.root.state() == "normal": state["geometry"] = self.root.geometry()
+            elif zoomed and self.normal_geometry: state["geometry"] = self.normal_geometry
+            state["zoomed"] = zoomed
             state["client"] = self.vars["client_name"].get()
             state["rule_view"] = self.rule_view.get()
             state["rules_sort"] = list(self.rules_page.sort)
@@ -132,20 +317,25 @@ class App:
         except (OSError, tk.TclError):
             pass
 
-    def apply_geometry(self, remembered):
-        width, height = px(1360), px(900)
-        screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        x = y = None
-        match = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", str(remembered or ""))
-        if match:
-            width, height = int(match.group(1)), int(match.group(2))
-            x, y = int(match.group(3)), int(match.group(4))
-        width = max(px(1120), min(width, screen_w - px(16)))
-        height = max(px(740), min(height, screen_h - px(80)))
-        if x is None or not (0 <= x <= screen_w - px(200)) or not (0 <= y <= screen_h - px(200)):
-            x, y = max(0, (screen_w - width) // 2), max(0, (screen_h - height) // 2 - px(20))
+    def apply_geometry(self, remembered, zoomed=False):
+        """Open at the saved size and place, clamped to the work area of the monitor it was on (title
+        bar, status bar and the builder's footer stay above the taskbar at any scaling). main() then
+        maximises the window when ``start_zoomed`` says so."""
+        match = GEOMETRY.fullmatch(str(remembered or ""))
+        point = (int(match.group(3)) + px(50), int(match.group(4)) + px(20)) if match else (None, None)
+        width, height, x, y, min_w, min_h, self.start_zoomed = plan_geometry(
+            remembered, work_area(self.root, *point), window_frame(), on_a_monitor, zoomed)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
-        self.root.minsize(min(px(1120), screen_w), min(px(740), screen_h))
+        self.root.minsize(min_w, min_h)
+        self.normal_geometry = f"{width}x{height}+{x}+{y}"
+
+    def track_geometry(self, event):
+        """Remember the last size and place the window had while not maximised."""
+        if event.widget is self.root:
+            try:
+                if self.root.state() == "normal": self.normal_geometry = self.root.geometry()
+            except tk.TclError:
+                pass
 
     def read_clients(self):
         if not self.clientfile.exists(): return []
@@ -184,7 +374,7 @@ class App:
         try:
             write_json(self.settingsfile, value)
         except OSError as error:
-            messagebox.showerror("Save rule library", "The settings couldn't be saved.\n\n" + str(error), parent=self.root)
+            kit.alert(self.root, "Save rule library", "The settings couldn't be saved.", details=str(error))
             return
         self.settings = value
         for key, current in value.items():
@@ -279,7 +469,8 @@ class App:
                 content.pack(fill="both", expand=True)
                 self.page_canvases.append(None); self.page_contents.append(content)
                 continue
-            canvas = tk.Canvas(page, bg=COLORS["canvas"], highlightthickness=0, bd=0)
+            # One wheel notch scrolls three 20 px increments; see scroll_page.
+            canvas = tk.Canvas(page, bg=COLORS["canvas"], highlightthickness=0, bd=0, yscrollincrement=px(20))
             scroll = ttk.Scrollbar(page, orient="vertical", command=canvas.yview, style="Canvas.Vertical.TScrollbar")
             canvas.pack(side="left", fill="both", expand=True)
             canvas.configure(yscrollcommand=kit.autohide(scroll, lambda s=scroll, c=canvas: s.pack(side="right", fill="y", before=c)))
@@ -311,6 +502,7 @@ class App:
         for index, name in enumerate(PAGES, start=1):
             self.root.bind(f"<Control-Key-{index}>", lambda event, n=name: self.show_page(n))
         self.root.bind("<F5>", lambda event: self.refresh_current())
+        self.root.bind("<F1>", lambda event: self.open_help())
         self.root.bind("<Control-n>", lambda event: (self.show_page("builder"), self.rule_builder.new()))
         self.root.bind("<Control-s>", lambda event: self.rule_builder.save() if self.current_page() == "builder" else None)
         self.root.bind("<Control-f>", lambda event: self.focus_search())
@@ -347,8 +539,8 @@ class App:
         tk.Frame(side, bg=c["sidebar_line"], height=1).pack(fill="x", padx=px(16), pady=(0, px(12)))
 
         footer = tk.Frame(side, bg=c["sidebar"]); footer.pack(side="bottom", fill="x", padx=px(20), pady=(0, px(18)))
-        for text, command, tip in (("Help & prerequisites", self.open_help, "Open the desktop guide"),
-                                   ("Open app data folder", lambda: os.startfile(str(DATA)), "Clients, drafts and submissions saved on this PC"),
+        for text, command, tip in (("Help & prerequisites", self.open_help, "The desktop guide and keyboard shortcuts (F1)"),
+                                   ("Open app data folder", self.open_data_folder, "Clients, drafts and submissions saved on this PC"),
                                    ("About Sentinel Workspace", self.open_about, "Version, components and license")):
             item = kit.link(footer, text, command, c["sidebar_muted"], c["sidebar_ink"], c["sidebar"],
                             focus_color=c["sidebar_accent"])
@@ -357,15 +549,16 @@ class App:
         session = tk.Frame(side, bg=c["sidebar_hover"], bd=0, highlightthickness=1,
                            highlightbackground=c["sidebar_line"], highlightcolor=c["sidebar_line"])
         session.pack(side="bottom", fill="x", padx=px(14), pady=(0, px(14)))
-        top = tk.Frame(session, bg=c["sidebar_hover"]); top.pack(fill="x", padx=px(12), pady=(px(10), 0))
+        top = self.session_top = tk.Frame(session, bg=c["sidebar_hover"])
+        top.pack(fill="x", padx=px(12), pady=(px(10), px(10)))
         self.session_dot = tk.Label(top, text="●", font=FONTS["small"], bg=c["sidebar_hover"], fg=c["subtle"], bd=0)
         self.session_dot.pack(side="left")
         self.session_title = tk.Label(top, text="Not signed in", font=FONTS["strong_small"], bg=c["sidebar_hover"],
                                       fg=c["sidebar_ink"], bd=0)
         self.session_title.pack(side="left", padx=(px(6), 0))
+        # The Microsoft account only: the header chip names the client and workspace. Packed when there is one.
         self.session_detail = tk.Label(session, text="", font=FONTS["small"], bg=c["sidebar_hover"],
                                        fg=c["sidebar_muted"], bd=0, justify="left", anchor="w", wraplength=px(196))
-        self.session_detail.pack(fill="x", padx=px(12), pady=(px(3), px(10)))
         kit.wrap_to_parent(self.session_detail, minimum=px(120))
         self.signout_link = kit.link(session, "Sign out", lambda: self.logout(), c["sidebar_accent"], "#FFFFFF", c["sidebar_hover"],
                                      font=FONTS["strong_small"], focus_color=c["sidebar_accent"])
@@ -396,9 +589,50 @@ class App:
             kit.tooltip(row, f"{title}  (Ctrl+{index + 1})")
             self.nav.append(dict(row=row, title=label, description=detail, marker=marker, parts=parts, icon=glyph))
 
-    @staticmethod
-    def open_help():
-        os.startfile(str(BASE / "docs" / "DESKTOP-START-HERE.md"))
+    def open_help(self):
+        """The desktop guide, in a window of its own (F1). It works in the packaged exe, where a .md file
+        has no program to open it."""
+        return self.show_document("Help & prerequisites", BASE / "docs" / "DESKTOP-START-HERE.md")
+
+    def open_data_folder(self):
+        self.open_path(DATA, "Open app data folder")
+
+    def open_path(self, path, title):
+        try:
+            os.startfile(str(path))
+        except (OSError, AttributeError) as error:
+            kit.alert(self.root, title, "Windows couldn't open it. It is here:", details=str(path) + "\n\n" + str(error),
+                      tone="warning")
+
+    def show_document(self, title, path, markdown=True, parent=None):
+        """A read-only viewer for one of the app's own documents, with Close and Esc. Over another
+        dialog (``parent``), that dialog gets the keyboard back when the viewer closes."""
+        parent = parent or self.root
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as error:
+            kit.alert(self.root, title, "The document isn't available in this copy of the app.",
+                      details=str(path) + "\n\n" + str(error), tone="warning")
+            return None
+        window = tk.Toplevel(self.root); window.title(title); window.configure(bg=COLORS["card"])
+        def close():
+            window.destroy()
+            if parent is not self.root and parent.winfo_exists():
+                try: parent.grab_set()
+                except tk.TclError: pass
+        body = ttk.Frame(window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
+        body.pack(fill="both", expand=True)
+        actions, buttons = kit.action_row(body, close=("Close", close))
+        actions.pack(side="bottom", fill="x", pady=(px(14), 0))
+        frame, text = kit.text_area(body, 24, readonly=True, font="body")
+        frame.pack(fill="both", expand=True)
+        text.configure(padx=px(18), pady=px(14), spacing1=px(1), spacing3=px(2), bg=COLORS["card"])
+        frame.configure(bg=COLORS["card"])
+        render_markdown(text, source) if markdown else kit.set_text(text, source)
+        window.document = text
+        kit.place_dialog(window, self.root, 820, 760, 560, 420)
+        kit.modal(window, parent, close, focus=text)
+        return window
 
     def open_about(self):
         """Version, what the app talks to, and where its data lives."""
@@ -410,18 +644,19 @@ class App:
         head = ttk.Frame(body, style="Card.TFrame"); head.pack(fill="x")
         self.about_mark = brand.mark(self.root, px(56))
         tk.Label(head, image=self.about_mark, bg=c["card"], bd=0).pack(side="left", anchor="n")
-        words = ttk.Frame(head, style="Card.TFrame"); words.pack(side="left", padx=(px(16), 0))
-        ttk.Label(words, text="Sentinel Workspace", style="CardTitle.TLabel").pack(anchor="w")
+        words = ttk.Frame(head, style="Card.TFrame"); words.pack(side="left", fill="x", expand=True, padx=(px(16), 0))
+        ttk.Label(words, text=TITLE, style="CardTitle.TLabel").pack(anchor="w")
         ttk.Label(words, text="Version " + __version__, style="CardSubtitle.TLabel").pack(anchor="w", pady=(px(2), 0))
-        ttk.Label(words, text="Connect to client tenants, review Microsoft Sentinel analytics rules\n"
-                              "and submit detection rules for approval.", style="Body.TLabel", justify="left").pack(
-            anchor="w", pady=(px(10), 0))
+        ttk.Label(words, text="Connect to client tenants, review Microsoft Sentinel analytics rules and submit "
+                              "detection rules for approval.", style="Body.TLabel", justify="left",
+                  wraplength=px(390)).pack(anchor="w", fill="x", pady=(px(10), 0))
         kit.divider(body, 16)
-        facts = kit.KeyValues(body, key_width=14); facts.pack(fill="x")
-        facts.set([("Python", sys.version.split()[0]), ("Tk", str(tk.TkVersion)),
+        facts = CopyValues(body, key_width=14); facts.pack(fill="x")
+        facts.set([("Python", sys.version.split()[0]), ("Tk", str(self.root.tk.call("info", "patchlevel"))),
                    ("App data", str(DATA)), ("License", "MIT")], mono={"App data"})
-        actions, buttons = kit.action_row(body, secondary=(("Open license", lambda: os.startfile(str(BASE / "LICENSE"))),),
-                                          close=("Close", window.destroy))
+        actions, buttons = kit.action_row(
+            body, secondary=(("Open license", lambda: self.show_document("License", BASE / "LICENSE", False, window)),),
+            close=("Close", window.destroy))
         actions.pack(fill="x", pady=(px(20), 0))
         kit.place_dialog(window, self.root, width=520)
         kit.modal(window, self.root, window.destroy, focus=buttons[-1])
@@ -456,9 +691,12 @@ class App:
         chip.grid(row=0, column=1, sticky="ne", padx=(kit.space("xl"), 0))
         self.context_dot = tk.Label(chip, text="●", font=FONTS["small"], bg=c["raised"], fg=c["subtle"], bd=0)
         self.context_dot.pack(side="left", padx=(px(12), px(6)), pady=px(7))
-        self.workspace_context = tk.StringVar(value="No workspace selected  ·  Sign in to begin")
-        tk.Label(chip, textvariable=self.workspace_context, font=FONTS["small"], bg=c["raised"], fg=c["ink_2"],
-                 bd=0, wraplength=px(300), justify="left").pack(side="left", padx=(0, px(12)), pady=px(7))
+        # The client and workspace, on every page; pointing at it shows the tenant and subscription IDs.
+        self.workspace_context = tk.StringVar(value="No client selected")
+        self.context_label = tk.Label(chip, textvariable=self.workspace_context, font=FONTS["small"], bg=c["raised"],
+                                      fg=c["ink_2"], bd=0, wraplength=px(300), justify="left")
+        self.context_label.pack(side="left", padx=(0, px(12)), pady=px(7))
+        kit.tooltip(self.context_label, "")
         tk.Frame(main, bg=c["line"], height=1).pack(fill="x")
         # A thin activity line runs under the header while the app is busy; see set_busy.
         holder = tk.Frame(main, bg=c["canvas"], height=px(3)); holder.pack(fill="x"); holder.pack_propagate(False)
@@ -513,6 +751,7 @@ class App:
         self.clientbox.pack(side="left", fill="x", expand=True)
         self.controls.append((self.clientbox, "readonly"))
         self.clientbox.bind("<<ComboboxSelected>>", self.client_changed)
+        self.clientbox.bind("<KeyPress>", self.type_client)  # Type the first letters of a client to pick it.
         self.client_menu = tk.Menu(self.root, tearoff=0, font=FONTS["body"], bg=c["card"], fg=c["ink"], bd=0,
                                    activebackground=c["accent_soft"], activeforeground=c["ink"])
         self.client_menu.add_command(label="Save this tenant to the client", command=self.save_client)
@@ -541,6 +780,10 @@ class App:
                       enabled=lambda: not self.busy).pack(anchor="w", pady=(0, kit.space("lg")))
         self.signin_main = self.button(body, "Sign in with Microsoft", self.login, "Primary.TButton")
         self.signin_main.pack(fill="x")
+        # Why the last sign-in failed, where the analyst is looking; hidden again when a sign-in starts.
+        self.signin_error_text, self.signin_error_details = tk.StringVar(), ""
+        self.signin_error = kit.Banner(body, self.signin_error_text, "danger",
+                                       action=("Copy details", self.copy_signin_error))
         self.signin_panel = tk.Frame(body, bg=c["accent_soft"], bd=0, highlightthickness=1,
                                      highlightbackground=c["accent_line"], highlightcolor=c["accent_line"])
         panel = tk.Frame(self.signin_panel, bg=c["accent_soft"]); panel.pack(fill="x", padx=px(14), pady=px(12))
@@ -583,27 +826,31 @@ class App:
         self.wsbox.bind("<<ComboboxSelected>>", self.workspace_changed)
         for combo in (self.clientbox, self.subbox, self.wsbox):
             combo.bind("<MouseWheel>", lambda event: "break")  # Scrolling the page must not change a selection.
-        details = tk.Frame(body, bg=c["raised"], bd=0, highlightthickness=1,
-                           highlightbackground=c["line"], highlightcolor=c["line"])
-        details.pack(fill="x", pady=(px(2), kit.space("lg")))
-        inner = ttk.Frame(details, style="Raised.TFrame", padding=(px(16), px(14))); inner.pack(fill="x")
-        self.details = kit.KeyValues(inner, surface="Raised", stacked=True)
-        self.details_empty = ttk.Label(inner, style="RaisedMuted.TLabel", justify="left", wraplength=px(320))
-        kit.wrap_to_parent(self.details_empty)
-        self.identity = tk.StringVar(value="No workspace selected yet. Sign in to discover subscriptions and workspaces.")
-        self.identity.trace_add("write", lambda *args: (self.render_details(), self.update_workspace_context(),
-                                                        self.sync_connection()))
-        actions = ttk.Frame(body, style="Card.TFrame"); actions.pack(fill="x")
+        # The next step sits right under the pickers; the IDs wait behind a disclosure (remembered).
+        actions = self.workspace_row = ttk.Frame(body, style="Card.TFrame"); actions.pack(fill="x")
         # Not in self.controls: sync_connection enables these only once a workspace is selected.
         self.copy_button = ttk.Button(actions, text="Copy details", command=self.copy_workspace, style="Secondary.TButton")
         self.workspace_actions = [
             self.copy_button,
             ttk.Button(actions, text="View analytics rules", command=lambda: self.show_page("rules"), style="Primary.TButton")]
         self.workspace_actions[0].pack(side="left"); self.workspace_actions[1].pack(side="right")
-        # Shown only for a workspace in an Azure Government (GCC High) tenant; see sync_connection.
-        self.gov_button = ttk.Button(actions, text="Onboard GCC High…", command=self.open_gov_onboarding,
+        # Shown only for a workspace in an Azure Government (GCC High) tenant, on a row of its own so the
+        # actions above keep their room at the smallest window size; see sync_connection.
+        self.gov_row = ttk.Frame(body, style="Card.TFrame")
+        self.gov_button = ttk.Button(self.gov_row, text="Onboard GCC High…", command=self.open_gov_onboarding,
                                      style="Secondary.TButton")
         kit.tooltip(self.gov_button, "Create this client's pipeline identities and open its target pull request")
+        self.ids_button = ttk.Button(body, text="+  Show workspace IDs", style="Disclosure.TButton",
+                                     command=lambda: self.toggle_ids())
+        self.details_panel = details = tk.Frame(body, bg=c["raised"], bd=0, highlightthickness=1,
+                                                highlightbackground=c["line"], highlightcolor=c["line"])
+        inner = ttk.Frame(details, style="Raised.TFrame", padding=(px(16), px(14))); inner.pack(fill="x")
+        self.details = CopyValues(inner, surface="Raised", stacked=True, copied=lambda key: self.flash(key + " copied."))
+        self.details_empty = ttk.Label(inner, style="RaisedMuted.TLabel", justify="left", wraplength=px(320))
+        kit.wrap_to_parent(self.details_empty)
+        self.show_ids = self.ui_state.get("show_ids") is True
+        self.identity = tk.StringVar(value="No workspace selected yet. Sign in to discover subscriptions and workspaces.")
+        self.identity.trace_add("write", lambda *args: (self.render_details(), self.sync_connection()))
 
         github = kit.Card(right, "Rule library", "The GitHub repository where rules are stored and approved.",
                           icon="library", tone="neutral")
@@ -645,6 +892,48 @@ class App:
         self.controls.append((combo, "readonly"))
         return combo, button
 
+    def toggle_ids(self, show=None):
+        """'+ Show workspace IDs': the tenant, subscription, resource group and workspace IDs, below the
+        actions. The choice is remembered (ui-state show_ids)."""
+        if show is None:
+            self.show_ids = not self.show_ids
+            self.ui_state["show_ids"] = self.show_ids
+        self.ids_button.configure(text=("−  Hide" if self.show_ids else "+  Show") + " workspace IDs")
+        self.render_details()
+
+    def copy_signin_error(self):
+        self.root.clipboard_clear(); self.root.clipboard_append(self.signin_error_details)
+        self.flash("Sign-in error details copied.")
+
+    def show_signin_error(self, details, advice_text=None):
+        """Explain a failed sign-in on the Sign in card itself, with its full text one Copy away."""
+        self.signin_error_details = details
+        first = next((line.strip() for line in details.splitlines() if line.strip()), "The sign-in didn't finish.")
+        self.signin_error_text.set(advice_text or "Sign-in didn't finish: " + (first if len(first) <= 240 else first[:239] + "…"))
+        if not self.signin_error.winfo_manager():
+            self.signin_error.pack(fill="x", pady=(px(12), 0), after=self.signin_main)
+
+    def hide_signin_error(self):
+        self.signin_error_details = ""; self.signin_error.pack_forget()
+
+    def type_client(self, event):
+        """Type-ahead in the read-only client box: the first client whose name starts with what was typed
+        in the last moment is chosen, as in a Windows list."""
+        if self.busy or not event.char or not event.char.isprintable() or event.state & 0x20004:  # Ctrl or Alt held.
+            return None
+        if event.char == " " and not self.typed: return None
+        if self.typed_timer is not None: self.root.after_cancel(self.typed_timer)
+        self.typed += event.char
+        self.typed_timer = self.root.after(TYPEAHEAD_MS, self.reset_typed)
+        typed = self.typed.casefold()
+        match = next((c["name"] for c in self.clients if c["name"].casefold().startswith(typed)), None)
+        if match and match != self.vars["client_name"].get():
+            self.vars["client_name"].set(match); self.client_changed(event, focus=False)
+        return "break"
+
+    def reset_typed(self):
+        self.typed, self.typed_timer = "", None
+
     def show_menu(self, menu, widget):
         if self.busy: return
         has_client = bool(self.vars["client_name"].get())
@@ -658,7 +947,8 @@ class App:
             self.tenant_box.pack(fill="x", after=self.tenant_row); self.tenant_row.pack_forget()
             self.tenant_entry.focus_set()
         elif not show and self.tenant_box.winfo_manager():
-            self.tenant_box.pack_forget(); self.tenant_row.pack(fill="x", pady=(0, px(14)), before=self.tenant_box)
+            # Packed before the box goes: 'before' needs a widget that is still packed.
+            self.tenant_row.pack(fill="x", pady=(0, px(14)), before=self.tenant_box); self.tenant_box.pack_forget()
 
     def render_tenant(self):
         value = self.vars["tenant"].get().strip()
@@ -736,7 +1026,15 @@ class App:
             if not ((first <= 0 and event.delta > 0) or (last >= 1 and event.delta < 0)):
                 return
         canvas = self.page_canvases[self.tabs.index("current")]
-        if canvas is not None and canvas.yview() != (0.0, 1.0): canvas.yview_scroll(int(-event.delta / 120), "units")
+        if canvas is None or canvas.yview() == (0.0, 1.0): return
+        # Precision touchpads send many small deltas: add them up and scroll whole 20 px increments,
+        # three per 120-unit notch. A change of direction starts again from zero.
+        if self.wheel and (self.wheel > 0) != (event.delta > 0): self.wheel = 0
+        self.wheel += event.delta
+        steps = int(self.wheel * 3 / 120)
+        if steps:
+            self.wheel -= steps * 40
+            canvas.yview_scroll(-steps, "units")
 
     def page_changed(self, event=None):
         name = self.current_page()
@@ -762,44 +1060,70 @@ class App:
         except (tk.TclError, KeyError, AttributeError):
             pass
 
+    def client_name(self):
+        return self.vars["client_name"].get().strip() if "client_name" in self.vars else ""
+
+    def signed_in(self):
+        """A Microsoft account is signed in (to some client)."""
+        return self.session is not None and getattr(self.session, "signed_in", False) is True
+
+    def signed_in_here(self):
+        """Signed in for the client chosen now; after switching clients, the session is the old client's."""
+        return self.signed_in() and (self.session_client is None or self.session_client == self.client_name())
+
     def update_workspace_context(self):
-        if not hasattr(self, "tabs") or not hasattr(self, "rule_view"):
-            return
-        page = self.current_page()
-        tone = "neutral"
-        if page == "builder":
-            text, tone = "Local drafts  ·  Azure sign-in is not required", "info"
-        elif page == "rules" and self.rule_view.get() == "repository":
-            text, tone = "Rule library  ·  Azure sign-in is not required", "info"
-        elif self.workspace:
-            tenant = self.workspace["tenant_id"]
-            text, tone = self.workspace["workspace_name"] + "  ·  Tenant " + tenant.split("-")[0] + "…", "success"
+        """The header chip names the client on every page, and the window title does once a workspace is
+        chosen (Alt+Tab, the taskbar). Pointing at the chip shows the tenant and subscription IDs."""
+        if not hasattr(self, "context_label"): return
+        client, workspace = self.client_name(), self.workspace
+        if workspace:
+            text, tone = "  ·  ".join(filter(None, (client, workspace["workspace_name"]))), "success"
+        elif self.signed_in_here():
+            text, tone = (client or "Signed in") + "  ·  choose a workspace", "info"
+        elif client:
+            text, tone = client + "  ·  not signed in", "neutral"
         else:
-            text = "No workspace selected  ·  Sign in to begin"
+            text, tone = "No client selected", "neutral"
         self.workspace_context.set(text)
         self.context_dot.configure(fg=TONES[tone][0] if tone != "neutral" else COLORS["subtle"])
+        tenant = workspace["tenant_id"] if workspace else self.vars["tenant"].get().strip() if "tenant" in self.vars else ""
+        ids = [("Tenant ID" if workspace else "Tenant", tenant)] + \
+              ([("Subscription ID", workspace["subscription_id"]), ("Workspace ID", workspace["workspace_id"])] if workspace else [])
+        self.context_label.tooltip_text = "\n".join(key + ": " + value for key, value in ids if value)
+        title = (client or workspace["workspace_name"]) + " — " + TITLE if workspace else TITLE
+        if self.root.title() != title: self.root.title(title)
 
     def render_session(self):
         c = COLORS
-        session = self.session
-        signed_in = session is not None and getattr(session, "signed_in", False) is True
-        account = getattr(session, "account", None)
+        signed_in, here = self.signed_in(), self.signed_in_here()
+        account = getattr(self.session, "account", None)
         user = account.get("user", {}).get("name", "") if isinstance(account, dict) else ""
+        # The sidebar names the Microsoft account only; the header chip owns the client and workspace.
         if self.signin_active:
             title, detail, color, pill = "Signing in…", "Finish signing in in your browser.", c["warning"], ("Signing in", "warning")
-        elif signed_in and self.workspace:
-            title, detail, color, pill = "Signed in", "\n".join(filter(None, (user, self.workspace["workspace_name"]))), \
-                c["sidebar_success"], ("Connected", "success")
+        elif signed_in and here and self.workspace:
+            title, detail, color, pill = "Signed in", user, c["sidebar_success"], ("Connected", "success")
         elif signed_in:
-            title, detail, color, pill = "Signed in", user or "Choose a subscription and workspace.", \
-                c["sidebar_accent"], ("Signed in", "info")
+            title, detail, color = "Signed in", user, c["sidebar_accent"]
+            pill = ("Signed in", "info") if here else ("Not connected", "neutral")
         else:
-            title, detail, color, pill = "Not signed in", "Sign in to load workspaces.", c["subtle"], ("Not connected", "neutral")
+            title, detail, color, pill = "Not signed in", "", c["subtle"], ("Not connected", "neutral")
         self.session_title.configure(text=title); self.session_detail.configure(text=detail)
+        if detail and not self.session_detail.winfo_manager():
+            self.session_top.pack_configure(pady=(px(10), 0))
+            self.session_detail.pack(fill="x", padx=px(12), pady=(px(3), px(10)), after=self.session_top)
+        elif not detail and self.session_detail.winfo_manager():
+            self.session_detail.pack_forget(); self.session_top.pack_configure(pady=(px(10), px(10)))
         self.session_dot.configure(fg=color)
         self.connection_pill.set(*pill)
         if signed_in and not self.signin_active: self.signout_link.pack(fill="x", padx=px(12), pady=(0, px(10)))
         else: self.signout_link.pack_forget()
+        # One blue button on Connect: once connected, View analytics rules leads and sign-in steps back.
+        client = self.client_name()
+        short = client if len(client) <= CLIENT_CHARS else client[:CLIENT_CHARS - 1].rstrip() + "…"
+        self.signin_main.configure(text="Sign in to " + short if client and not here else "Sign in with Microsoft",
+                                   style="Secondary.TButton" if here and self.workspace else "Primary.TButton")
+        self.update_workspace_context()
 
     # --------------------------------------------------------------- clients
     def delete_client(self):
@@ -808,18 +1132,20 @@ class App:
         name = self.vars["client_name"].get()
         match = next((c for c in self.clients if c["name"] == name), None)
         if match is None:
-            messagebox.showinfo("Remove client", "Choose a client first.", parent=self.root)
+            kit.alert(self.root, "Remove client", "Choose a client first.", tone="info")
             return
-        if not messagebox.askyesno("Remove client",
-                f"Remove {name} from the client list?\n\nThis only removes it from this PC. Nothing in Azure or GitHub changes.",
-                parent=self.root):
+        if not kit.confirm(self.root, "Remove client",
+                           f"Remove {name} from the client list? This only removes it from this PC. Nothing in Azure "
+                           "or GitHub changes.", ok="Remove", destructive=True):
             return
         remaining = [c for c in self.clients if c["name"] != name]
         try:
             write_json(self.clientfile, remaining)
         except OSError as error:
-            messagebox.showerror("Remove client", "The client list couldn't be saved.\n\n" + str(error), parent=self.root)
+            kit.alert(self.root, "Remove client", "The client list couldn't be saved.", details=str(error))
             return
+        remembered = self.ui_state.get("last_workspace")
+        if isinstance(remembered, dict): remembered.pop(name, None)
         self.clients = remaining
         self.auth_hint = None
         self.clear_selection()
@@ -839,22 +1165,27 @@ class App:
             self.client_changed()
         self.last_client = self.vars["client_name"].get()
 
-    def client_changed(self, event=None):
+    def client_changed(self, event=None, focus=True):
+        """Another client was chosen: its selection starts empty (its last workspace is picked again
+        after sign-in) and Session activity notes the switch. Nothing asks first. A choice from the
+        list moves the keyboard to the sign-in button (``focus``); type-ahead keeps it in the box."""
         name = self.vars["client_name"].get()
         previous = getattr(self, "last_client", "")
-        if event is not None and name != previous and (self.workspace or self.subscriptions):
-            current = self.workspace["workspace_name"] if self.workspace else "this subscription"
-            if not messagebox.askyesno("Switch client?",
-                    f"You are connected to {current}. Switching to {name} clears that selection, and you will need to sign in again.",
-                    parent=self.root):
-                self.vars["client_name"].set(previous); return
+        if event is not None and self.busy and name != previous:
+            self.vars["client_name"].set(previous); return  # A task is still running for the previous client.
         self.last_client = name
+        if event is not None and previous and name != previous:
+            self.log(f"Switched from {previous} to {name}.")
         self.clear_selection()
+        self.hide_signin_error()
         for c in self.clients:
             if c["name"] == name:
                 self.vars["tenant"].set(c["tenant"])
                 break
         self.toggle_tenant(not self.vars["tenant"].get().strip())
+        self.render_session()
+        if event is not None and focus and str(self.signin_main.cget("state")) != "disabled":
+            self.signin_main.focus_set()
 
     def clear_selection(self):
         # The old session is not reused for another client's login.
@@ -888,7 +1219,7 @@ class App:
             v["tenant"] = validate_tenant_hint(v["tenant"]) if v["tenant"] else ""
             require(v["client_name"], "Enter a client name.")
         except Stop as error:
-            messagebox.showerror("Save client", str(error), parent=self.root)
+            kit.alert(self.root, "Save client", str(error))
             return
         self.vars["tenant"].set(v["tenant"])
         entry = dict(name=v["client_name"], tenant=v["tenant"])
@@ -897,7 +1228,7 @@ class App:
         try:
             write_json(self.clientfile, clients)
         except OSError as error:
-            messagebox.showerror("Save client", "The client list couldn't be saved.\n\n" + str(error), parent=self.root)
+            kit.alert(self.root, "Save client", "The client list couldn't be saved.", details=str(error))
             return
         self.clients = clients
         self.clientbox.configure(values=[c["name"] for c in self.clients])
@@ -931,8 +1262,7 @@ class App:
                 try:
                     self.dispatch(kind, data)
                 except Exception as error:  # One bad callback must not stop every later result.
-                    self.log(repr(error))
-                    self.status.set("Something went wrong. Details are in Session activity on the Connect page.")
+                    self.callback_failed(type(error), error, error.__traceback__)
         except queue.Empty:
             pass
         finally:
@@ -968,35 +1298,78 @@ class App:
             if error:
                 details = str(error)
                 self.log(details); self.show_page(self.operation_page)
+                signin = isinstance(cancel, threading.Event)  # The sign-in's own callback carries its event.
                 if isinstance(error, SignInCancelled):
-                    self.discard_cancelled_signin()
-                elif isinstance(error, AuthenticationRequired):
-                    self.status.set("Couldn't finish: " + details[:160])
+                    self.discard_cancelled_signin(); return
+                tip = advice.lookup(details, workspace=(self.workspace or {}).get("workspace_name"),
+                                    repo=self.github_repository() or None)
+                self.status.set("Couldn't finish: " + advice.first_sentence(tip or details)[:STATUS_PREVIEW_CHARS])
+                if signin: self.show_signin_error(details, tip)
+                if isinstance(error, AuthenticationRequired):
                     self.recover_authentication(error)
                 else:
-                    self.status.set("Couldn't finish: " + details[:160])
                     self.activity_badge.set("Stopped", "danger")
-                    messagebox.showerror(title.rstrip("….") or "Operation stopped",
-                                         "This didn't finish.\n\n" + details +
-                                         "\n\nThe full message is in Session activity on the Connect page.", parent=self.root)
+                    if not signin:  # A failed sign-in is explained on the Sign in card instead.
+                        kit.alert(self.root, title.rstrip("….") or "Operation stopped",
+                                  tip or "This didn't finish. The full message is below and in Session activity on the "
+                                         "Connect page.", details=details)
             elif callback:
                 callback(result)
 
-    def set_busy(self, busy):
+    def callback_failed(self, kind, error, trace):
+        """An unexpected error in a Tk callback: log it in Session activity and DATA/logs/errors.log
+        (the packaged exe has no console), and say so in the status bar."""
+        text = "".join(traceback.format_exception(kind, error, trace))
+        self.log("Unexpected error: " + text.rstrip())
+        try:
+            append_error_log(self.error_log, datetime.now().isoformat(timespec="seconds") + "  Sentinel Workspace "
+                             + __version__ + "\n" + text)
+        except OSError:
+            pass
+        try:
+            self.status.set("Something went wrong. Details are in Session activity.")
+            self.activity_badge.set("Stopped", "danger")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def set_busy(self, busy, immediate=False):
+        """Mark a task as running (handlers check ``busy`` at once). Its visuals (disabled controls, the
+        activity line and the Working badge) wait BUSY_DELAY_MS, so a quick local read finishes without
+        greying the window; ``immediate`` shows them at once. Inputs (``self.inputs``) stay usable."""
         self.busy = busy
+        if self.busy_visual is not None:
+            self.root.after_cancel(self.busy_visual); self.busy_visual = None
         if busy:
             if self.flash_timer is not None:
                 self.root.after_cancel(self.flash_timer); self.flash_timer = None
-            self.activity_badge.set("Working", "info")
-            self.progress.pack(fill="both", expand=True); self.progress.start(12)
-        else:
-            self.activity_badge.set("Ready", "success"); self.status.set("Ready.")
+            if immediate or BUSY_DELAY_MS <= 0: self.show_busy()
+            elif not self.busy_shown: self.busy_visual = self.root.after(BUSY_DELAY_MS, self.show_busy)
+            return
+        self.activity_badge.set("Ready", "success"); self.status.set("Ready.")
+        if self.busy_shown:
+            self.busy_shown = False
             self.progress.stop(); self.progress.pack_forget()
-        for widget, state in self.controls:
-            widget.configure(state="disabled" if busy else state)
+            for widget, state in self.controls:
+                widget.configure(state=state)
+        self.sync_busy()
+
+    def show_busy(self):
+        self.busy_visual = None
+        if not self.busy: return
+        self.busy_shown = True
+        self.activity_badge.set("Working", "info")
+        if not self.progress.winfo_manager(): self.progress.pack(fill="both", expand=True)
+        self.progress.start(12)
+        for widget, _ in self.controls:
+            widget.configure(state="disabled")
+        self.sync_busy()
+
+    def sync_busy(self):
+        """Controls whose state follows ``busy`` as well as the selection."""
         kit.refresh_all()
-        self.signout_link.configure(fg=COLORS["sidebar_muted"] if busy else COLORS["sidebar_accent"],
-                                    cursor="arrow" if busy else "hand2")
+        idle = not self.busy
+        self.signout_link.configure(fg=COLORS["sidebar_accent"] if idle else COLORS["sidebar_muted"],
+                                    cursor="hand2" if idle else "arrow")
         self.sync_connection()
         if hasattr(self, "catalog_page"): self.catalog_page.sync_actions()
         if hasattr(self, "rules_page"): self.rules_page.sync()
@@ -1008,13 +1381,13 @@ class App:
             button.configure(state="normal" if self.workspace and not self.busy else "disabled")
         gov = bool(self.workspace) and getattr(self.session, "cloud", None) == GOV_CLOUD
         if gov and not self.gov_button.winfo_manager():
-            self.gov_button.pack(side="left", padx=(px(8), 0), after=self.copy_button)
+            self.gov_row.pack(fill="x", pady=(px(10), 0), after=self.workspace_row); self.gov_button.pack(side="left")
         elif not gov and self.gov_button.winfo_manager():
-            self.gov_button.pack_forget()
+            self.gov_button.pack_forget(); self.gov_row.pack_forget()
         self.gov_button.configure(state="disabled" if self.busy else "normal")
         self.subbox.configure(state="readonly" if self.subscriptions and not self.busy else "disabled")
         self.wsbox.configure(state="readonly" if self.workspaces and not self.busy else "disabled")
-        signed_in = self.session is not None and (bool(self.subscriptions) or getattr(self.session, "signed_in", False) is True)
+        signed_in = self.session is not None and (bool(self.subscriptions) or self.signed_in_here())
         self.sub_refresh.configure(state="normal" if signed_in and not self.busy else "disabled")
         self.ws_refresh.configure(state="normal" if self.subscriptions and not self.busy else "disabled")
         if signed_in and not self.missing_link.winfo_manager():
@@ -1025,7 +1398,12 @@ class App:
             account = (getattr(self.session, "account", None) or {}).get("user", {}).get("name", "")
             self.connection_note.set(("Signed in as " + account + ". " if account else "") +
                                      "Selected " + self.workspace["workspace_name"] + ".")
+        elif self.subscriptions and "No accessible workspaces" in self.identity.get():
+            self.connection_note.set("This subscription has no workspaces you can open. Choose another subscription, "
+                                     "or check your access.")
         elif self.subscriptions: self.connection_note.set("Select a subscription and workspace to continue.")
+        elif signed_in: self.connection_note.set("Signed in, but no subscriptions are visible yet. Check your access, "
+                                                 "then select Refresh.")
         else: self.connection_note.set("Sign in to load your subscriptions and workspaces.")
 
     def work(self, title, task, done=None, page="connect"):
@@ -1047,7 +1425,7 @@ class App:
                 raise RuntimeError("Couldn't open the browser. Open " + url + " yourself.")
             self.flash("CyberQP opened in your browser. Activate access there, then sign in with Microsoft here.", "info")
         except Exception as error:
-            messagebox.showerror("Open CyberQP", str(error), parent=self.root)
+            kit.alert(self.root, "Open CyberQP", str(error), tone="warning")
 
     # ---------------------------------------------------------------- sign-in
     def cancel_signin(self):
@@ -1110,28 +1488,27 @@ class App:
         method = "Browser" if error.broker_failure else self.vars["login_method"].get()
         attempt = (tenant, error.resource, method, bool(error.claims))
         if attempt in self.auth_recovery_attempts:
-            messagebox.showerror("Sign-in still required",
-                "Microsoft still requires authentication after the fresh sign-in. Nothing was retried. "
-                "Confirm Azure CLI is current. Check this client's Entra sign-in logs using the correlation ID below, "
-                "including Authentication Details and Conditional Access results, "
-                "and confirm the account and tenant. You can start another sign-in after resolving them.\n\n" + str(error),
-                parent=self.root)
+            kit.alert(self.root, "Sign-in still required",
+                      "Microsoft still requires authentication after the fresh sign-in. Nothing was retried. "
+                      "Confirm Azure CLI is current. Check this client's Entra sign-in logs using the correlation ID "
+                      "below, including Authentication Details and Conditional Access results, and confirm the account "
+                      "and tenant. You can start another sign-in after resolving them.", details=str(error))
             return
-        if not messagebox.askyesno("Sign in again?",
-                ("The Windows sign-in component couldn't complete verification. Try a fresh browser sign-in?\n\n"
-                 if error.broker_failure else "Microsoft requires additional verification. Open Microsoft sign-in now?\n\n") +
-                ("Azure supplied an additional authentication challenge; it will be included in this sign-in.\n\n"
-                 if error.claims else "") +
-                "After signing in, check the workspace and start the task again. "
-                "The interrupted task is not replayed; earlier steps may already have completed.\n\n" +
-                str(error), parent=self.root):
+        if not kit.confirm(self.root, "Complete Microsoft authentication?",
+                           ("The Windows sign-in component couldn't complete verification. Try a fresh browser sign-in? "
+                            if error.broker_failure else "Microsoft requires additional verification. Open Microsoft sign-in now? ") +
+                           ("Azure supplied an additional authentication challenge; it will be included in this sign-in. "
+                            if error.claims else "") +
+                           "After signing in, check the workspace and start the task again. The interrupted task is not "
+                           "replayed; earlier steps may already have completed. The full message is in Session activity.",
+                           ok="Open sign-in", cancel="Not now"):
             return
         if not tenant:
             tenant = self.ask_tenant()
             if not tenant: return
         try: tenant = validate_tenant_hint(tenant)
         except Stop as problem:
-            messagebox.showerror("Client tenant", str(problem), parent=self.root); return
+            kit.alert(self.root, "Client tenant", str(problem)); return
         self.auth_recovery_attempts.add((tenant, error.resource, method, bool(error.claims)))
         self.vars["login_method"].set(method)
         self.vars["tenant"].set(tenant)
@@ -1146,13 +1523,15 @@ class App:
             hint = validate_tenant_hint(value) if value else ""
         except Stop as error:
             self.toggle_tenant(True)
-            messagebox.showerror("Tenant", str(error), parent=self.root)
+            kit.alert(self.root, "Tenant", str(error))
             return
         self.vars["tenant"].set(hint)
         self.clear_selection()
+        self.hide_signin_error()
         self.auth_hint = hint
         old = self.session
         self.session = Session(logger=self.log)
+        self.session_client = self.client_name()
         self.session.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] = (
             "true" if self.vars["login_method"].get() == "Windows account window" else "false")
         self.finish_signin()
@@ -1198,7 +1577,7 @@ class App:
         def done(rows):
             if cancel.is_set():
                 self.discard_cancelled_signin(); return
-            self.display_subscriptions(rows)
+            self.display_subscriptions(rows, select=self.remembered_workspace().get("subscription_id"))
         done._signin_cancel = cancel
         self.work("Waiting for Microsoft sign-in…", task, done)
 
@@ -1225,8 +1604,8 @@ class App:
             self.status.set("Signed in, but no subscriptions are visible yet. Check your access, then select Refresh.")
 
     def refresh_subscriptions(self):
-        if not self.session or not (self.subscriptions or getattr(self.session, "signed_in", False)):
-            messagebox.showinfo("Refresh subscriptions", "Sign in with Microsoft first.", parent=self.root); return
+        if not self.session or not (self.subscriptions or self.signed_in_here()):
+            kit.alert(self.root, "Refresh subscriptions", "Sign in with Microsoft first.", tone="info"); return
         index = self.subbox.current()
         current = self.subscriptions[index]["id"] if 0 <= index < len(self.subscriptions) else ""
         def done(rows):
@@ -1236,8 +1615,8 @@ class App:
         self.work("Refreshing subscriptions from Azure…", self.session.refresh_subscriptions, done)
 
     def check_subscription(self):
-        if not self.session or not (self.subscriptions or getattr(self.session, "signed_in", False)):
-            messagebox.showinfo("Check a subscription", "Sign in with Microsoft first.", parent=self.root); return
+        if not self.session or not (self.subscriptions or self.signed_in_here()):
+            kit.alert(self.root, "Check a subscription", "Sign in with Microsoft first.", tone="info"); return
         values = kit.FormDialog(self.root, "Check a subscription",
             "A read-only check of a subscription you expect to see but don't.",
             [("id", "Subscription ID", "", "From the Azure portal, for example 22222222-2222-4222-8222-222222222222.")],
@@ -1280,8 +1659,11 @@ class App:
         self.wsbox.configure(values=[]); self.vars["workspace"].set("")
 
     def subscription_changed(self, event=None):
+        if event is not None and self.busy:  # Chosen in the moment before the busy visuals showed.
+            if 0 <= self.subscription_index < len(self.subscriptions): self.subbox.current(self.subscription_index)
+            return
         self.reset_workspaces()
-        index = self.subbox.current()
+        index = self.subscription_index = self.subbox.current()
         if index < 0: return
         sub = self.subscriptions[index]
         self.auth_hint = sub["tenantId"]
@@ -1292,7 +1674,7 @@ class App:
     def discover(self):
         index = self.subbox.current()
         if not self.session or index < 0:
-            messagebox.showinfo("Refresh workspaces", "Sign in and choose a subscription first.", parent=self.root); return
+            kit.alert(self.root, "Refresh workspaces", "Sign in and choose a subscription first.", tone="info"); return
         sub = self.subscriptions[index]
         self.reset_workspaces()
         def done(rows):
@@ -1300,19 +1682,39 @@ class App:
             self.sync_connection()
             self.wsbox.configure(values=[r["workspace_name"] + "  ·  " + r["resource_group"] for r in rows])
             if rows:
-                self.wsbox.current(0); self.workspace_changed()
+                # The workspace this client used last time, or the first one.
+                remembered = self.remembered_workspace().get("workspace_id")
+                chosen = next((i for i, r in enumerate(rows) if r["workspace_id"] == remembered), 0)
+                self.wsbox.current(chosen); self.workspace_changed()
                 count = len(rows)
                 self.flash(f"Found {count} workspace{'s' if count != 1 else ''} in this subscription. "
-                           f"Selected {rows[0]['workspace_name']}.")
+                           f"Selected {rows[chosen]['workspace_name']}.")
             else:
                 self.identity.set(self.workspace_rows(sub, note="No accessible workspaces"))
                 self.status.set("No workspaces in this subscription. Choose another subscription, or check your access.")
         self.work("Loading workspaces…", lambda: self.session.discover(sub["id"], sub["tenantId"]), done)
 
+    def remembered_workspace(self):
+        """The subscription and workspace this client used last ({} when none), from ui-state.json."""
+        value = self.ui_state.get("last_workspace")
+        value = value.get(self.client_name()) if isinstance(value, dict) else None
+        return value if isinstance(value, dict) else {}
+
     def workspace_changed(self, event=None):
         index = self.wsbox.current()
+        if event is not None and self.busy:  # Chosen in the moment before the busy visuals showed.
+            current = next((i for i, r in enumerate(self.workspaces) if r == self.workspace), -1)
+            if current >= 0: self.wsbox.current(current)
+            return
         if index < 0: return
         self.workspace = dict(self.workspaces[index])
+        client = self.client_name()
+        if client:  # Picked again after the next sign-in for this client (ui-state, not clients.json).
+            remembered = self.ui_state.get("last_workspace")
+            if not isinstance(remembered, dict): remembered = self.ui_state["last_workspace"] = {}
+            remembered[client] = dict(subscription_id=self.workspace["subscription_id"],
+                                      workspace_id=self.workspace["workspace_id"])
+            self.save_state()
         self.rules_page.reset()
         selected = dict(self.workspace)
         self.root.after_idle(lambda: self.rules_page.load() if self.workspace == selected and not self.busy else None)
@@ -1331,19 +1733,29 @@ class App:
         else:
             self.details.pack_forget()
             self.details_empty.configure(text=self.identity.get()); self.details_empty.pack(fill="x")
+        # The IDs show only for a chosen workspace, behind their disclosure; until then the note above
+        # the pickers is the only instruction.
+        if not self.workspace:
+            self.ids_button.pack_forget(); self.details_panel.pack_forget()
+        else:
+            if not self.ids_button.winfo_manager(): self.ids_button.pack(fill="x", pady=(px(14), 0))
+            if self.show_ids and not self.details_panel.winfo_manager():
+                self.details_panel.pack(fill="x", pady=(px(8), 0), after=self.ids_button)
+            elif not self.show_ids: self.details_panel.pack_forget()
+        self.ids_button.configure(text=("−  Hide" if self.show_ids else "+  Show") + " workspace IDs")
         self.render_session()
 
     def open_gov_onboarding(self):
         if self.busy or not self.workspace: return
         if "/" not in self.github_repository():
-            messagebox.showinfo("Onboard GCC High client", "Set and save the rule library (organization and repository) first. "
-                                "The target pull request is opened there.", parent=self.root)
+            kit.alert(self.root, "Onboard GCC High client", "Set and save the rule library (organization and repository) "
+                      "first. The target pull request is opened there.", tone="info")
             self.show_github_settings(); return
         GovOnboardingDialog(self)
 
     def copy_workspace(self):
         if not self.workspace:
-            messagebox.showinfo("Copy details", "Choose a workspace first.", parent=self.root)
+            kit.alert(self.root, "Copy details", "Choose a workspace first.", tone="info")
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(self.identity.get())
@@ -1378,18 +1790,21 @@ class App:
         if not self.session or self.busy: return
         session = self.session
         def done(_):
-            self.session = None; self.clear_selection(); self.flash("Signed out.")
+            self.session = self.session_client = None; self.clear_selection(); self.flash("Signed out.")
         self.work("Signing out…", session.logout, done)
 
     def close(self):
         if self.busy:
-            if not messagebox.askyesno("Close Sentinel Workspace?",
-                    "A task is still running. If you close now it will be abandoned; nothing already sent to Azure or GitHub is undone.",
-                    parent=self.root):
+            if not kit.confirm(self.root, "Close Sentinel Workspace?",
+                               "A task is still running. If you close now it will be abandoned; nothing already sent "
+                               "to Azure or GitHub is undone.", ok="Close anyway", cancel="Keep working", destructive=True):
                 return
+            # Unsaved builder work stays in the recovery draft, offered at the next start.
+            self.rule_builder.autosave(schedule=False)
             self.save_state(); self.root.destroy(); return
         if not self.rule_builder.can_discard():
             return
+        self.rule_builder.discard_recovery()  # A normal close: nothing is left to recover.
         self.save_state()
         if self.session:
             session = self.session
@@ -1399,14 +1814,85 @@ class App:
 
 
 APP_USER_MODEL_ID = "ISIEnterprises.SentinelWorkspace"
+ERROR_ALREADY_EXISTS = 183
+_INSTANCE = []  # The single-instance mutex handle, held for the life of the process.
+
+
+def claim_instance(kernel32=None, last_error=None):
+    """Hold a per-session named mutex. Returns False when another copy of the app already holds it.
+    Two copies would race on ui-state.json, clients.json and settings.json and run two Azure CLI
+    sessions, so a second launch brings the first window forward instead."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        if kernel32 is None:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateMutexW.restype = wintypes.HANDLE
+            kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+            last_error = ctypes.get_last_error
+        handle = kernel32.CreateMutexW(None, False, "Local\\" + APP_USER_MODEL_ID)
+        error = (last_error or ctypes.get_last_error)()
+    except (AttributeError, OSError, ImportError):
+        return True  # Not Windows, or no mutex: never stop the app from starting.
+    if handle: _INSTANCE.append(handle)
+    return not (handle and error == ERROR_ALREADY_EXISTS)
+
+
+def is_app_window(title):
+    return title == TITLE or title.endswith(" — " + TITLE)
+
+
+def bring_existing_forward(user32=None):
+    """Restore and focus the running copy's main window. Returns True when one was found."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = user32 or ctypes.windll.user32
+        found = []
+        def visit(hwnd, _):
+            buffer, kind = ctypes.create_unicode_buffer(512), ctypes.create_unicode_buffer(64)
+            user32.GetWindowTextW(hwnd, buffer, 512); user32.GetClassNameW(hwnd, kind, 64)
+            if kind.value == "TkTopLevel" and is_app_window(buffer.value) and user32.IsWindowVisible(hwnd):
+                found.append(hwnd); return False
+            return True
+        user32.EnumWindows(ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(visit), 0)
+        if not found: return False
+        hwnd = found[0]
+        user32.ShowWindow(hwnd, 9 if user32.IsIconic(hwnd) else 5)  # SW_RESTORE when minimised, else SW_SHOW.
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except (AttributeError, OSError, ImportError, TypeError):
+        return False
+
+
+def set_dpi_awareness():
+    """System DPI awareness, as IDLE uses. Tk 8.6 ignores per-monitor DPI changes, so per-monitor
+    awareness left the window 1.25-1.5x too big or small on a monitor with another scale; Windows
+    now scales it there instead (correct size, slightly soft text on that monitor only). On the
+    main monitor, text is drawn at full resolution, exactly as before."""
+    import ctypes
+    user32 = ctypes.windll.user32
+    try:
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-2)): return  # DPI_AWARENESS_CONTEXT_SYSTEM_AWARE
+    except (AttributeError, OSError):
+        pass
+    try:
+        if ctypes.windll.shcore.SetProcessDpiAwareness(1) == 0: return  # PROCESS_SYSTEM_DPI_AWARE
+    except (AttributeError, OSError):
+        pass
+    try: user32.SetProcessDPIAware()
+    except (AttributeError, OSError): pass
 
 
 def main():
     if os.name == "nt":
+        if not claim_instance():
+            bring_existing_forward()
+            return
         import ctypes
         try:
-            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-        except (AttributeError, OSError):
+            set_dpi_awareness()
+        except (AttributeError, OSError, ImportError):
             pass
         try:
             # Group the window under its own taskbar button with the app's icon, instead of Python's.
@@ -1414,7 +1900,8 @@ def main():
         except (AttributeError, OSError):
             pass
     root = tk.Tk()
-    App(root)
+    app = App(root)
+    if app.start_zoomed: root.after_idle(lambda: root.state("zoomed"))
     root.mainloop()
 
 

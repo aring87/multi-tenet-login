@@ -90,7 +90,7 @@ class ConnectionPageTests(unittest.TestCase):
     def test_refresh_is_available_after_successful_signin_without_subscriptions(self):
         self.app.session=MagicMock();self.app.session.signed_in=True
         self.assertFalse(self.app.subscriptions)
-        with patch.object(self.app,'work') as work,patch.object(ui.messagebox,'showinfo') as warning:
+        with patch.object(self.app,'work') as work,patch.object(ui.kit,'alert') as warning:
             self.app.refresh_subscriptions()
         work.assert_called_once();warning.assert_not_called()
 

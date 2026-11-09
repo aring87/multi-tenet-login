@@ -228,7 +228,7 @@ class BuilderGuidanceTests(AppTestCase):
     def check(self, **changes):
         form = valid_form(); form.update(changes)
         builder = self.app.rule_builder; builder.load_form(form)
-        with patch("sentinel_app.rule_builder_page.messagebox.showerror") as dialog:
+        with patch("sentinel_app.rule_builder_page.kit.alert") as dialog:
             self.assertIsNone(builder.validate())
         dialog.assert_not_called()
         return builder

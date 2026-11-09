@@ -1,12 +1,69 @@
 """Search saved preview and deployment requests and refresh their run status on request."""
 import json
 import tkinter as tk
+from datetime import datetime, timezone
 from tkinter import ttk, filedialog
 import webbrowser
 
 from . import ui_kit as kit
-from .desktop_theme import COLORS, px
+from .desktop_theme import COLORS, FONTS, px
 from .workflow_history import list_receipts, load_receipt, summary, workflow_url, WorkflowHistoryService
+
+
+def parse_time(value):
+    try:
+        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def local_time(value):
+    """A receipt's UTC time shown in local time, '2026-11-02 15:20' (it sorts as text); other text unchanged."""
+    moment = parse_time(value)
+    return moment.astimezone().strftime("%Y-%m-%d %H:%M") if moment else str(value or "")
+
+
+def utc_time(value):
+    """'2026-11-02 14:20 UTC', for the tooltip on a local time; '' when the value isn't a time."""
+    moment = parse_time(value)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if moment else ""
+
+
+def cell_tooltips(tree, texts):
+    """Show ``texts[column](iid)`` beside the pointer after it rests on a cell of that column (the UTC
+    time behind a local one). The timer is registered on the root, where tests cancel timers."""
+    state = dict(cell=None, timer=None, window=None)
+    root = tree._root()
+    def hide(event=None):
+        if state["timer"] is not None:
+            root.after_cancel(state["timer"]); state["timer"] = None
+        if state["window"] is not None:
+            try: state["window"].destroy()
+            except tk.TclError: pass
+            state["window"] = None
+    def show(x, y, text):
+        state["timer"] = None
+        if not tree.winfo_exists(): return
+        window = state["window"] = tk.Toplevel(tree); window.overrideredirect(True)
+        try: window.attributes("-topmost", True)
+        except tk.TclError: pass
+        window.configure(bg=COLORS["line_strong"])
+        tk.Label(window, text=text, font=FONTS["small"], bg=COLORS["card"], fg=COLORS["ink"], padx=px(8), pady=px(4),
+                 bd=0).pack(padx=1, pady=1)
+        window.geometry(f"+{x}+{y}")
+    def motion(event):
+        row, column = tree.identify_row(event.y), tree.identify_column(event.x)
+        key = tree.column(column, "id") if row and column not in ("", "#0") else None
+        if (row, key) == state["cell"]: return
+        hide(); state["cell"] = (row, key)
+        text = texts[key](row) if key in texts else ""
+        if text: state["timer"] = root.after(600, lambda: show(event.x_root + px(12), event.y_root + px(18), text))
+    def leave(event=None):
+        hide(); state["cell"] = None
+    tree.bind("<Motion>", motion, add="+")
+    for sequence in ("<Leave>", "<ButtonPress>", "<Destroy>"):
+        tree.bind(sequence, leave, add="+")
 
 
 class WorkflowHistoryDialog:
@@ -43,15 +100,20 @@ class WorkflowHistoryDialog:
         # with one batch or three doesn't make the list above grow and shrink.
         self.runs_frame, self.runs, _ = kit.table(body, (("batch", "Batch", 60, False), ("run", "Run ID", 105, False),
                                                          ("state", "Last checked result", 465, True),
-                                                         ("checked", "Checked (UTC)", 180, False)), height=2)
+                                                         ("checked", "Checked", 150, False)), height=2)
         self.runs_label = ttk.Label(body, text="Runs", style="Section.TLabel")
         frame, self.table, self.empty = kit.table(body, (("mode", "Type", 75, False), ("rule", "Rule", 190, True),
                                                          ("repo", "Library", 180, True), ("clients", "Workspaces", 90, False),
-                                                         ("state", "Saved status", 240, True), ("created", "Requested (UTC)", 170, False)),
+                                                         ("state", "Saved status", 240, True), ("created", "Requested", 140, False)),
                                                   height=6, sort=True)
         frame.pack(fill="both", expand=True)
         ttk.Label(body, text="Details", style="Section.TLabel").pack(anchor="w", pady=(px(10), px(6)))
         detail_frame, self.detail = kit.text_area(body, 8, readonly=True); detail_frame.pack(fill="both", expand=True)
+        # Times show in local time; pointing at one shows it in UTC, as the receipts store it.
+        cell_tooltips(self.table, {"created": lambda iid: utc_time(self.visible[iid]["record"]["created_at"])
+                                   if iid in self.visible else ""})
+        cell_tooltips(self.runs, {"checked": lambda iid: utc_time(self.current["record"]["results"][int(iid)].get("checked_at"))
+                                  if self.current else ""})
         # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.
         self.filter = kit.debounce(self.window, 150, self.render)
         for key in ("<Down>", "<Return>"): self.search_box.bind(key, lambda event: self.filter.flush(), add="+")
@@ -104,7 +166,7 @@ class WorkflowHistoryDialog:
             if term and term not in haystack: continue
             self.visible[str(i)] = row
             self.table.insert("", "end", iid=str(i), values=(row["mode"].title(), p["rule_path"].rsplit("/", 1)[-1], p["repository"],
-                                                            len(p["targets"]), summary(record), record["created_at"]))
+                                                            len(p["targets"]), summary(record), local_time(record["created_at"])))
         kit.sort_items(self.table)  # Keep the order chosen with the headings.
         if self.visible: self.empty.hide()
         elif self.rows: self.empty.show("No requests match your search.", ("Clear search", lambda: self.search.set("")))
@@ -117,7 +179,9 @@ class WorkflowHistoryDialog:
         text = "Select a saved request to see its clients and run receipts."
         if self.current:
             r = self.current["record"]; p = r["plan"]
-            lines = ["Library: " + p["repository"], "Requested by: " + p["identity"], "Request ID: " + r["request_id"],
+            lines = ["Library: " + p["repository"], "Requested by: " + p["identity"],
+                     "Requested: " + local_time(r["created_at"]) + (" (" + utc_time(r["created_at"]) + ")" if utc_time(r["created_at"]) else ""),
+                     "Request ID: " + r["request_id"],
                      "Rule: " + p["rule_path"], "Checked against main revision: " + p["revision"], "Receipt: " + str(self.current["file"]),
                      "", "Saved intended workspaces (a successful workflow is not a fresh Sentinel inventory):"]
             for c in p["clients"]:
@@ -126,7 +190,8 @@ class WorkflowHistoryDialog:
             for i, result in enumerate(r["results"]):
                 state = result.get("history_error") or result["state"]
                 self.runs.insert("", "end", iid=str(i), values=(i + 1, result.get("run_id", "Unknown"), state,
-                                                                result.get("checked_at", "Not checked")))
+                                                                local_time(result["checked_at"]) if result.get("checked_at")
+                                                                else "Not checked"))
                 lines.extend(["", "Batch " + str(i + 1) + ": " + json.dumps(result["inputs"]),
                               "Actual run revision: " + result.get("actual_revision", "Not checked")])
                 if not result.get("run_id"):

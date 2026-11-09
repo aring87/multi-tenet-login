@@ -140,6 +140,25 @@ class TableTests(KitTestCase):
         tree.event_generate("<FocusIn>")
         self.assertEqual((tree.focus(), tree.selection()), ("3", ("3",)))
 
+    def test_heading_press_does_not_select_a_row(self):
+        frame, tree = self.make(sort=True)
+        other = ttk.Entry(self.root); other.pack()
+        selected = []
+        tree.bind("<<TreeviewSelect>>", lambda event: selected.append(tree.selection()), add="+")
+        self.root.deiconify(); other.focus_force(); self.root.update()
+        x, y = px(20), px(8)
+        self.assertEqual(tree.identify_region(x, y), "heading")
+        tree.event_generate("<ButtonPress-1>", x=x, y=y)
+        tree.event_generate("<FocusIn>")  # As the class binding's 'focus' queues it.
+        self.root.update()
+        tree.event_generate("<ButtonRelease-1>", x=x, y=y); self.root.update()
+        self.assertEqual((tree.selection(), selected), ((), []))
+        self.assertEqual(tree.sort_state, ("name", False))
+        self.assertEqual(frame.cget("highlightbackground"), COLORS["accent"])
+        # Keyboard focus afterwards still picks a focus row.
+        other.focus_force(); self.root.update(); tree.event_generate("<FocusIn>")
+        self.assertEqual(tree.selection(), (tree.get_children()[0],))
+
     def test_copy_and_row_menu(self):
         _, tree = self.make(selectmode="extended",
                             menu=lambda item: [("Open " + item, lambda: None), None, ("Delete", lambda: None, False)])
@@ -259,6 +278,25 @@ class EditingTests(KitTestCase):
         kit._prepare_edit_menu(menu, text)
         self.assertEqual(states(), ["disabled", "normal", "disabled"])
 
+    def test_right_click_on_a_hint_opens_the_fields_menu(self):
+        menu = kit.install_edit_menu(self.root)
+        shown = []
+        original = kit._show_menu
+        kit._show_menu = lambda popup, event: shown.append((popup.target, event.widget))
+        self.addCleanup(setattr, kit, "_show_menu", original)
+        var = tk.StringVar(); entry = ttk.Entry(self.root, textvariable=var, width=40); entry.pack()
+        hint = kit.placeholder(entry, var, "Paste a tenant ID", search=True)
+        frame, text = kit.text_area(self.root, 3, placeholder="Why is this changing?"); frame.pack()
+        self.root.update()
+        labels = [(hint, entry), (text.placeholder_label, text)]
+        if entry.search_glyph is not None: labels.append((entry.search_glyph, entry))
+        for label, target in labels:
+            shown.clear()
+            label.event_generate("<Button-3>", x=2, y=2, rootx=label.winfo_rootx() + 2, rooty=label.winfo_rooty() + 2)
+            self.root.update()
+            self.assertEqual(shown, [(target, target)], label)
+            self.assertIs(menu.target, target)
+
 
 class DialogTests(KitTestCase):
     def press_later(self, text=None, close=False):
@@ -303,6 +341,26 @@ class DialogTests(KitTestCase):
         self.assertEqual(str(submit.cget("style")), "Secondary.TButton")
         entry.event_generate("<Return>"); window.update()
         self.assertEqual(pressed, ["submit"])  # Nothing leads, so Enter presses nothing.
+        window.destroy()
+
+    def test_modal_without_a_primary_leaves_enter_alone(self):
+        window = tk.Toplevel(self.root)
+        pressed = []
+        entry = ttk.Entry(window); entry.pack()
+        _, (apply, close) = kit.action_row(window, secondary=(("Apply", lambda: pressed.append("apply")),),
+                                           close=("Close", lambda: pressed.append("close")))
+        _.pack()
+        kit.modal(window, self.root, window.destroy, focus=apply)
+        self.assertEqual(window.bind("<Return>"), "")
+        window.update(); apply.focus_force(); window.update()
+        apply.event_generate("<Return>"); window.update()
+        self.assertEqual(pressed, [])  # As before: Enter on a focused button does nothing here.
+        kit.promote(window, apply, close)
+        entry.focus_force(); window.update()
+        entry.event_generate("<Return>"); window.update()
+        close.focus_force(); window.update()
+        close.event_generate("<Return>"); window.update()
+        self.assertEqual(pressed, ["apply", "close"])
         window.destroy()
 
     def test_action_row_aux_buttons_sit_left(self):

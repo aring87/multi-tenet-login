@@ -181,7 +181,7 @@ def configure_theme(root):
                   selectbackground=[("readonly", c["card"]), ("!focus", c["line"])],
                   selectforeground=[("readonly", c["ink"])])
     # A search box: room on the left for the magnifier glyph that kit.placeholder(search=True) draws.
-    style.configure("Search.TEntry", padding=(px(32), px(6)))
+    style.configure("Search.TEntry", padding=(px(32), px(6), px(10), px(6)))
 
     for name in ("Error.TEntry", "Error.TCombobox", "Error.TSpinbox"):
         style.configure(name, bordercolor=c["danger"], lightcolor=c["danger_line"])

@@ -73,8 +73,18 @@ def placeholder(entry, variable, text, search=False):
         except tk.TclError:
             pass  # The entry is gone; the variable outlived it.
     hint.bind("<Button-1>", lambda event: entry.focus_set())
+    for label in (hint, glyph):
+        if label is not None: _forward_right_click(label, entry)
     variable.trace_add("write", refresh); refresh()
     return hint
+
+
+def _forward_right_click(label, target):
+    """Pass a right-click on a label drawn over ``target`` (a hint or glyph) on to it,
+    so the edit menu opens there as it would on the field's blank part."""
+    label.bind("<Button-3>", lambda event: target.event_generate(
+        "<Button-3>", x=label.winfo_x() + event.x, y=label.winfo_y() + event.y,
+        rootx=event.x_root, rooty=event.y_root))
 
 
 def link_search(entry, tree):
@@ -773,8 +783,9 @@ def table(parent, columns, height=10, selectmode="browse", icon="rules", sort=No
     ``marker`` adds a narrow first column for status dots (``kit.dot``) and ``check``
     one for checkboxes (``kit.checkbox``); pass the image when inserting a row.
 
-    The table shows a focus ring while it has the keyboard, gives itself a focus row so
-    the arrow keys work straight away, and copies the selected rows with Ctrl+C."""
+    The table shows a focus ring while it has the keyboard, gives itself a focus row
+    when focused from the keyboard so the arrow keys work straight away (a mouse press
+    selects only the row it lands on), and copies the selected rows with Ctrl+C."""
     frame = tk.Frame(parent, bg=COLORS["card"], bd=0, highlightthickness=1,
                      highlightbackground=COLORS["line"], highlightcolor=COLORS["line"])
     lead = marker or check
@@ -800,7 +811,13 @@ def table(parent, columns, height=10, selectmode="browse", icon="rules", sort=No
         tree.toggle_sort = toggle
     def ring(on):
         frame.configure(highlightbackground=COLORS["accent"] if on else COLORS["line"])
-    tree.bind("<FocusIn>", lambda event: (ring(True), _focus_row(tree)), add="+")
+    # Only keyboard focus picks a focus row: a press on a heading or the blank area
+    # below the rows also focuses the table, and must not select (and open) row 0.
+    # The press binding runs before the class binding that queues the FocusIn.
+    tree._mouse_focus = False
+    tree.bind("<ButtonPress-1>", lambda event: setattr(tree, "_mouse_focus", True), add="+")
+    tree.bind("<ButtonRelease-1>", lambda event: setattr(tree, "_mouse_focus", False), add="+")
+    tree.bind("<FocusIn>", lambda event: (ring(True), tree._mouse_focus or _focus_row(tree)), add="+")
     tree.bind("<FocusOut>", lambda event: ring(False), add="+")
     tree.bind("<Control-c>", lambda event: copy_rows(tree), add="+")
     row_menu = popup_menu(tree)
@@ -902,6 +919,7 @@ def text_area(parent, height, readonly=False, wrap="word", undo=False, font="mon
                                           bg=COLORS["raised"] if readonly else COLORS["card"], bd=0,
                                           justify="left", anchor="nw", wraplength=px(440))
         text.placeholder_label.bind("<Button-1>", lambda event: text.focus_set())
+        _forward_right_click(text.placeholder_label, text)
         if not readonly:
             # An editable area clears its hint while it has the keyboard, so the caret is never hidden.
             text.bind("<<Modified>>", lambda event: refresh_placeholder(text), add="+")
@@ -1115,17 +1133,9 @@ def place_dialog(window, parent, width=None, height=None, min_width=None, min_he
     window.geometry(f"{w}x{h}+{x}+{y}")
 
 
-def modal(window, parent, on_close, primary=None, focus=None):
-    """Give a Toplevel the standard dialog behaviour: stays over its parent, Esc
-    closes, Enter triggers the dialog's blue button (outside text areas), input is
-    grabbed and ``focus`` receives the keyboard.
-
-    Enter on a focused button presses that button. Elsewhere it presses the button
-    last given to ``promote`` (nothing after ``promote(window, None, ...)``), or else
-    ``primary``."""
-    window.transient(parent.winfo_toplevel())
-    window.protocol("WM_DELETE_WINDOW", on_close)
-    window.bind("<Escape>", lambda event: on_close())
+def _enter_handler(window, primary):
+    """The dialog's Enter key: a focused button presses itself; elsewhere (outside text
+    areas) Enter presses the promoted button, or else ``primary``."""
     def submit(event):
         widget = event.widget
         if isinstance(widget, tk.Text): return
@@ -1135,7 +1145,23 @@ def modal(window, parent, on_close, primary=None, focus=None):
         target = getattr(window, "_enter_target", primary)
         if target is not None and target.winfo_exists() and str(target.cget("state")) != "disabled":
             target.invoke()
-    window.bind("<Return>", submit)
+    return submit
+
+
+def modal(window, parent, on_close, primary=None, focus=None):
+    """Give a Toplevel the standard dialog behaviour: stays over its parent, Esc
+    closes, Enter triggers the dialog's blue button (outside text areas), input is
+    grabbed and ``focus`` receives the keyboard.
+
+    With a ``primary`` (or once ``promote`` has run), Enter on a focused button presses
+    that button and elsewhere presses the button last given to ``promote`` (nothing
+    after ``promote(window, None, ...)``), or else ``primary``. A dialog with neither
+    leaves Enter alone, so Enter on a focused button does nothing there."""
+    window.transient(parent.winfo_toplevel())
+    window.protocol("WM_DELETE_WINDOW", on_close)
+    window.bind("<Escape>", lambda event: on_close())
+    window._kit_submit = _enter_handler(window, primary)
+    if primary is not None: window.bind("<Return>", window._kit_submit)
     try: window.grab_set()
     except tk.TclError: pass
     if focus is not None:
@@ -1157,6 +1183,9 @@ def promote(window, active, *others):
     for button in others:
         _restyle(button, "Secondary")
     window._enter_target = active
+    # A dialog made without a primary has no Enter binding yet; promoting gives it one.
+    if not window.bind("<Return>"):
+        window.bind("<Return>", getattr(window, "_kit_submit", None) or _enter_handler(window, None))
 
 
 def action_row(parent, primary=None, secondary=(), close=None, aux=()):

@@ -259,18 +259,13 @@ def main():
     app.set_busy(True); app.status.set("Reading analytics rules…"); shot(root, "12-rules-loading"); app.set_busy(False)
     page.rows = RULES; page.collection = dict(records=RULES, status="collected")
     page.loaded_session = session; page.loaded_workspace = dict(WORKSPACE)
-    page.build_cache(); page.render()
-    enabled = sum(v[1] == "Enabled" for v, _ in page.cache); disabled = sum(v[1] == "Disabled" for v, _ in page.cache)
-    for key, value in (("total", len(RULES)), ("enabled", enabled), ("disabled", disabled), ("unspecified", len(RULES) - enabled - disabled)):
-        page.tiles[key].set(str(value))
-    page.summary.set("10 rules from law-example-sentinel"); page.sync()
-    page.tree.selection_set("0"); page.selected(); root.update()
+    page.build_cache(); page.render(); page.label_filters()
+    page.summary.set("10 rules from law-example-sentinel"); page.sync(); root.update()
     shot(root, "13-rules-populated")
-    app.scroll_into_view(page.detail_card.frame); shot(root, "14-rules-detail")
-    app.page_canvases[1].yview_moveto(0)
-    page.notice.set("Couldn't read all the analytics rules: AuthorizationFailed: the client does not have authorization to "
-                    "perform action 'Microsoft.SecurityInsights/alertRules/read'")
-    page.banner.pack(fill="x", pady=(0, ui.px(12)), before=page.summary_label)
+    first = page.tree.get_children()[0]
+    page.tree.selection_set(first); page.tree.focus(first); page.selected(); root.update(); shot(root, "14-rules-detail")
+    page.show_notice("Couldn't read all the analytics rules: AuthorizationFailed: the client does not have authorization to "
+                     "perform action 'Microsoft.SecurityInsights/alertRules/read'")
     page.summary.set("Some rules couldn't be read. 10 rules from law-example-sentinel.")
     shot(root, "15-rules-error"); page.banner.pack_forget()
     page.search.set("zzz"); shot(root, "16-rules-no-match"); page.search.set("")
@@ -280,15 +275,16 @@ def main():
     for _ in range(50):
         settle(root, 100)
         if not app.busy: break
-    cat.mode.set("GitHub repository"); cat.snapshot = None; cat.render(); cat.note.set("Select Refresh library to load this source.")
+    cat.mode.set("GitHub repository"); cat.invalidate(); cat.show_source(False)  # Saved, not read yet: folded.
     app.status.set("Ready."); app.activity_badge.set("Ready", "success"); shot(root, "17-library-empty")
-    cat.snapshot = library(); cat.render()
-    cat.note.set("Loaded from isi-security/detection-as-code today at 14:20 as aring. Select Refresh library to get the latest.")
+    snapshot = library(); cat.snapshot = snapshot; cat.view.set("Clients"); cat.render()
+    cat.loaded(snapshot, "isi-security/detection-as-code")
     cat.tree.selection_set("0"); cat.selected(); root.update(); shot(root, "18-library-clients")
     cat.view.set("Rules"); root.update(); cat.tree.selection_set("0"); cat.selected(); root.update(); shot(root, "19-library-rules")
-    cat.note.set("The rule library is unavailable: GitHub read failed (HTTP 404): repository not found or no access.")
-    cat.empty.show("The rule library couldn't be read. Check the source, then select Refresh library.", ("Refresh library", cat.load))
-    shot(root, "20-library-error"); cat.render()
+    cat.snapshot = None; cat.render()
+    cat.failed("GitHub read failed (HTTP 404): repository not found or no access.")
+    shot(root, "20-library-error")
+    cat.hide_error(); cat.snapshot = snapshot; cat.render(); cat.loaded(snapshot, "isi-security/detection-as-code")
     row = cat.visible[0]
     assign = AssignmentDialog(app, cat.snapshot, row); shot(assign.window, "21-dialog-assign"); assign.window.destroy()
     preview = PreviewDialog(app, cat.snapshot, row); shot(preview.window, "22-dialog-preview"); preview.window.destroy()

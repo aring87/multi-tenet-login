@@ -123,6 +123,11 @@ class App:
             if self.root.state() == "normal": state["geometry"] = self.root.geometry()
             state["client"] = self.vars["client_name"].get()
             state["rule_view"] = self.rule_view.get()
+            state["rules_sort"] = list(self.rules_page.sort)
+            state["library_view"] = self.catalog_page.view.get()
+            # A split never shown this session keeps the share saved last time.
+            for key, split in (("rules_split", self.rules_page.split), ("library_split", self.catalog_page.split)):
+                if split.fraction(): state[key] = split.fraction()
             write_json(self.state_file, state)
         except (OSError, tk.TclError):
             pass
@@ -267,6 +272,13 @@ class App:
         self.page_contents, self.page_canvases = [], []
         for name in PAGES:
             page = ttk.Frame(self.tabs); self.tabs.add(page, text=NAVIGATION[name][0])
+            if name == "rules":
+                # The rule lists fill the window instead of scrolling it: each table and detail
+                # pane scrolls by itself, so the page has no canvas (None in page_canvases).
+                content = ttk.Frame(page, padding=(kit.space("page"), kit.space("xl"), kit.space("page"), kit.space("lg")))
+                content.pack(fill="both", expand=True)
+                self.page_canvases.append(None); self.page_contents.append(content)
+                continue
             canvas = tk.Canvas(page, bg=COLORS["canvas"], highlightthickness=0, bd=0)
             scroll = ttk.Scrollbar(page, orient="vertical", command=canvas.yview, style="Canvas.Vertical.TScrollbar")
             canvas.pack(side="left", fill="both", expand=True)
@@ -692,7 +704,8 @@ class App:
         for name, frame in self.rule_views.items():
             if name == view: frame.pack(fill="both", expand=True)
             else: frame.pack_forget()
-        self.page_canvases[PAGES.index("rules")].yview_moveto(0)
+        canvas = self.page_canvases[PAGES.index("rules")]
+        if canvas is not None: canvas.yview_moveto(0)
         self.update_workspace_context()
         if view == "repository": self.catalog_page.auto_load()
 
@@ -704,6 +717,7 @@ class App:
         visible, so pointing at a field never scrolls the message about it away."""
         index = self.tabs.index("current")
         canvas, content = self.page_canvases[index], self.page_contents[index]
+        if canvas is None: return  # A page that fills the window has nothing to scroll.
         self.root.update_idletasks()
         height = content.winfo_height()
         if height <= canvas.winfo_height(): return
@@ -722,7 +736,7 @@ class App:
             if not ((first <= 0 and event.delta > 0) or (last >= 1 and event.delta < 0)):
                 return
         canvas = self.page_canvases[self.tabs.index("current")]
-        if canvas.yview() != (0.0, 1.0): canvas.yview_scroll(int(-event.delta / 120), "units")
+        if canvas is not None and canvas.yview() != (0.0, 1.0): canvas.yview_scroll(int(-event.delta / 120), "units")
 
     def page_changed(self, event=None):
         name = self.current_page()
@@ -732,6 +746,9 @@ class App:
             self.paint_nav(index)
         if hasattr(self, "rule_builder"):
             self.rule_builder.set_footer_visible(name == "builder")
+            # An emptied frame keeps its last height in Tk, which would leave a band under the
+            # window-filling Rules page; give the empty slot its height back.
+            if not self.footer_slot.pack_slaves(): self.footer_slot.configure(height=1)
             if name == "builder": self.rule_builder.check_github()
         if getattr(self, "last_page", None) not in (None, name):
             self.focus_page_default(name)

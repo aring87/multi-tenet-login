@@ -283,7 +283,12 @@ class DesignTests(unittest.TestCase):
         self.app.show_page("builder");self.root.update()
         self.assertGreater(self.app.footer_slot.winfo_height(),10)
         self.app.show_page("rules");self.root.update()
-        self.assertLessEqual(self.app.footer_slot.winfo_height(),1)
+        # The builder hides the slot itself; if it stays packed it must be empty and flat.
+        slot=self.app.footer_slot
+        self.assertTrue(not slot.winfo_ismapped() or slot.winfo_height()<=1)
+        bar=self.root.nametowidget(self.root.nametowidget(self.app.activity_badge.winfo_parent()).winfo_parent())
+        tabs=self.app.tabs
+        self.assertGreaterEqual(tabs.winfo_rooty()+tabs.winfo_height(),bar.winfo_rooty()-1)
 
 
 if __name__=="__main__":unittest.main()

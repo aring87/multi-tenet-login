@@ -399,6 +399,19 @@ class DesktopTests(unittest.TestCase):
             app.add_client()
         self.assertEqual(json.loads(app.clientfile.read_text()),
                          [{"name":"Fabrikam Inc","tenant":"fabrikam.onmicrosoft.com"}])
+    def test_new_client_dialog_flags_a_missing_name_on_the_field(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
+        app=ui.App(root)
+        def show(dialog):
+            dialog.vars["tenant"].set("fabrikam.onmicrosoft.com");dialog.submit()
+            self.assertIsNone(dialog.result)
+            self.assertEqual(dialog.hints["name"].cget("text"),"Enter a client name.")
+            self.assertEqual(str(dialog.entries["name"].cget("style")),"Error.TEntry")
+            self.assertEqual(dialog.error.get(),"")
+            dialog.window.destroy();return dialog.result
+        with patch.object(ui.kit.FormDialog,"show",show):
+            app.add_client()
+        self.assertFalse(app.clientfile.exists())
 
 if __name__=="__main__":unittest.main(verbosity=2)
 

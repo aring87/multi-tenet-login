@@ -285,6 +285,7 @@ class App:
         self.page_changed()
         self.root.bind("<MouseWheel>", self.scroll_page)
         self.bind_shortcuts()
+        kit.install_edit_menu(self.root)
 
     @staticmethod
     def fit_page(canvas, window, width):
@@ -850,7 +851,7 @@ class App:
         if self.busy:
             return
         def validate(values):
-            require(values["name"], "Enter a client name.")
+            if not values["name"]: raise kit.FieldError("name", "Enter a client name.")
             values["tenant"] = validate_tenant_hint(values["tenant"]) if values["tenant"] else ""
             return values
         values = kit.FormDialog(self.root, "New client",

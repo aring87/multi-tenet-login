@@ -246,7 +246,8 @@ def main():
     form = kit.FormDialog(root, "New client", "Clients are saved on this PC only. They never contain credentials.",
                           [("name", "Client name", "", "Shown in the client list."),
                            ("tenant", "Tenant ID or verified domain", "", "Optional. Leave blank to discover after sign-in.")],
-                          submit="Add client", validate=lambda v: (_ for _ in ()).throw(ValueError("Enter a client name.")))
+                          submit="Add client",
+                          validate=lambda v: (_ for _ in ()).throw(kit.FieldError("name", "Enter a client name.")))
     shot(form.window, "08-dialog-new-client"); form.submit(); shot(form.window, "09-dialog-new-client-error"); form.window.destroy()
     app.open_about(); about = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
     shot(about, "10-dialog-about"); about.destroy()

@@ -33,7 +33,7 @@ except (AttributeError, OSError):
 import tkinter as tk  # noqa: E402
 from sentinel_app import desktop_app as ui  # noqa: E402
 from sentinel_app import desktop_backend as backend  # noqa: E402
-from sentinel_app import catalog_page, rule_builder_page  # noqa: E402
+from sentinel_app import catalog_page, query_runner, rule_builder_page  # noqa: E402
 from sentinel_app import ui_kit as kit  # noqa: E402
 from sentinel_app import advice  # noqa: E402
 from sentinel_app import support_tools as support  # noqa: E402
@@ -180,6 +180,19 @@ class Session:
     signed_in = True
     cloud = "AzureCloud"
     account = {"user": {"name": "analyst@example.com"}}
+
+
+TEST_COLUMNS = ["TimeGenerated", "UserPrincipalName", "IPAddress", "ResultType", "Attempts"]
+TEST_SYNTAX_ERROR = ('ERROR: Bad Request({"error":{"message":"The request had some invalid properties","code":'
+                     '"BadArgumentError","innererror":{"code":"SyntaxError","message":"A recognition error occurred '
+                     'in the query.","innererror":{"code":"SYN0002","message":"Query could not be parsed at \'wher\' '
+                     'on line [2,2]","line":2,"pos":2,"token":"wher"}}}})')
+
+
+def test_rows():
+    people = ["adele.vance", "alex.wilber", "diego.siciliani", "grady.archie", "isaiah.langer", "megan.bowen"]
+    return [["2026-11-09T%02d:%02d:00Z" % (8 + index // 4, (index * 13) % 60), people[index % 6] + "@contoso.com",
+             "203.0.113.%d" % (20 + index * 7), "50126", str(24 + index * 3)] for index in range(12)]
 
 
 def fail_github(self, repository, progress=None):
@@ -342,6 +355,16 @@ def main():
     builder.load_form(valid_form()); builder.vars["name"].set("Brute force against Entra ID accounts")
     shot(root, "25-builder-basics-filled")
     builder.steps.select(1); root.update(); shot(root, "26-builder-query")
+    # Run test query, answered here with sample rows and a sample syntax error (no Azure call).
+    query = builder.texts["query"].get("1.0", "end-1c")
+    builder.test_passed(dict(columns=TEST_COLUMNS, rows=test_rows(), more=False, partial=None, elapsed=1.84,
+                             seconds=query_runner.test_window("Scheduled", builder.vars["queryPeriod"].get()),
+                             workspace_name=WORKSPACE["workspace_name"]), session, query)
+    root.update(); shot(root, "45-builder-test-query")
+    builder.test_failed(query_runner.failure(TEST_SYNTAX_ERROR), dict(WORKSPACE), query, session)
+    root.update(); shot(root, "46-builder-test-query-error")
+    builder.clear_test(); app.root.update(); app.page_canvases[2].yview_moveto(0)
+    app.status.set("Ready."); app.activity_badge.set("Ready", "success")  # Not the test's flash.
     builder.steps.select(2); root.update(); shot(root, "27-builder-mitre")
     builder.vars["name"].set(""); builder.validate(); root.update(); shot(root, "28-builder-error")
     builder.vars["name"].set("Brute force against Entra ID accounts"); builder.validate(); root.update()
@@ -368,16 +391,16 @@ def main():
          patch.object(support, "read_latest", lambda folder: dict(LATEST)), tempfile.TemporaryDirectory() as logs:
         app.settings["update_folder"] = SHARE
         app.show_page("connect"); app.update_checked(SHARE, dict(LATEST), None); settle(root)
-        shot(root, "39-connect-update-notice")
+        shot(root, "41-connect-update-notice")
         with patch.object(threading.Thread, "start", lambda thread: None):  # Caught while it checks.
             check = app.open_check_pc()
-        shot(check.window, "40-dialog-check-pc-checking")
+        shot(check.window, "42-dialog-check-pc-checking")
         support.run_checks(data, SHARE, report=check.show); check.finished()
-        shot(check.window, "41-dialog-check-pc-results")
+        shot(check.window, "43-dialog-check-pc-results")
         logged, app.error_log = app.error_log, Path(logs) / "errors.log"
         app.error_log.write_text(SAMPLE_ERRORS, encoding="utf-8")
         info = app.support_info_dialog(app.support_info([check.checks[key] for key, _ in support.CHECKS]), check.window)
-        shot(info.window, "42-dialog-support-info"); info.window.destroy(); check.window.destroy()
+        shot(info.window, "44-dialog-support-info"); info.window.destroy(); check.window.destroy()
         app.error_log = logged
         del app.settings["update_folder"]; app.check_for_update()
 

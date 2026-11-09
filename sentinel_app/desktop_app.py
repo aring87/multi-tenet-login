@@ -1530,6 +1530,7 @@ class App:
         if not hasattr(self, "workspace_actions"): return
         for button in self.workspace_actions:
             button.configure(state="normal" if self.workspace and not self.busy else "disabled")
+        if hasattr(self, "rule_builder"): self.rule_builder.sync_test()  # Run test query needs the workspace too.
         gov = (bool(self.workspace) and getattr(self.session, "cloud", None) == GOV_CLOUD
                and self.gcc_high_onboarding())
         if gov and not self.gov_button.winfo_manager():

@@ -57,8 +57,8 @@ one-time device code appears in **Session activity**.
 
 ## Rules
 
-The switch at the top chooses **Workspace rules** or **Rule library**; the choice is
-remembered between sessions.
+The switch at the top chooses **Workspace rules**, **Rule library** or **Drift**; the
+choice is remembered between sessions.
 
 **Workspace rules** reads every configured analytics rule in the selected workspace,
 including disabled rules, and summarises totals by state. Search by name, rule ID,
@@ -80,6 +80,25 @@ and deploy…** sit above the list; **Library issues**, **Open saved assignment�
 In the client lists of those dialogs, Space ticks or clears a client. The history lists
 request and check times in your local time; point at a time to see it in UTC, as the
 receipts store it.
+
+**Drift** compares the two for the connected client, using only what the other two views
+have read: it starts no Azure or GitHub read of its own. It finds the client target in the
+library that deploys to the selected workspace — by workspace ID, or else by subscription,
+resource group and workspace name, or else by tenant and workspace name (a tenant alone
+never matches, because Lighthouse targets record the managing tenant) — and matches rules
+by rule ID. It lists three kinds of drift: **Missing** (assigned to the target but not in
+the workspace), **Different** (the workspace's enabled state or severity differs from the
+library's, after the target's overrides) and **Only in workspace** (live rules that are not
+in the library, or are in it but not assigned to this target). Other settings, such as the
+schedule, don't count as drift. Search and filter as in the other views, and select a rule to
+see the library's and the workspace's settings side by side (differences in red), its rule
+ID, file, target and overrides, and both full configurations. A banner warns when the target
+is switched off in the library, when not every workspace rule could be read, or when an
+assigned rule file is missing from the library; the list says so when no target, or more
+than one, deploys to the workspace. **Refresh** (F5) reads the workspace rules again and
+**Refresh library** reads the library again. Opening Drift reads the saved GitHub library
+once if none is loaded, as Rule library does. Right-click a rule to copy its name or ID, or
+to open it in Workspace rules or Rule library.
 
 ## Rule builder
 
@@ -188,13 +207,14 @@ folder can't be written (for example under Program Files).
 - **Ctrl+1**, **Ctrl+2** and **Ctrl+3** open Connect, Rules and Rule builder.
 - **Ctrl+F** goes to the search box on Rules, or to the client list on Connect.
 - **F5** refreshes the current page: subscriptions on Connect, the rules or the library on
-  Rules, and the GitHub sign-in check in the Rule builder.
+  Rules (the workspace rules on Drift), and the GitHub sign-in check in the Rule builder.
 - **Ctrl+N** starts a new rule, and **Ctrl+S** saves the draft in the Rule builder.
 - **Ctrl+Page Down** and **Ctrl+Page Up** move to the next and previous Rule builder step.
 - In the Query box, **Tab** indents and **Ctrl+Tab** moves on; in other text boxes **Tab**
   moves on.
 - In the Rules page lists, the arrow keys move the selection and **Enter** opens the selected
-  rule (Workspace rules: moves into its details; Rule library: opens it in the Rule builder);
+  rule (Workspace rules and Drift: moves into its details; Rule library: opens it in the Rule
+  builder);
   **Ctrl+C** copies the selected rows.
 - In a search box, **Enter** or **Down** moves to the first result and **Esc** clears the search.
 - In the client list on Connect, type the first letters of a name to choose that client.

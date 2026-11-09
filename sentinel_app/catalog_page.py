@@ -233,6 +233,7 @@ class CatalogPage:
         self.source_hint.set("")
         self.show_source()
         self.empty.show("The rule library couldn't be read. Check the source above, then select Refresh library.")
+        self.app.drift_changed()
 
     def hide_error(self):
         self.error.set(""); self.error_banner.pack_forget()
@@ -466,7 +467,7 @@ class CatalogPage:
             self.summary_pill.configure(cursor=""); self.summary_pill.tooltip_text = ""
             if self.loading: self.empty.show(busy=True)  # Keeps the reading message and its progress.
             else: self.empty.show(*self.empty_state())
-            self.show_row(None); self.sync_actions(); return
+            self.show_row(None); self.sync_actions(); self.app.drift_changed(); return
         if self.searchable[0] is not self.snapshot: self.index()
         needle = self.search.get().strip().casefold()
         for row, text in self.ordered(self.snapshot[kind.lower()], self.searchable[1][kind.lower()]):
@@ -488,6 +489,7 @@ class CatalogPage:
         else: self.empty.show("Nothing matches the current search and state filter.",
                               ("Clear search and filter", lambda: (self.search.set(""), self.filter.set("All states"))))
         self.sync_actions()
+        self.app.drift_changed()  # The drift view compares against this library.
 
     def selected(self, event=None):
         self.sync_actions()
@@ -573,6 +575,7 @@ class CatalogPage:
         self.reading("Reading the rule library…"); self.show_source()
         progress = self.app.file_progress(self.reading)
         self.loading = True
+        self.app.drift_changed()
         def task():
             try:
                 snapshot = load_local(key[1]) if key[0] == "Local folder" else GitHubReader().load(key[1], progress)

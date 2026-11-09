@@ -26,6 +26,7 @@ from .auth_recovery import AuthenticationRequired, SignInCancelled
 from .signin_process import check_cancelled
 from .rules_page import CopyValues, RulesPage
 from .catalog_page import CatalogPage
+from .drift_page import DriftPage
 from .rule_builder_page import RuleBuilderPage
 from .signin_window import create_handoff
 from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, validate_tenant_hint, CYBERQP_PORTALS)
@@ -42,7 +43,7 @@ NAVIGATION = dict(
     connect=("Connect", "Choose a client and sign in", "connect",
              "Connect", "Sign in with your Microsoft account, then choose the client's workspace."),
     rules=("Rules", "Live rules and the library", "rules",
-           "Rules", "Browse the live rules in the selected workspace, or the rule library."),
+           "Rules", "See the live workspace rules, the rule library and where they differ."),
     builder=("Rule builder", "Create and edit rules", "builder",
              "Rule builder", "Create or edit a rule and submit it for a teammate's approval."))
 
@@ -265,7 +266,7 @@ class App:
         if not isinstance(value, dict): return {}
         def usable(key, item):
             if key in ("rule_view", "library_view", "geometry", "client"): return isinstance(item, str)
-            if key in ("rules_split", "library_split"):
+            if key in ("rules_split", "library_split", "drift_split"):
                 return isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)
             if key == "last_workspace": return isinstance(item, dict)
             return True
@@ -285,7 +286,8 @@ class App:
             state["rules_sort"] = list(self.rules_page.sort)
             state["library_view"] = self.catalog_page.view.get()
             # A split never shown this session keeps the share saved last time.
-            for key, split in (("rules_split", self.rules_page.split), ("library_split", self.catalog_page.split)):
+            for key, split in (("rules_split", self.rules_page.split), ("library_split", self.catalog_page.split),
+                               ("drift_split", self.drift_page.split)):
                 if split.fraction(): state[key] = split.fraction()
             write_json(self.state_file, state)
         except (OSError, tk.TclError):
@@ -498,13 +500,14 @@ class App:
         if page == "connect":
             if self.session is not None: self.refresh_subscriptions()
         elif page == "rules":
-            (self.rules_page.load if self.rule_view.get() == "workspace" else self.catalog_page.load)()
+            # Drift compares what the other two views read; F5 there reads the workspace rules again.
+            (self.catalog_page.load if self.rule_view.get() == "repository" else self.rules_page.load)()
         else:
             self.rule_builder.check_github(force=True)
 
     def focus_search(self):
         if self.current_page() == "rules":
-            page = self.rules_page if self.rule_view.get() == "workspace" else self.catalog_page
+            page = dict(workspace=self.rules_page, repository=self.catalog_page, drift=self.drift_page)[self.rule_view.get()]
             page.search_entry.focus_set(); page.search_entry.select_range(0, "end")
         elif self.current_page() == "connect":
             self.clientbox.focus_set()
@@ -980,10 +983,12 @@ class App:
     def build_rules(self, page):
         bar = ttk.Frame(page); bar.pack(fill="x", pady=(0, kit.space("lg")))
         self.rule_view = tk.StringVar(value="workspace")
-        kit.Segmented(bar, self.rule_view, [("workspace", "Workspace rules"), ("repository", "Rule library")]).pack(side="left")
-        self.rule_views = dict(workspace=ttk.Frame(page), repository=ttk.Frame(page))
+        kit.Segmented(bar, self.rule_view, [("workspace", "Workspace rules"), ("repository", "Rule library"),
+                                            ("drift", "Drift")]).pack(side="left")
+        self.rule_views = dict(workspace=ttk.Frame(page), repository=ttk.Frame(page), drift=ttk.Frame(page))
         self.rules_page = RulesPage(self, self.rule_views["workspace"])
         self.catalog_page = CatalogPage(self, self.rule_views["repository"])
+        self.drift_page = DriftPage(self, self.rule_views["drift"])
         if self.ui_state.get("rule_view") in self.rule_views: self.rule_view.set(self.ui_state["rule_view"])
         self.rule_view.trace_add("write", lambda *args: self.rule_view_changed())
         self.rule_view_changed()
@@ -1003,6 +1008,12 @@ class App:
         if canvas is not None: canvas.yview_moveto(0)
         self.update_workspace_context()
         if view == "repository": self.catalog_page.auto_load()
+        elif view == "drift": self.drift_page.opened()
+
+    def drift_changed(self):
+        """The workspace rules or the rule library changed: compare them again if Drift is showing (it
+        compares again whenever it is opened)."""
+        if hasattr(self, "drift_page") and self.rule_view.get() == "drift": self.drift_page.update()
 
     # ------------------------------------------------------------ navigation
     def scroll_into_view(self, widget, only_if_hidden=False):
@@ -1394,6 +1405,7 @@ class App:
         self.sync_connection()
         if hasattr(self, "catalog_page"): self.catalog_page.sync_actions()
         if hasattr(self, "rules_page"): self.rules_page.sync()
+        if hasattr(self, "drift_page"): self.drift_page.sync()
 
     def sync_connection(self):
         """Enable selectors and workspace actions only when there is something to act on."""

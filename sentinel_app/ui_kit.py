@@ -93,17 +93,21 @@ def _forward_right_click(label, target):
 def link_search(entry, tree):
     """Join a search box to the table it filters: Down or Enter moves to the table's
     first row, and Esc clears the search. Esc in an empty box does nothing here, so a
-    dialog's own Esc still closes it."""
+    dialog's own Esc still closes it. Enter in the box never reaches the dialog's Enter,
+    even when nothing matches: in a search box it only ever means 'go to the results'."""
     def into(event):
         rows = tree.get_children("")
         if not rows: return None
         tree.focus_set(); tree.focus(rows[0]); tree.selection_set(rows[0]); tree.see(rows[0])
         return "break"
+    def enter(event):
+        into(event)
+        return "break"
     def clear(event):
         if not entry.get(): return None
         entry.delete(0, "end")
         return "break"
-    entry.bind("<Down>", into, add="+"); entry.bind("<Return>", into, add="+")
+    entry.bind("<Down>", into, add="+"); entry.bind("<Return>", enter, add="+")
     entry.bind("<Escape>", clear, add="+")
 
 
@@ -256,7 +260,12 @@ def _popup_tip(widget, text, x, y):
 def tooltip(widget, text):
     """Show ``text`` under the widget after a short hover, and on keyboard focus.
     The text is read from ``widget.tooltip_text`` when shown, so it can be updated;
-    an empty text shows nothing."""
+    an empty text shows nothing.
+
+    A ttk.Label stays out of the Tab order: Tk counts any widget with a <FocusIn>
+    binding as focusable, which would make a plain label a Tab stop that shows nothing."""
+    if widget.winfo_class() == "TLabel" and str(widget.cget("takefocus")) == "":
+        widget.configure(takefocus=0)
     state = {"window": None, "timer": None}
     def show():
         state["timer"] = None
@@ -576,13 +585,22 @@ class StatTile:
         ttk.Label(self.card.body, textvariable=self.value, style="Stat.TLabel").pack(anchor="w", pady=(px(2), 0))
 
 
+def _pad_total(value):
+    """The total of a pack ``pady`` (or ``padx``) as pack_info gives it: one value, or two."""
+    parts = value if isinstance(value, (tuple, list)) else str(value).split()
+    parts = [int(float(str(part))) for part in parts] or [0]
+    return parts[0] + (parts[1] if len(parts) > 1 else parts[0])
+
+
 class EmptyOverlay:
     """Message drawn over a table while it has no rows, with an optional action, a
     large muted glyph above the text when the icon font is available, and an
     activity line while ``busy`` (loading) is set.
 
     The message is centred in the space under the column headings, so it never
-    overlaps them in a short table and sits comfortably high in a tall one."""
+    overlaps them in a short table and sits comfortably high in a tall one. In a table
+    too short for the glyph, the glyph steps aside, and the message never covers the
+    headings or the table's bottom border."""
 
     HEADING = 36  # Treeview heading height, 96-DPI pixels.
 
@@ -605,10 +623,21 @@ class EmptyOverlay:
         if height <= 1:
             self.frame.place(relx=.5, rely=.4, y=0, anchor="center"); return
         head = px(self.HEADING)
-        room = max(0, height - head)
+        room = max(0, height - head - px(3))  # The 1px bottom border and a gap stay clear.
+        # Measured from the parts (their sizes are current), not the frame (its size follows on idle).
+        parts = [part for part in self.frame.pack_slaves() if part is not self.glyph]
+        content = sum(part.winfo_reqheight() + _pad_total(part.pack_info().get("pady", 0)) for part in parts)
+        if self.glyph is not None and not self.line.winfo_manager():
+            glyph = self.glyph.winfo_reqheight() + px(10)
+            fits = content + glyph + px(8) <= room
+            if fits and not self.glyph.winfo_manager(): self.glyph.pack(before=self.label, pady=(0, px(10)))
+            elif not fits and self.glyph.winfo_manager(): self.glyph.pack_forget()
+            if fits: content += glyph
         # A tall table reads better with the message in its upper third; a short one is simply centred.
         share = .5 if room < px(260) else .36
-        self.frame.place(relx=.5, rely=0, y=head + int(room * share), anchor="center")
+        low, high = head + px(2) + content // 2, height - px(3) - content // 2
+        centre = low if high < low else max(low, min(head + int(room * share), high))
+        self.frame.place(relx=.5, rely=0, y=centre, anchor="center")
 
     def show(self, text=None, action=None, busy=False):
         if text is not None:
@@ -646,7 +675,9 @@ class StripedTreeview(ttk.Treeview):
     ``item`` and ``full_values`` return them, so sorting, copying and searching never see
     the shortened text; ``shortened(iid, column)`` gives a cut cell's full text."""
 
-    PAD = 9  # 96-DPI pixels of a cell that text can't use: the cell's left padding and a gap.
+    # 96-DPI pixels of a cell that text can't use: Tk's inset and a gap (LEAD_PAD, the whole of it in a table
+    # with a lead column), plus the 10 px gutter and 4 px right padding desktop_theme gives plain tables.
+    PAD, LEAD_PAD = 9 + 14, 9
 
     def __init__(self, master=None, **kw):
         super().__init__(master, **kw)
@@ -982,6 +1013,7 @@ def table(parent, columns, height=10, selectmode="browse", icon="rules", sort=No
     tree = StripedTreeview(frame, columns=[key for key, *_ in columns], show="tree headings" if lead else "headings",
                            height=height, selectmode=selectmode, style="Lead.Treeview" if lead else "Treeview")
     if lead:
+        tree.PAD = StripedTreeview.LEAD_PAD  # The lead column is the gutter; cells keep Tk's padding.
         tree.column("#0", width=px(28), minwidth=px(28), stretch=False, anchor="center")
         tree.heading("#0", text="")
     tree.base_headings, tree.sort_state = {}, None
@@ -1078,8 +1110,11 @@ def text_area(parent, height, readonly=False, wrap="word", undo=False, font="mon
 
     ``tab`` sets what Tab does. 'focus' moves to the next control and Shift+Tab to the
     previous one; 'indent' inserts four spaces, and Ctrl+Tab (or Shift+Tab back) leaves
-    the area. By default prose areas (font='body') use 'focus' and editable code areas
-    'indent'; read-only areas keep Tk's behaviour, which already moves on."""
+    the area. By default prose and read-only areas use 'focus' and editable code areas
+    'indent'.
+
+    A read-only area is still a Tab stop (Tk skips a disabled Text otherwise), so its
+    text can be scrolled with the arrow and Page keys and selected to copy."""
     frame = tk.Frame(parent, bg=COLORS["card"], bd=0, highlightthickness=1,
                      highlightbackground=COLORS["line"], highlightcolor=COLORS["line"])
     text = tk.Text(frame, height=height, width=30, wrap=wrap, undo=undo, font=FONTS[font],
@@ -1096,7 +1131,8 @@ def text_area(parent, height, readonly=False, wrap="word", undo=False, font="mon
     text.bind("<FocusOut>", lambda event: frame.configure(
         highlightbackground=COLORS["danger"] if getattr(frame, "error", False) else COLORS["line"]), add="+")
     if tab is None:
-        tab = "focus" if font == "body" else None if readonly else "indent"
+        # Read-only areas need 'focus' too: Tk's Text class swallows Shift+Tab, which would trap the keyboard.
+        tab = "focus" if font == "body" or readonly else "indent"
     if tab == "focus":
         text.bind("<Tab>", lambda event: _focus_step(event.widget, 1))
         text.bind("<Shift-Tab>", lambda event: _focus_step(event.widget, -1))
@@ -1105,14 +1141,21 @@ def text_area(parent, height, readonly=False, wrap="word", undo=False, font="mon
         for sequence, step in (("<Control-Tab>", 1), ("<Control-Shift-Tab>", -1), ("<Shift-Tab>", -1)):
             text.bind(sequence, lambda event, s=step: _focus_step(event.widget, s))
     if readonly:
-        text.configure(state="disabled", bg=COLORS["raised"])
+        text.configure(state="disabled", bg=COLORS["raised"], takefocus=1)
         frame.configure(bg=COLORS["raised"])
     if placeholder:
         text.placeholder_label = tk.Label(text, text=placeholder, font=FONTS["body"], fg=COLORS["muted"],
                                           bg=COLORS["raised"] if readonly else COLORS["card"], bd=0,
-                                          justify="left", anchor="nw", wraplength=px(440))
+                                          justify="left", anchor="nw", wraplength=px(120))
         text.placeholder_label.bind("<Button-1>", lambda event: text.focus_set())
         _forward_right_click(text.placeholder_label, text)
+        def rewrap(event):
+            # The hint is placed px(12) inside the text's own border and padding; keep the same margin on the right.
+            inset = px(12) + text.winfo_pixels(text.cget("padx")) + text.winfo_pixels(text.cget("borderwidth"))
+            width = max(px(120), event.width - 2 * inset)
+            if int(str(text.placeholder_label.cget("wraplength")) or 0) != width:
+                text.placeholder_label.configure(wraplength=width)
+        text.bind("<Configure>", rewrap, add="+")  # Placed with place(), so this can't feed back into the layout.
         if not readonly:
             # An editable area clears its hint while it has the keyboard, so the caret is never hidden.
             text.bind("<<Modified>>", lambda event: refresh_placeholder(text), add="+")
@@ -1299,30 +1342,95 @@ class Stepper(ttk.Frame):
             self.paint(index, COLORS["accent_soft"] if index == current else COLORS["card"], index == current)
 
 
+# ------------------------------------------------------------------ monitors
+_USER32 = []
+
+
+def _user32():
+    """user32 with pointer-sized monitor handles (its own copy, so other modules' calls are unaffected)."""
+    if not _USER32:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32")
+        user32.MonitorFromPoint.restype = wintypes.HMONITOR
+        user32.MonitorFromPoint.argtypes = (wintypes.POINT, wintypes.DWORD)
+        _USER32.append(user32)
+    return _USER32[0]
+
+
+def work_area(root, x=None, y=None):
+    """The work area (left, top, width, height) of the monitor holding (x, y), or of the primary
+    monitor, without the taskbar; the whole screen when Windows can't say."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD)]
+        user32 = _user32()
+        rect = wintypes.RECT()
+        monitor = user32.MonitorFromPoint(wintypes.POINT(x, y), 0) if x is not None else None
+        info = MONITORINFO(); info.cbSize = ctypes.sizeof(info)
+        if monitor and user32.GetMonitorInfoW(wintypes.HMONITOR(monitor), ctypes.byref(info)):
+            rect = info.rcWork
+        elif not user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+            raise OSError("No work area")
+        if rect.right - rect.left > 0 and rect.bottom - rect.top > 0:
+            return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+    except (AttributeError, OSError, ImportError, ValueError, TypeError):
+        pass
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight() - px(40)
+
+
+def window_frame():
+    """The title bar and resize borders Windows adds around the client area: (width, height)."""
+    try:
+        metric = _user32().GetSystemMetrics
+        padded = metric(92)  # SM_CXPADDEDBORDER
+        sizes = (2 * (metric(32) + padded), metric(4) + 2 * (metric(33) + padded))  # SM_CXSIZEFRAME, SM_CYCAPTION, SM_CYSIZEFRAME
+        if all(0 <= size < 400 for size in sizes): return sizes
+    except (AttributeError, OSError, ImportError):
+        pass
+    return px(16), px(40)
+
+
+def on_a_monitor(x, y):
+    """Whether (x, y) is on any monitor, not just the primary one."""
+    try:
+        from ctypes import wintypes
+        return bool(_user32().MonitorFromPoint(wintypes.POINT(x, y), 0))  # MONITOR_DEFAULTTONULL
+    except (AttributeError, OSError, ImportError, ValueError, TypeError):
+        return x >= 0 and y >= 0
+
+
 # ------------------------------------------------------------------ dialogs
 def place_dialog(window, parent, width=None, height=None, min_width=None, min_height=None):
-    """Size a Toplevel in scaled pixels, clamp it to the parent and screen, and centre it.
-    A dimension left out is measured from the content, and a measured height is never
-    padded, so a short message box has no empty band under its buttons."""
+    """Size a Toplevel in scaled pixels, clamp it to the parent and to the work area of the
+    monitor the parent is on (any monitor, left of or above the primary too, and never under
+    the taskbar), and centre it over the parent. A dimension left out is measured from the
+    content, and a measured height is never padded, so a short message box has no empty band
+    under its buttons."""
     if width is None or height is None:
         # Only measure when needed: idle tasks on a not-yet-shown Toplevel whose master is
         # withdrawn leave it withdrawn for good on Windows, even after deiconify.
         window.update_idletasks()
     top = parent.winfo_toplevel()
-    screen_w, screen_h = window.winfo_screenwidth(), window.winfo_screenheight()
     anchored = bool(top.winfo_viewable()) and top.winfo_width() > 1
     if anchored:
         ax, ay, aw, ah = top.winfo_rootx(), top.winfo_rooty(), top.winfo_width(), top.winfo_height()
+        left, area_top, area_w, area_h = work_area(window, ax + aw // 2, ay + ah // 2)
     else:
-        ax, ay, aw, ah = 0, 0, screen_w, screen_h - px(120)
+        left, area_top, area_w, area_h = work_area(window)
+        ax, ay, aw, ah = left, area_top, area_w, area_h - px(120)
+    frame_w, frame_h = window_frame()
     w = px(width) if width else window.winfo_reqwidth()
     h = px(height) if height else window.winfo_reqheight()
-    w = max(px(320), min(w, aw - px(40) if anchored else aw - px(80), screen_w - px(40)))
-    h = max(px(200) if height else 0, min(h, ah - px(24) if anchored else ah, screen_h - px(80)))
+    w = max(px(320), min(w, aw - px(40) if anchored else aw - px(80), area_w - frame_w - px(24)))
+    h = max(px(200) if height else 0, min(h, ah - px(24) if anchored else ah, area_h - frame_h - px(40)))
     if min_width or min_height:
         window.minsize(min(px(min_width or 0), w), min(px(min_height or 0), h))
-    x = max(0, min(ax + max(0, (aw - w) // 2), screen_w - w))
-    y = max(0, min(ay + max(0, (ah - h) // 3), screen_h - h))
+    x = max(left, min(ax + max(0, (aw - w) // 2), left + area_w - w - frame_w))
+    y = max(area_top, min(ay + max(0, (ah - h) // 3), area_top + area_h - h - frame_h))
     window.geometry(f"{w}x{h}+{x}+{y}")
 
 
@@ -1387,7 +1495,10 @@ def action_row(parent, primary=None, secondary=(), close=None, aux=()):
 
     Each argument is a (text, command) pair. Returns (frame, buttons) where
     ``buttons`` lists the right-hand buttons in that same visual order, then the aux
-    buttons from left to right."""
+    buttons from left to right. Tab visits them as they read, left to right.
+
+    A dialog that packs this row (or a banner) before its content should ``lift()`` it
+    once the content exists: Tk tabs through a window's parts in the order they stack."""
     frame = ttk.Frame(parent, style="Card.TFrame")
     buttons = []
     specs = ([("Primary.TButton", primary)] if primary else []) + \
@@ -1401,6 +1512,10 @@ def action_row(parent, primary=None, secondary=(), close=None, aux=()):
         button = ttk.Button(frame, text=text, command=command, style="Ghost.TButton")
         button.pack(side="left", padx=(0 if index == 0 else px(4), 0))
         buttons.append(button)
+    # Packing from the right created them back to front; stacking order is Tab order.
+    right = len(buttons) - len(aux)
+    for button in buttons[right:] + buttons[:right]:
+        button.lift()
     return frame, buttons
 
 
@@ -1533,12 +1648,14 @@ class FormDialog:
 
 class MessageDialog:
     """A themed message box: an icon tile, a title, the message, optional ``details``
-    in a read-only box with Copy details, and an OK button (plus ``cancel`` when
-    given). ``result`` is True once OK is chosen. ``alert`` and ``confirm`` wrap it."""
+    in a read-only box with Copy details (a ghost button at the left), and an OK button
+    (plus ``cancel`` when given) at the right. ``result`` is True once OK is chosen, False
+    once ``cancel`` is, and ``closed`` (False unless given) after Esc or the window's X.
+    ``alert`` and ``confirm`` wrap it."""
 
     def __init__(self, parent, title, message, details=None, tone="info", icon=None, ok="OK", cancel=None,
-                 destructive=False):
-        self.result, self.details = False, details
+                 destructive=False, closed=False):
+        self.result, self.details = closed, details
         self.window = window = tk.Toplevel(parent)
         window.title(title); window.resizable(False, False)
         window.configure(bg=COLORS["card"])
@@ -1558,13 +1675,14 @@ class MessageDialog:
             frame, self.text = text_area(body, 6, readonly=True)
             set_text(self.text, details)
             frame.pack(fill="both", expand=True, pady=(px(14), 0))
+        # The button that dismisses the dialog stays rightmost, as in every other dialog; Copy details helps at the left.
         self.actions, buttons = action_row(body, primary=(ok, self.accept),
-                                           secondary=(("Copy details", self.copy),) if details else (),
-                                           close=(cancel, self.close) if cancel else None)
+                                           close=(cancel, self.cancel) if cancel else None,
+                                           aux=(("Copy details", self.copy),) if details else ())
         self.actions.pack(fill="x", pady=(px(20), 0))
         self.ok_button = buttons[0]
-        self.copy_button = buttons[1] if details else None
-        self.cancel_button = buttons[-1] if cancel else None
+        self.cancel_button = buttons[1] if cancel else None
+        self.copy_button = buttons[-1] if details else None
         if destructive: self.ok_button.configure(style="Danger.TButton")
         place_dialog(window, parent, width=480)
         # A destructive choice starts on Cancel, so Enter alone never deletes anything.
@@ -1575,7 +1693,12 @@ class MessageDialog:
         self.result = True
         self.window.destroy()
 
+    def cancel(self):
+        self.result = False
+        self.window.destroy()
+
     def close(self):
+        """Esc or the window's X: the result stays ``closed``."""
         self.window.destroy()
 
     def copy(self):
@@ -1594,13 +1717,15 @@ def alert(parent, title, message, details=None, tone="danger"):
     MessageDialog(parent, title, message, details=details, tone=tone).show()
 
 
-def confirm(parent, title, message, ok="OK", cancel="Cancel", destructive=False):
+def confirm(parent, title, message, ok="OK", cancel="Cancel", destructive=False, closed=False):
     """Ask a question in a themed dialog and wait for the answer: True only when ``ok``
-    is chosen (Cancel, Esc and closing the window give False). ``destructive`` paints
-    ``ok`` red and starts with the keyboard on ``cancel``."""
+    is chosen, False for ``cancel``. Esc and closing the window give ``closed`` (False
+    unless given), so a question whose ``cancel`` does something, such as Discard, can
+    tell 'not now' apart from it. ``destructive`` paints ``ok`` red and starts with the
+    keyboard on ``cancel``."""
     return MessageDialog(parent, title, message, tone="danger" if destructive else "info",
                          icon="warning" if destructive else "help", ok=ok, cancel=cancel,
-                         destructive=destructive).show()
+                         destructive=destructive, closed=closed).show()
 
 
 class ScrollArea:

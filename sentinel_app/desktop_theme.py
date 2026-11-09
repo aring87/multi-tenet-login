@@ -308,9 +308,15 @@ def configure_theme(root):
     # the first column holds just the centred image, with no expand indicator beside it.
     style.layout("Lead.Treeview.Item", [("Treeitem.padding", {"sticky": "nswe", "children": [
         ("Treeitem.image", {"sticky": ""})]})])
+    # Cells start 10 px further in, as entries and cards do (cell text already sits 3 px inside its padding,
+    # so headings take 3 px more to stay in line). Tables with a lead column already have that gutter (the
+    # dot or checkbox), so they keep Tk's own padding. ui_kit.StripedTreeview.PAD follows these numbers.
     style.configure("Treeview.Heading", background=c["raised"], foreground=c["muted"], font=f["strong_small"],
-                    padding=(px(3), px(8)), relief="flat", borderwidth=0,
+                    padding=(px(10) + px(3), px(8), px(4), px(8)), relief="flat", borderwidth=0,
                     bordercolor=c["line"], lightcolor=c["raised"], darkcolor=c["line"])
+    style.configure("Treeview.Cell", padding=(px(10), 0, px(4), 0))
+    style.configure("Lead.Treeview.Heading", padding=(px(3), px(8)))
+    style.configure("Lead.Treeview.Cell", padding=0)  # Tk's default.
     style.map("Treeview.Heading", background=[("active", c["hover"])], lightcolor=[("active", c["hover"])])
     # The selected row beats the stripe tag (checked on Tk 8.6.15), so striping needs no special case.
     style.map("Treeview", background=[("selected", "focus", c["selection"]), ("selected", c["selection_inactive"])],

@@ -1,9 +1,11 @@
 """Offline checks for the shared desktop kit: theme tokens, tables, search boxes,
 dialogs, the stepper and scroll areas."""
+import re
 import tkinter as tk
 import unittest
 from types import SimpleNamespace
 from tkinter import ttk
+from unittest.mock import MagicMock, patch
 
 from sentinel_app import ui_kit as kit
 from sentinel_app.desktop_theme import (CHECK_INDICATOR, CHECKBOX, COLORS, FONTS, ICONS, checkbox_image,
@@ -690,6 +692,158 @@ class ScrollAreaTests(KitTestCase):
         self.assertEqual(area.scrollbar.winfo_manager(), "")
         area.canvas.yview_moveto(0)
         self.assertIsNone(wheel(-120))
+
+
+class ReviewFixTests(KitTestCase):
+    """Wrapping, overlays, table gutters, keyboard order and dialog results."""
+
+    def show(self):
+        self.root.deiconify(); self.root.update()
+
+    def test_placeholder_wraps_to_its_area(self):
+        hint = "Sign-in steps, GitHub one-time codes and any errors appear here, one line after another."
+        host = tk.Frame(self.root, width=px(436), height=px(200)); host.pack_propagate(False); host.pack(anchor="nw")
+        frame, text = kit.text_area(host, 7, readonly=True, placeholder=hint); frame.pack(fill="both", expand=True)
+        self.show()
+        label = text.placeholder_label
+        self.assertLessEqual(label.winfo_x() + label.winfo_reqwidth(), text.winfo_width())  # Not cut at the edge.
+        narrow = int(str(label.cget("wraplength")))
+        host.configure(width=px(800)); self.root.update()
+        self.assertGreater(int(str(label.cget("wraplength"))), narrow)  # A wide box doesn't wrap early.
+        self.assertLessEqual(label.winfo_x() + label.winfo_reqwidth(), text.winfo_width())
+
+    def test_empty_overlay_keeps_clear_of_the_headings_and_the_border(self):
+        host = tk.Frame(self.root, width=px(500), height=px(124)); host.pack_propagate(False); host.pack(anchor="nw")
+        frame, tree, empty = kit.table(host, (("name", "Name", 200),), height=2); frame.pack(fill="both", expand=True)
+        if empty.glyph is None: self.skipTest("The icon font isn't available")
+        self.show()
+        empty.show("The rule library couldn't be read.\nCheck the source above, then select Refresh library.")
+        self.root.update()
+        box = empty.frame
+        self.assertGreaterEqual(box.winfo_y(), px(36) + px(2))  # Under the headings,
+        self.assertLessEqual(box.winfo_y() + box.winfo_height(), frame.winfo_height() - 1)  # above the bottom border.
+        self.assertFalse(empty.glyph.winfo_ismapped())  # No room for the glyph.
+        host.configure(height=px(400)); self.root.update()
+        self.assertTrue(empty.glyph.winfo_ismapped())
+
+    def test_plain_tables_have_a_gutter_and_lead_tables_keep_theirs(self):
+        style = ttk.Style(self.root)
+        left = lambda name: int(str(style.lookup(name, "padding")).split()[0])
+        self.assertGreaterEqual(left("Treeview.Cell"), px(8)); self.assertGreaterEqual(left("Treeview.Heading"), px(8))
+        self.assertLess(left("Lead.Treeview.Heading"), px(8))  # Its dot or checkbox column is the gutter.
+        frame, plain, _ = kit.table(self.root, (("name", "Name", 150),)); frame.pack()
+        _, lead, _ = kit.table(self.root, (("name", "Name", 150),), marker=True)
+        self.assertEqual((plain.PAD, lead.PAD), (23, 9))
+        room = int(plain.column("name", "width")) - px(plain.PAD)
+        body, text = kit.font(self.root, "body"), "W"
+        while body.measure(text + "W") <= room: text += "W"
+        plain.insert("", "end", iid="a", values=(text,))
+        self.assertEqual(plain.shortened("a", "name"), "")  # Exactly fits: whole.
+        plain.item("a", values=(text + "WW",))
+        self.assertEqual(plain.shortened("a", "name"), text + "WW")  # Too long: shortened.
+
+    def test_enter_in_a_search_box_never_presses_the_dialog_button(self):
+        window = tk.Toplevel(self.root); pressed = []
+        window.bind("<Return>", lambda event: pressed.append(event.widget))
+        var = tk.StringVar(); entry = ttk.Entry(window, textvariable=var); entry.pack()
+        frame, tree, _ = kit.table(window, (("name", "Name", 200),)); frame.pack()
+        kit.link_search(entry, tree)
+        window.update(); entry.focus_force(); window.update()
+        entry.event_generate("<Return>"); window.update()
+        self.assertEqual(pressed, [])  # Nothing matched: Enter stays in the box.
+        tree.insert("", "end", iid="a", values=("a",))
+        entry.event_generate("<Return>"); window.update()
+        self.assertEqual(pressed, []); self.assertIs(window.focus_get(), tree)  # It moves into the results.
+        window.destroy()
+
+    def test_a_tooltip_never_makes_a_label_a_tab_stop(self):
+        label = ttk.Label(self.root, text="Ready"); label.pack(); kit.tooltip(label, "")
+        values = kit.KeyValues(self.root); values.pack(fill="x"); values.set([("Rule ID", "a" * 60)], mono={"Rule ID"})
+        button = ttk.Button(self.root, text="Go"); button.pack(); kit.tooltip(button, "Go now")
+        self.show()
+        focusable = lambda widget: str(self.root.tk.eval("tk::FocusOK " + str(widget)))
+        self.assertEqual((focusable(label), focusable(values.values[0]), focusable(button)), ("0", "0", "1"))
+
+    def test_read_only_text_is_a_tab_stop_that_scrolls_and_lets_go(self):
+        before = ttk.Button(self.root, text="Before"); before.pack()
+        frame, text = kit.text_area(self.root, 4, readonly=True); frame.pack()
+        after = ttk.Button(self.root, text="After"); after.pack()
+        kit.set_text(text, "\n".join("Line %d" % number for number in range(40)))
+        self.show()
+        self.assertIs(before.tk_focusNext(), text)
+        text.focus_force(); self.root.update()
+        text.event_generate("<Next>"); self.root.update()
+        self.assertGreater(text.yview()[0], 0)  # Page Down scrolls it.
+        text.event_generate("<Shift-Tab>"); self.root.update()
+        self.assertIs(self.root.focus_get(), before)  # Shift+Tab isn't trapped.
+        text.focus_force(); self.root.update()
+        text.event_generate("<Tab>"); self.root.update()
+        self.assertIs(self.root.focus_get(), after)
+
+    def test_action_row_tab_follows_the_visual_order(self):
+        window = tk.Toplevel(self.root)
+        entry = ttk.Entry(window); entry.pack()
+        row, buttons = kit.action_row(window, primary=("Submit", None), secondary=(("Check", None),),
+                                      close=("Close", None), aux=(("Open in GitHub", None),))
+        row.pack(fill="x"); window.update()
+        order, widget = [], entry
+        for _ in buttons:
+            widget = widget.tk_focusNext(); order.append(widget.cget("text"))
+        self.assertEqual(order, ["Open in GitHub", "Submit", "Check", "Close"])  # Left to right, as they read.
+        self.assertEqual([b.cget("text") for b in buttons], ["Submit", "Check", "Close", "Open in GitHub"])
+        window.destroy()
+
+    def test_message_dialog_keeps_its_dismiss_button_rightmost(self):
+        dialog = kit.MessageDialog(self.root, "Couldn't load workspaces", "Try again.", details="trace")
+        self.addCleanup(lambda: dialog.window.winfo_exists() and dialog.window.destroy())
+        self.assertEqual(str(dialog.copy_button.cget("style")), "Ghost.TButton")
+        self.assertEqual(dialog.copy_button.pack_info()["side"], "left")
+        right = [button for button in dialog.actions.pack_slaves() if button.pack_info()["side"] == "right"]
+        self.assertEqual(right, [dialog.ok_button])
+        dialog.window.update()
+        self.assertGreater(dialog.ok_button.winfo_x(), dialog.copy_button.winfo_x())
+        asked = kit.MessageDialog(self.root, "Restore unsaved rule?", "Restore it?", ok="Restore", cancel="Discard")
+        self.addCleanup(lambda: asked.window.winfo_exists() and asked.window.destroy())
+        self.assertEqual(asked.actions.pack_slaves()[0], asked.cancel_button)  # Packed first from the right.
+
+    def test_confirm_tells_not_now_apart_from_cancel(self):
+        self.show()
+        def later(action):
+            def run():
+                window = [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+                if action == "escape":
+                    window.focus_force(); window.update(); (window.focus_get() or window).event_generate("<Escape>")
+                elif action == "close": window.tk.call(window.protocol("WM_DELETE_WINDOW"))
+                else: next(w for w in descendants(window) if isinstance(w, ttk.Button) and w.cget("text") == action).invoke()
+            self.root.after(150, run)
+        ask = lambda: kit.confirm(self.root, "Restore unsaved rule?", "Restore it?", ok="Restore", cancel="Discard",
+                                  closed=None)
+        later("escape"); self.assertIsNone(ask())
+        later("close"); self.assertIsNone(ask())
+        later("Discard"); self.assertIs(ask(), False)
+        later("Restore"); self.assertIs(ask(), True)
+        later("close"); self.assertIs(kit.confirm(self.root, "Remove client", "Remove it?"), False)  # The default.
+
+    def test_dialogs_open_on_the_parents_monitor(self):
+        class Top:
+            def __init__(self, x, y): self.x, self.y = x, y
+            def winfo_toplevel(self): return self
+            def winfo_viewable(self): return 1
+            def winfo_width(self): return 1500
+            def winfo_height(self): return 900
+            def winfo_rootx(self): return self.x
+            def winfo_rooty(self): return self.y
+        for parent, area in ((Top(2509, 131), (2400, 0, 3200, 1740)), (Top(-1800, 60), (-1920, 0, 1920, 1040))):
+            window = MagicMock()
+            with patch.object(kit, "work_area", return_value=area) as lookup, \
+                 patch.object(kit, "window_frame", return_value=(16, 39)):
+                kit.place_dialog(window, parent, 520, 300)
+            lookup.assert_called_once_with(window, parent.x + 750, parent.y + 450)  # The parent's monitor.
+            w, h, x, y = map(int, re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", window.geometry.call_args.args[0]).groups())
+            left, top, width, height = area
+            self.assertGreaterEqual(x, left); self.assertLessEqual(x + w + 16, left + width)
+            self.assertGreaterEqual(y, top); self.assertLessEqual(y + h + 39, top + height)
+        self.assertLess(x, 0)  # Left of the primary monitor, and kept there.
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ except (AttributeError, OSError):
 import tkinter as tk  # noqa: E402
 from sentinel_app import desktop_app as ui  # noqa: E402
 from sentinel_app import desktop_backend as backend  # noqa: E402
-from sentinel_app import catalog_page, rule_builder_page  # noqa: E402
+from sentinel_app import catalog_page, query_runner, rule_builder_page  # noqa: E402
 from sentinel_app import ui_kit as kit  # noqa: E402
 from sentinel_app import advice  # noqa: E402
 from sentinel_app.repository_catalog import catalog  # noqa: E402
@@ -174,6 +174,19 @@ class Session:
     account = {"user": {"name": "analyst@example.com"}}
 
 
+TEST_COLUMNS = ["TimeGenerated", "UserPrincipalName", "IPAddress", "ResultType", "Attempts"]
+TEST_SYNTAX_ERROR = ('ERROR: Bad Request({"error":{"message":"The request had some invalid properties","code":'
+                     '"BadArgumentError","innererror":{"code":"SyntaxError","message":"A recognition error occurred '
+                     'in the query.","innererror":{"code":"SYN0002","message":"Query could not be parsed at \'wher\' '
+                     'on line [2,2]","line":2,"pos":2,"token":"wher"}}}})')
+
+
+def test_rows():
+    people = ["adele.vance", "alex.wilber", "diego.siciliani", "grady.archie", "isaiah.langer", "megan.bowen"]
+    return [["2026-11-09T%02d:%02d:00Z" % (8 + index // 4, (index * 13) % 60), people[index % 6] + "@contoso.com",
+             "203.0.113.%d" % (20 + index * 7), "50126", str(24 + index * 3)] for index in range(12)]
+
+
 def fail_github(self, repository, progress=None):
     raise RuntimeError("GitHub read failed (HTTP 404): repository not found or no access.")
 
@@ -304,6 +317,16 @@ def main():
     builder.load_form(valid_form()); builder.vars["name"].set("Brute force against Entra ID accounts")
     shot(root, "25-builder-basics-filled")
     builder.steps.select(1); root.update(); shot(root, "26-builder-query")
+    # Run test query, answered here with sample rows and a sample syntax error (no Azure call).
+    query = builder.texts["query"].get("1.0", "end-1c")
+    builder.test_passed(dict(columns=TEST_COLUMNS, rows=test_rows(), more=False, partial=None, elapsed=1.84,
+                             seconds=query_runner.test_window("Scheduled", builder.vars["queryPeriod"].get()),
+                             workspace_name=WORKSPACE["workspace_name"]), session, query)
+    root.update(); shot(root, "39-builder-test-query")
+    builder.test_failed(query_runner.failure(TEST_SYNTAX_ERROR), dict(WORKSPACE), query, session)
+    root.update(); shot(root, "40-builder-test-query-error")
+    builder.clear_test(); app.root.update(); app.page_canvases[2].yview_moveto(0)
+    app.status.set("Ready."); app.activity_badge.set("Ready", "success")  # Not the test's flash.
     builder.steps.select(2); root.update(); shot(root, "27-builder-mitre")
     builder.vars["name"].set(""); builder.validate(); root.update(); shot(root, "28-builder-error")
     builder.vars["name"].set("Brute force against Entra ID accounts"); builder.validate(); root.update()

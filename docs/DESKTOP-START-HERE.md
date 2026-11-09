@@ -21,7 +21,9 @@ Only one copy of the app runs at a time: starting it again brings the open windo
    optional tenant ID or domain. With the list focused, type the first letters of a client's
    name to jump to it. The **⋯** menu saves an edited tenant to the client or removes the
    client (only the local entry, after a red **Remove** confirmation). Switching clients
-   clears the selection without asking; Session activity notes the switch.
+   clears the selection without asking; Session activity notes the switch. Switching back
+   to the client you signed in for lists its subscriptions again and returns to its last
+   workspace, without another sign-in.
 2. The tenant line shows the client's saved tenant; select **Change** to edit it. Leave it
    blank to discover every directory your account can access. Choose **Browser** or
    **Windows account** as the sign-in method.
@@ -99,7 +101,7 @@ The library and file path sit under **Where it will be saved**. New rules start 
 Closing the app asks before discarding an unsaved draft. Every 30 seconds the builder also
 keeps a recovery copy of unsaved work (`desktop-data/drafts/.autosave.rule-draft.json`). If
 the app or the PC stops before you save, the next start offers to restore it once; saving the
-draft or closing the app normally removes the copy.
+draft or closing the app normally (including choosing **Discard**) removes the copy.
 
 When a check fails, the builder opens the step with the problem, outlines the field in red
 and explains the fix under it. On opening the Rule builder, the app checks GitHub sign-in: a
@@ -146,10 +148,10 @@ arrow keys move within a view switch. Dialogs close with Esc and run their main 
 with Enter. Pages scroll at smaller window sizes, smoothly with a touchpad. The window
 always fits the screen's work area at any display scaling (it opens maximised when the
 default size doesn't fit), reopens where you left it on whichever monitor that was, and
-remembers whether it was maximised. The header names the client and workspace on every
-page (point at it for the tenant and subscription IDs), the window title and taskbar name
-the client once a workspace is chosen, and the sidebar shows the signed-in Microsoft
-account. The status bar reports Ready or Working; tasks that take more than a moment show a
+remembers whether it was maximised, even when it is closed while minimised. The header
+names the client and workspace on every page (point at it for the tenant and subscription
+IDs), the window title and taskbar name the client once a workspace is chosen, and the
+sidebar shows the signed-in Microsoft account. The status bar reports Ready or Working; tasks that take more than a moment show a
 thin activity line under the header and grey the buttons that start work, while search
 boxes and the Rule builder's fields stay usable. Lists show the same line in place of their
 rows while they load. The status bar keeps to one line: a long message is shortened with an

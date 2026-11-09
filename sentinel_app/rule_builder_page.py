@@ -303,7 +303,7 @@ class RuleBuilderPage:
         self.load_form(drafts.new_form())
         self.step_changed()
         self.autosaved, self.recovery_offered = None, False
-        self.autosave_timer = app.root.after(AUTOSAVE_MS, self.autosave)
+        self.autosave_timer = None; self.start_autosave()
 
     # ------------------------------------------------------------ widgets
     def set_footer_visible(self, visible):
@@ -710,7 +710,9 @@ class RuleBuilderPage:
 
     def autosave(self, schedule=True):
         """Every AUTOSAVE_MS, copy unsaved work to the recovery draft, so a crash or a restart loses at most
-        that much; a form with nothing unsaved removes the copy. The timer is registered on the root."""
+        that much; a form with nothing unsaved removes the copy. The timer is registered on the root.
+        Once the app is closing normally (nothing unsaved, or the changes discarded), nothing is copied."""
+        if getattr(self.app, "closing", False): self.autosave_timer = None; return
         if schedule: self.autosave_timer = self.app.root.after(AUTOSAVE_MS, self.autosave)
         try:
             if not self.dirty():
@@ -725,6 +727,13 @@ class RuleBuilderPage:
             self.autosaved = form
         except (OSError, ValueError, TypeError) as error:
             self.app.log("Couldn't keep a recovery copy of the rule: " + str(error))
+
+    def start_autosave(self):
+        self.stop_autosave(); self.autosave_timer = self.app.root.after(AUTOSAVE_MS, self.autosave)
+
+    def stop_autosave(self):
+        if self.autosave_timer is not None:
+            self.app.root.after_cancel(self.autosave_timer); self.autosave_timer = None
 
     def discard_recovery(self):
         self.autosaved = None

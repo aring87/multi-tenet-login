@@ -249,6 +249,36 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(app.workspace_context.get(), "Bluestone Health  ·  not signed in")
         self.assertEqual(str(app.sub_refresh.cget("state")), "disabled")  # The session belongs to Acme.
 
+    def test_switching_back_lists_the_clients_subscriptions_again(self):
+        app = self.app
+        session = self.connect(app)
+        app.wsbox.current(1)
+        with patch.object(app.rules_page, "load"): app.workspace_changed(SimpleNamespace())
+        session.refresh_subscriptions.return_value = session.login.return_value
+        run = lambda title, task, done: done(task())
+        app.vars["client_name"].set("Bluebird"); app.client_changed(SimpleNamespace())
+        session.refresh_subscriptions.assert_not_called()  # Acme's session isn't used for Bluebird.
+        with patch.object(app, "work", side_effect=run), patch.object(app.rules_page, "load"):
+            app.vars["client_name"].set("Acme Corporation"); app.client_changed(SimpleNamespace())
+        session.refresh_subscriptions.assert_called_once_with()
+        self.assertEqual(app.workspace["workspace_id"], SECOND["workspace_id"])  # Its last workspace returns.
+        self.assertEqual(app.workspace_context.get(), "Acme Corporation  ·  law-second")
+        self.assertEqual(app.connection_note.get(), "Signed in as analyst@example.com. Selected law-second.")
+        # Type-ahead lists them once the typing pauses; until then the note says what to do.
+        app.vars["client_name"].set("Bluebird"); app.client_changed(SimpleNamespace())
+        session.refresh_subscriptions.reset_mock()
+        with patch.object(app, "work", side_effect=run), patch.object(app.rules_page, "load"):
+            app.type_client(SimpleNamespace(char="a", state=0))
+            self.assertEqual(app.vars["client_name"].get(), "Acme Corporation")
+            session.refresh_subscriptions.assert_not_called()
+            self.assertEqual(app.connection_note.get(), "Signed in. Select Refresh to list the subscriptions for Acme Corporation.")
+            app.busy, app.operation_title = True, ui.LISTING_SUBSCRIPTIONS; app.sync_connection()
+            self.assertEqual(app.connection_note.get(), "Listing the subscriptions for Acme Corporation…")
+            app.busy = False
+            app.root.after_cancel(app.typed_timer); app.reset_typed()
+        session.refresh_subscriptions.assert_called_once_with()
+        self.assertEqual(app.workspace["workspace_id"], SECOND["workspace_id"])
+
     def test_each_client_gets_its_last_workspace_back_after_sign_in(self):
         app = self.app
         session = self.connect(app)
@@ -306,7 +336,19 @@ class ShellTests(unittest.TestCase):
         with patch.object(app.root, "state", return_value="zoomed"): app.save_state()
         state = json.loads((self.data / "ui-state.json").read_text())
         self.assertEqual((state["zoomed"], state["geometry"]), (True, "1300x850+30+40"))
-        self.assertTrue(self.start().start_zoomed)
+        app = self.start(); self.assertTrue(app.start_zoomed)
+        # Closed while minimised (Close window on the taskbar): the state before minimising is kept.
+        configure = SimpleNamespace(widget=app.root)
+        for before, zoomed in (("zoomed", True), ("normal", False)):
+            with patch.object(app.root, "state", return_value=before), \
+                 patch.object(app.root, "geometry", return_value="1250x800+60+70"):
+                app.track_geometry(configure)
+            normal = app.normal_geometry  # Maximised, it is still the size the window had before.
+            with patch.object(app.root, "state", return_value="iconic"):
+                app.track_geometry(configure); app.save_state()
+            state = json.loads((self.data / "ui-state.json").read_text())
+            self.assertEqual((state["zoomed"], state["geometry"]), (zoomed, normal))
+            self.assertEqual(normal == "1250x800+60+70", not zoomed)
 
     def test_wheel_deltas_from_a_touchpad_add_up(self):
         app = self.app; app.root.geometry("1120x500"); app.root.deiconify(); app.root.update()

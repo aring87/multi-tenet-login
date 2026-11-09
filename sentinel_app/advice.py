@@ -7,7 +7,7 @@ always kept in Session activity for engineers; the advice is what the analyst re
 """
 import re
 
-MFA = "This client requires multi-factor sign-in. Sign in with Microsoft again and complete MFA in the browser."
+MFA = "This client requires multi-factor sign-in. Sign in again and complete MFA in the browser."
 MISSING_REPOSITORY = ("GitHub couldn't find {repo} for your account. Check the spelling on Connect > Rule library, "
                       "or ask a repository admin for access (private repositories you can't see show as not found).")
 

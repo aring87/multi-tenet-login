@@ -326,7 +326,7 @@ def main():
     shot(restore.window, "38-dialog-restore"); restore.window.destroy()
 
     # ---- A large window (the shots above are at the smallest size the app allows)
-    if not app.show_ids: app.toggle_ids()  # The workspace IDs, opened.
+    app.toggle_ids(True)  # The workspace IDs, opened.
     root.geometry("1700x1100+20+10"); app.show_page("connect"); settle(root, 500); shot(root, "33-connect-wide")
     app.show_page("rules"); app.rule_view.set("workspace"); settle(root, 500); shot(root, "34-rules-wide")
     app.show_page("builder"); settle(root, 500); shot(root, "35-builder-wide")

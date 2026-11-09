@@ -53,6 +53,7 @@ PROGRESS_REPORT_EVERY = 5
 FLASH_SECONDS = 8
 BUSY_DELAY_MS = 250  # Busy visuals wait this long, so a quick local read doesn't flash every control.
 TYPEAHEAD_MS = 800  # Typing in the client box picks the first client starting with what was typed this soon.
+LISTING_SUBSCRIPTIONS = "Refreshing subscriptions from Azure…"
 DEFAULT_SIZE, MINIMUM_SIZE = (1360, 900), (1120, 740)  # Window client area, 96-DPI px.
 ERROR_LOG_LIMIT = 1024 * 1024  # errors.log keeps its newest half once it reaches this size.
 TITLE = "Sentinel Workspace"
@@ -245,7 +246,7 @@ class App:
         self.error_log = DATA / "logs" / "errors.log"
         DATA.mkdir(exist_ok=True)
         self.ui_state = self.read_state()
-        self.normal_geometry = None
+        self.normal_geometry, self.was_zoomed, self.closing = None, False, False
         self.apply_geometry(self.ui_state.get("geometry"), self.ui_state.get("zoomed") is True)
         root.bind("<Configure>", self.track_geometry, add="+")
         self.events = queue.Queue()
@@ -255,6 +256,8 @@ class App:
         self.session_client = None  # The client the current Microsoft session was started for.
         self.auth_hint = None
         self.subscriptions = []
+        self.subscriptions_listed = False  # The list on show came from Azure (empty means none are visible).
+        self.relist = False  # Back on the session's client: list its subscriptions again once idle.
         self.subscription_index = -1  # The subscription chosen last, restored when a choice must wait.
         self.workspaces = []
         self.workspace = None
@@ -301,11 +304,12 @@ class App:
     def save_state(self):
         state = dict(self.ui_state)
         try:
-            # A maximised window keeps the size it had before, so restoring it later returns there.
-            zoomed = self.root.state() == "zoomed"
-            if not zoomed and self.root.state() == "normal": state["geometry"] = self.root.geometry()
-            elif zoomed and self.normal_geometry: state["geometry"] = self.normal_geometry
-            state["zoomed"] = zoomed
+            # A maximised window keeps the size it had before, so restoring it later returns there. A
+            # minimised one (closed from the taskbar) keeps the state and place it had before minimising.
+            current = self.root.state()
+            if current == "normal": state["geometry"] = self.root.geometry()
+            elif self.normal_geometry: state["geometry"] = self.normal_geometry
+            state["zoomed"] = current == "zoomed" or (current == "iconic" and self.was_zoomed)
             state["client"] = self.vars["client_name"].get()
             state["rule_view"] = self.rule_view.get()
             state["rules_sort"] = list(self.rules_page.sort)
@@ -328,12 +332,16 @@ class App:
         self.root.geometry(f"{width}x{height}+{x}+{y}")
         self.root.minsize(min_w, min_h)
         self.normal_geometry = f"{width}x{height}+{x}+{y}"
+        self.was_zoomed = self.start_zoomed
 
     def track_geometry(self, event):
-        """Remember the last size and place the window had while not maximised."""
+        """Remember the last size and place the window had while not maximised, and whether it was
+        maximised before it was minimised (a minimised window reports neither)."""
         if event.widget is self.root:
             try:
-                if self.root.state() == "normal": self.normal_geometry = self.root.geometry()
+                state = self.root.state()
+                if state == "normal": self.normal_geometry = self.root.geometry()
+                if state in ("normal", "zoomed"): self.was_zoomed = state == "zoomed"
             except tk.TclError:
                 pass
 
@@ -894,10 +902,9 @@ class App:
 
     def toggle_ids(self, show=None):
         """'+ Show workspace IDs': the tenant, subscription, resource group and workspace IDs, below the
-        actions. The choice is remembered (ui-state show_ids)."""
-        if show is None:
-            self.show_ids = not self.show_ids
-            self.ui_state["show_ids"] = self.show_ids
+        actions. ``show`` sets it instead of toggling. The choice is remembered (ui-state show_ids)."""
+        self.show_ids = (not self.show_ids) if show is None else bool(show)
+        self.ui_state["show_ids"] = self.show_ids
         self.ids_button.configure(text=("−  Hide" if self.show_ids else "+  Show") + " workspace IDs")
         self.render_details()
 
@@ -933,6 +940,7 @@ class App:
 
     def reset_typed(self):
         self.typed, self.typed_timer = "", None
+        self.relist_subscriptions()
 
     def show_menu(self, menu, widget):
         if self.busy: return
@@ -1186,11 +1194,19 @@ class App:
         self.render_session()
         if event is not None and focus and str(self.signin_main.cget("state")) != "disabled":
             self.signin_main.focus_set()
+        # Back on the client the session was started for: the switch only cleared its lists, so they are
+        # listed again (its last workspace returns). Type-ahead waits until the typing pauses.
+        self.relist = event is not None and self.session is not None and self.signed_in_here()
+        if focus: self.relist_subscriptions()
+
+    def relist_subscriptions(self):
+        if self.relist and not self.busy and not self.subscriptions and self.session is not None and self.signed_in_here():
+            self.relist = False; self.refresh_subscriptions()
 
     def clear_selection(self):
         # The old session is not reused for another client's login.
         self.rules_page.reset()
-        self.subscriptions = []; self.workspaces = []; self.workspace = None
+        self.subscriptions = []; self.workspaces = []; self.workspace = None; self.subscriptions_listed = False
         self.subbox.configure(values=[]); self.wsbox.configure(values=[])
         self.vars["subscription"].set(""); self.vars["workspace"].set("")
         self.identity.set("No workspace selected yet. Sign in to discover subscriptions and workspaces.")
@@ -1297,6 +1313,8 @@ class App:
             self.set_busy(False)
             if error:
                 details = str(error)
+                if self.closing:  # Signing out before closing failed, so the window stays open.
+                    self.closing = False; self.rule_builder.start_autosave()
                 self.log(details); self.show_page(self.operation_page)
                 signin = isinstance(cancel, threading.Event)  # The sign-in's own callback carries its event.
                 if isinstance(error, SignInCancelled):
@@ -1402,8 +1420,13 @@ class App:
             self.connection_note.set("This subscription has no workspaces you can open. Choose another subscription, "
                                      "or check your access.")
         elif self.subscriptions: self.connection_note.set("Select a subscription and workspace to continue.")
-        elif signed_in: self.connection_note.set("Signed in, but no subscriptions are visible yet. Check your access, "
-                                                 "then select Refresh.")
+        elif signed_in and self.subscriptions_listed:
+            self.connection_note.set("Signed in, but no subscriptions are visible yet. Check your access, then select Refresh.")
+        elif signed_in:  # Not listed for this client yet, e.g. after switching back to it.
+            client = " for " + self.client_name() if self.client_name() else ""
+            self.connection_note.set("Listing the subscriptions" + client + "…"
+                                     if self.busy and self.operation_title == LISTING_SUBSCRIPTIONS else
+                                     "Signed in. Select Refresh to list the subscriptions" + client + ".")
         else: self.connection_note.set("Sign in to load your subscriptions and workspaces.")
 
     def work(self, title, task, done=None, page="connect"):
@@ -1590,7 +1613,7 @@ class App:
 
     def display_subscriptions(self, rows, discover=True, select=None):
         rows = sorted(rows, key=lambda r: (r.get("name", "").casefold(), r["id"]))
-        self.subscriptions = rows
+        self.subscriptions, self.subscriptions_listed = rows, True
         self.sync_connection()
         self.subbox.configure(values=[self.subscription_label(r) for r in rows])
         self.render_session()
@@ -1610,9 +1633,9 @@ class App:
         current = self.subscriptions[index]["id"] if 0 <= index < len(self.subscriptions) else ""
         def done(rows):
             self.clear_selection()
-            self.display_subscriptions(rows, select=current)
+            self.display_subscriptions(rows, select=current or self.remembered_workspace().get("subscription_id"))
             if not rows: self.status.set("No subscriptions are visible for this account.")
-        self.work("Refreshing subscriptions from Azure…", self.session.refresh_subscriptions, done)
+        self.work(LISTING_SUBSCRIPTIONS, self.session.refresh_subscriptions, done)
 
     def check_subscription(self):
         if not self.session or not (self.subscriptions or self.signed_in_here()):
@@ -1799,17 +1822,20 @@ class App:
                                "A task is still running. If you close now it will be abandoned; nothing already sent "
                                "to Azure or GitHub is undone.", ok="Close anyway", cancel="Keep working", destructive=True):
                 return
-            # Unsaved builder work stays in the recovery draft, offered at the next start.
-            self.rule_builder.autosave(schedule=False)
+            # Unsaved builder work stays in the recovery draft, offered at the next start (unless it
+            # was already discarded by the close that is signing out now).
+            self.rule_builder.autosave(schedule=False); self.rule_builder.stop_autosave()
             self.save_state(); self.root.destroy(); return
         if not self.rule_builder.can_discard():
             return
-        self.rule_builder.discard_recovery()  # A normal close: nothing is left to recover.
+        # A normal close: nothing is left to recover, and the autosave timer must not write the
+        # discarded changes again while the sign-out below runs.
+        self.closing = True; self.rule_builder.stop_autosave()
+        self.rule_builder.discard_recovery()
         self.save_state()
         if self.session:
             session = self.session
             self.work("Signing out before closing…", session.logout, lambda _: self.root.destroy())
-            self.closing = True
         else: self.root.destroy()
 
 

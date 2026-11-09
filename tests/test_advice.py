@@ -28,6 +28,8 @@ class AdviceTests(unittest.TestCase):
     def test_mfa_and_gcc_high_entries(self):
         for code in ("AADSTS50076", "AADSTS50079"):
             self.assertIn("multi-factor", friendly(code + ": Due to a configuration change..."))
+            # The button above the banner may read "Sign in to <client>", so no label is named.
+            self.assertNotIn("Sign in with Microsoft", friendly(code))
         self.assertEqual(friendly("Evidence collection supports Azure public cloud only."),
                          "Workspace rules can't be read from Azure Government (GCC High) workspaces yet.")
 

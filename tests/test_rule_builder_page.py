@@ -1,6 +1,7 @@
 import tempfile
 import tkinter as tk
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -367,3 +368,31 @@ class RecoveryDraftTests(unittest.TestCase):
         with patch.object(self.root, "destroy"): self.app.close()
         self.assertEqual(self.answer.call_args.kwargs.get("destructive"), True)
         self.assertFalse(page.recovery_path().exists())
+
+    def test_discarded_changes_are_not_copied_again_while_signing_out_to_close(self):
+        page = self.page
+        page.vars["name"].set("Thrown away"); page.autosave(schedule=False)
+        self.answer.return_value = True  # Discard changes? Discard.
+        self.app.session = SimpleNamespace(logout=lambda: None)  # Signed in: closing signs out first, which takes a while.
+        timer = page.autosave_timer
+        with patch.object(self.app, "work") as work, patch.object(self.root, "destroy") as destroy:
+            self.app.close()
+            self.assertEqual(work.call_args.args[0], "Signing out before closing…"); destroy.assert_not_called()
+            self.assertNotIn(timer, self.root.tk.call("after", "info"))  # The 30-second timer is stopped
+            page.autosave()  # and a copy already due writes nothing.
+            self.assertFalse(page.recovery_path().exists())
+            # Closing again while the sign-out runs keeps nothing either.
+            self.app.busy = True; self.app.close(); self.app.busy = False
+            destroy.assert_called_once()
+        self.assertFalse(page.recovery_path().exists()); self.assertIsNone(page.autosave_timer)
+
+    def test_a_failed_sign_out_on_close_keeps_copying_unsaved_work(self):
+        page = self.page; page.vars["name"].set("Still open")
+        self.answer.return_value = True
+        self.app.session = SimpleNamespace(logout=lambda: None)
+        with patch.object(self.app, "work") as work, patch.object(self.root, "destroy"): self.app.close()
+        self.app.operation_title = work.call_args.args[0]
+        with patch.object(ui.kit, "alert"): self.app.dispatch("done", (work.call_args.args[2], None, ui.Stop("logout failed")))
+        self.assertFalse(self.app.closing)  # The window stays open, so its work is copied again.
+        self.assertIn(page.autosave_timer, self.root.tk.call("after", "info"))
+        page.autosave(schedule=False); self.assertTrue(page.recovery_path().exists())

@@ -312,7 +312,11 @@ class GovDialogTests(unittest.TestCase):
         with patch.object(dialog_module, "gov_run", side_effect=lambda s, c, a: outputs[1 if a else 0]) as run:
             dialog = dialog_module.GovOnboardingDialog(app)
             self.assertEqual(str(dialog.apply_button.cget("state")), "disabled")
+            style = lambda button: str(button.cget("style"))
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Primary.TButton", "Secondary.TButton"))
+            self.assertEqual(dialog.window.bind("<Return>"), "")  # Only the colour moves; Enter still does nothing.
             dialog.preview()
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Secondary.TButton", "Primary.TButton"))
             config = run.call_args.args[1]
             self.assertEqual(config["target"] if "target" in config else config["client"] + "-" + config["workspace_label"],
                              "aosense-workspace-gcch")
@@ -322,6 +326,21 @@ class GovDialogTests(unittest.TestCase):
             dialog.vars["label"].set("workspace-gcch"); dialog.preview(); dialog.apply()
             self.assertTrue(run.call_args.args[2])
             self.assertEqual(dialog.pull_request, "https://github.com/isi-security/detection-as-code/pull/7")
+            self.assertEqual(dialog.window.bind("<Return>"), "")
+            dialog.close()
+            dialog = dialog_module.GovOnboardingDialog(app)
+            with patch.object(dialog.review, "see") as see:
+                dialog.failed("READ-ONLY PLAN\nApp registration: create\nSTOPPED: Role assignment failed: AuthorizationFailed.\n"
+                              "Changes may be partial.")
+            see.assert_called_once_with("end")
+            self.assertEqual(dialog.notice.get(), "Stopped: Role assignment failed: AuthorizationFailed. "
+                                                  "The details are at the end of the plan above.")
+            self.assertEqual(str(dialog.review.tag_ranges("danger")[0]), "3.0")
+            self.assertEqual(str(dialog.preview_button.cget("style")), "Primary.TButton")
+            dialog.failed("Sign in to the client's GCC High tenant first.")
+            self.assertEqual(dialog.notice.get(), "Stopped: Sign in to the client's GCC High tenant first. "
+                                                  "The details are at the end of the plan above.")
+            self.assertEqual(str(dialog.review.tag_ranges("danger")[0]), "1.0")
             dialog.close()
 
 

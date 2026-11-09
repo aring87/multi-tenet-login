@@ -90,11 +90,36 @@ class HistoryDialogTests(unittest.TestCase):
         item = self.dialog.table.get_children()[0]
         self.dialog.table.selection_set(item); self.dialog.selection_changed()
 
+    def search(self, text):
+        self.dialog.search.set(text); self.dialog.filter.flush()
+
     def test_search_matches_repository_and_request_id(self):
-        self.dialog.search.set(REPO.upper()); self.assertEqual(len(self.dialog.visible), 1)
-        self.dialog.search.set(self.record["plan"]["request_id"]); self.assertEqual(len(self.dialog.visible), 1)
-        self.dialog.search.set("absent"); self.assertFalse(self.dialog.visible)
+        self.search(REPO.upper()); self.assertEqual(len(self.dialog.visible), 1)
+        self.search(self.record["plan"]["request_id"]); self.assertEqual(len(self.dialog.visible), 1)
+        self.dialog.search.set("absent"); self.assertEqual(len(self.dialog.visible), 1)  # Filters after a pause.
+        self.dialog.filter.flush(); self.assertFalse(self.dialog.visible)
         self.assertEqual(str(self.dialog.open_button.cget("state")), "disabled")
+
+    def test_view_changes_is_blue_only_while_a_submission_is_selected(self):
+        style = lambda button: str(button.cget("style"))
+        self.assertEqual(style(self.dialog.open_button), "Secondary.TButton")
+        self.assertIsNone(self.dialog.window._enter_target)
+        self.select()
+        self.assertEqual(style(self.dialog.open_button), "Primary.TButton")
+        self.assertIs(self.dialog.window._enter_target, self.dialog.open_button)
+        for button in (self.dialog.github_button, self.dialog.refresh_button, self.dialog.file_button):
+            self.assertEqual((style(button), button.pack_info()["side"]), ("Ghost.TButton", "left"))
+
+    def test_status_heading_sorts_by_words_not_marks(self):
+        self.dialog.rows = [dict(row, status=status, name=name) for row, (status, name) in zip(
+            self.dialog.rows * 3, (("Waiting for a teammate's review", "b"), ("Approved — ready to merge", "c"),
+                                   ("Changes requested", "a")))]
+        self.dialog.render()
+        names = lambda: [self.dialog.table.set(item, "name") for item in self.dialog.table.get_children()]
+        self.dialog.table.toggle_sort("status"); self.assertEqual(names(), ["c", "a", "b"])
+        self.dialog.table.toggle_sort("status"); self.assertEqual(names(), ["b", "a", "c"])
+        self.dialog.table.toggle_sort("name"); self.assertEqual(names(), ["a", "b", "c"])
+        self.dialog.render(); self.assertEqual(names(), ["a", "b", "c"])  # A redraw keeps the order.
 
     def test_open_reuses_saved_request_and_preserves_unsaved_draft(self):
         self.builder.vars["name"].set("Unsaved analyst work")

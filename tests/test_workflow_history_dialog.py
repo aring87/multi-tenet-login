@@ -32,16 +32,39 @@ class WorkflowHistoryDialogTests(unittest.TestCase):
 
     def select(self):self.dialog.table.selection_set('0');self.dialog.selected()
 
+    def search(self,text):self.dialog.search.set(text);self.dialog.filter.flush()
+
     def test_opening_history_is_local_and_filters_by_workspace_and_mode(self):
         self.assertEqual(len(self.dialog.visible),1);self.assertFalse(self.remote.calls)
-        self.dialog.search.set('example-primary');self.assertEqual(len(self.dialog.visible),1)
+        self.search('example-primary');self.assertEqual(len(self.dialog.visible),1)
         self.dialog.mode.set('Deploy');self.assertFalse(self.dialog.visible)
         self.dialog.mode.set('Preview');self.assertEqual(len(self.dialog.visible),1)
-        self.dialog.search.set('nonexistent');self.assertFalse(self.dialog.visible)
+        self.dialog.search.set('nonexistent');self.assertEqual(len(self.dialog.visible),1)  # Filters after a pause.
+        self.dialog.filter.flush();self.assertFalse(self.dialog.visible)
         self.assertEqual(str(self.dialog.status_button.cget('state')),'disabled')
 
+    def test_refresh_status_is_blue_only_while_a_request_is_selected(self):
+        style=lambda button:str(button.cget('style'))
+        self.assertEqual(style(self.dialog.status_button),'Secondary.TButton');self.assertIsNone(self.dialog.window._enter_target)
+        self.select()
+        self.assertEqual(style(self.dialog.status_button),'Primary.TButton')
+        self.assertIs(self.dialog.window._enter_target,self.dialog.status_button)
+        for button in (self.dialog.open_button,self.dialog.reload_button,self.dialog.file_button):
+            self.assertEqual((style(button),button.pack_info()['side']),('Ghost.TButton','left'))
+
+    def test_headings_sort_and_the_order_survives_a_search(self):
+        record=dict(self.dialog.rows[0]['record'],created_at='2000-01-01T00:00:00+00:00',request_id='older')
+        self.dialog.rows.append(dict(file='older.preview.json',record=record,mode='preview'));self.dialog.render()
+        created=lambda:[self.dialog.table.set(item,'created') for item in self.dialog.table.get_children()]
+        self.dialog.table.toggle_sort('created')
+        self.assertEqual(created(),sorted(created()));self.assertEqual(self.dialog.table.heading('created','text'),'Requested (UTC) ▲')
+        self.dialog.table.toggle_sort('created');self.assertEqual(created(),sorted(created(),reverse=True))
+        self.search('example');self.assertEqual(created(),sorted(created(),reverse=True))
+
     def test_selected_request_shows_targets_inputs_and_original_revision(self):
+        self.assertFalse(self.dialog.runs_frame.winfo_manager())  # The details have the room until there are runs.
         self.select();text=self.dialog.detail.get('1.0','end')
+        self.assertTrue(self.dialog.runs_frame.winfo_manager());self.assertEqual(int(self.dialog.runs.cget('height')),1)
         self.assertIn('example-primary',text);self.assertIn('"mode": "preview"',text)
         self.assertIn('a'*40,text);self.assertEqual(len(self.dialog.runs.get_children()),1)
 

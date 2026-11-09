@@ -1,6 +1,7 @@
 """Choose client workspaces for a rule and submit the assignment for a teammate's approval."""
 import copy
 import json
+import math
 import re
 import tkinter as tk
 from tkinter import ttk
@@ -13,7 +14,85 @@ from .rule_assignments import AssignmentService, assignment_diff
 PULL_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
 
 
-class AssignmentDialog:
+def mixed_box(master):
+    """The heading's select-all box while only some shown rows are ticked: the 'on' box with
+    a white dash. Drawn once per root like kit.checkbox, which has no 'mixed' state."""
+    root, cache = kit._images(master)
+    if ("check", "mixed") not in cache:
+        radius = 2.5 / 14
+        def paint(x, y):
+            qx, qy = abs(x - .5) - (.5 - radius), abs(y - .5) - (.5 - radius)
+            if math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) > radius: return None
+            return "#FFFFFF" if abs(y - .5) <= 1 / 14 and abs(x - .5) <= 3.5 / 14 else COLORS["accent"]
+        cache["check", "mixed"] = kit._draw(root, px(14), paint)
+    return cache["check", "mixed"]
+
+
+class ClientPicker:
+    """Tick boxes for a client table made with kit.table(check=True). A click or Space ticks a
+    row in place (the rows are not rebuilt, so a long list doesn't flicker), and the box in the
+    heading ticks or clears every selectable row shown, showing whether all, some or none are.
+
+    The dialog provides clients, visible ({iid: target}), selected, count, locked, app,
+    count_text() and invalidate(), and may narrow selectable(target)."""
+
+    def pickable(self):
+        # Headings draw an image at their right edge; more right padding centres the select-all box
+        # over the row boxes (the theme's heading padding is (3, 8)).
+        ttk.Style(self.clients).configure("Pick.Lead.Treeview.Heading", padding=(px(3), px(8), px(7), px(8)))
+        self.clients.configure(style="Pick.Lead.Treeview")
+        self.clients.heading("#0", command=self.toggle_shown)
+        self.clients.bind("<Button-1>", self.clicked, add="+"); self.clients.bind("<space>", self.toggle_focused)
+
+    def selectable(self, target):
+        return True
+
+    def can_pick(self):
+        return not self.locked and not self.app.busy
+
+    def box(self, target):
+        state = "on" if target in self.selected else "off" if self.selectable(target) else "disabled"
+        return kit.checkbox(state, self.clients)
+
+    def shown(self):
+        return {target for target in self.visible.values() if self.selectable(target)}
+
+    def paint(self, items=()):
+        """Redraw the boxes of ``items``, the heading box and the count."""
+        for item in items: self.clients.item(item, image=self.box(self.visible[item]))
+        shown = self.shown(); ticked = shown & self.selected
+        self.clients.heading("#0", image=mixed_box(self.clients) if ticked and ticked != shown else
+                             kit.checkbox("on" if ticked else "off", self.clients))
+        self.count.set(self.count_text())
+
+    def changed(self, items):
+        self.paint(items); self.invalidate()
+
+    def toggle(self, item):
+        target = self.visible.get(item)
+        if not self.can_pick() or target is None or not self.selectable(target): return
+        self.selected ^= {target}
+        self.changed([item])
+        self.clients.focus(item); self.clients.selection_set(item)
+
+    def toggle_shown(self):
+        shown = self.shown()
+        if not self.can_pick() or not shown: return
+        if shown <= self.selected: self.selected -= shown
+        else: self.selected |= shown
+        self.changed(self.visible)
+
+    def clicked(self, event):
+        item = self.clients.identify_row(event.y)
+        if not item or self.clients.identify_region(event.x, event.y) == "heading": return None
+        self.clients.focus_set(); self.toggle(item)
+        return "break"
+
+    def toggle_focused(self, event):
+        self.toggle(self.clients.focus()); return "break"
+
+
+class AssignmentDialog(ClientPicker):
     def __init__(self, app, snapshot=None, rule=None, record=None):
         self.app = app
         self.snapshot = copy.deepcopy(snapshot) if snapshot else {"clients": []}
@@ -32,26 +111,25 @@ class AssignmentDialog:
         toolbar = ttk.Frame(body, style="Card.TFrame"); toolbar.pack(fill="x", pady=(0, px(10)))
         self.search = tk.StringVar(); self.search_box = ttk.Entry(toolbar, textvariable=self.search)
         self.search_box.pack(side="left", fill="x", expand=True, padx=(0, px(16)))
-        kit.placeholder(self.search_box, self.search, "Search clients or workspaces")
+        kit.placeholder(self.search_box, self.search, "Search clients or workspaces", search=True)
         self.enabled = tk.StringVar(value="Disabled")
         self.state_box = ttk.Combobox(toolbar, textvariable=self.enabled, values=("Disabled", "Enabled"), state="readonly", width=10)
         self.state_box.pack(side="right"); self.state_box.bind("<MouseWheel>", lambda event: "break")
         ttk.Label(toolbar, text="Rule state for selected clients", style="Field.TLabel").pack(side="right", padx=(0, px(8)))
         # Bottom-anchored controls are packed first so they always have room; the lists share what remains.
         self.actions, buttons = kit.action_row(body, primary=("Submit for approval", self.submit),
-                                               secondary=(("Check", self.prepare), ("Open in GitHub", self.open_link)),
-                                               close=("Close", self.close))
+                                               secondary=(("Check", self.prepare),), close=("Close", self.close),
+                                               aux=(("Open in GitHub", self.open_link),))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.submit_button, self.prepare_button, self.open_button, self.close_button = buttons
+        self.submit_button, self.prepare_button, self.close_button, self.open_button = buttons
         self.notice = tk.StringVar(value="Clients you don't select stay unchanged. Submitting asks a teammate to approve the "
                                          "assignment; nothing is deployed from here.")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
-        frame, self.clients, self.empty = kit.table(body, (("pick", "Selected", 70, False), ("client", "Client", 140, True),
-                                                           ("workspace", "Workspace", 150, True), ("target", "Target", 210, True),
-                                                           ("assignment", "Current rule", 120, False), ("state", "Target state", 110, False)),
-                                                    height=6)
+        frame, self.clients, self.empty = kit.table(body, (("client", "Client", 150, True), ("workspace", "Workspace", 160, True),
+                                                           ("target", "Target", 210, True), ("assignment", "Current rule", 120, False),
+                                                           ("state", "Target state", 110, False)), height=6, check=True)
         frame.pack(fill="both", expand=True)
-        self.clients.bind("<Button-1>", self.clicked); self.clients.bind("<space>", self.toggle_focused)
+        self.pickable()
         selection = ttk.Frame(body, style="Card.TFrame"); selection.pack(fill="x", pady=px(8))
         self.all_button = ttk.Button(selection, text="Select shown", command=self.select_shown, style="Small.Secondary.TButton")
         self.clear_button = ttk.Button(selection, text="Clear selection", command=self.clear, style="Small.Secondary.TButton")
@@ -61,7 +139,11 @@ class AssignmentDialog:
         review, self.text = kit.text_area(body, 10, readonly=True,
                                           placeholder="Select clients, then Check to see exactly which client files will change.")
         review.pack(fill="both", expand=True)
-        self.search.trace_add("write", lambda *args: self.render_clients())
+        # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.
+        self.filter = kit.debounce(self.window, 150, self.render_clients)
+        for key in ("<Down>", "<Return>"): self.search_box.bind(key, lambda event: self.filter.flush(), add="+")
+        kit.link_search(self.search_box, self.clients)
+        self.search.trace_add("write", self.filter)
         self.enabled.trace_add("write", lambda *args: self.invalidate())
         kit.place_dialog(self.window, app.root, 1050, 800, 900, 720)
         kit.modal(self.window, app.root, self.close, primary=self.prepare_button, focus=self.search_box)
@@ -78,6 +160,7 @@ class AssignmentDialog:
         self.window.destroy()
 
     def render_clients(self):
+        self.filter.cancel()
         self.clients.delete(*self.clients.get_children()); self.visible = {}
         term = self.search.get().strip().casefold()
         for i, c in enumerate(sorted(self.snapshot["clients"], key=lambda c: (c["name"].casefold(), c["target"].casefold()))):
@@ -87,42 +170,31 @@ class AssignmentDialog:
             effective = None if assignment is None else assignment.get("overrides", {}).get("enabled", self.rule["raw"].get("enabled"))
             current = ("Unassigned" if assignment is None else "Enabled" if effective is True else
                        "Disabled" if effective is False else "Not specified")
-            self.clients.insert("", "end", iid=str(i), values=("Yes" if c["target"] in self.selected else "", c["name"], c["workspace"],
-                                                              c["target"], current, "Enabled" if c["raw"]["enabled"] else "Disabled"),
+            self.clients.insert("", "end", iid=str(i), image=self.box(c["target"]),
+                                values=(c["name"], c["workspace"], c["target"], current,
+                                        "Enabled" if c["raw"]["enabled"] else "Disabled"),
                                 tags=() if c["raw"]["enabled"] else ("muted",))
         if self.visible: self.empty.hide()
         elif self.snapshot["clients"]: self.empty.show("No clients match your search.", ("Clear search", lambda: self.search.set("")))
         else: self.empty.show("The rule library has no client workspaces yet.")
+        self.paint()
+
+    def count_text(self):
         hidden = len(self.selected - set(self.visible.values()))
-        self.count.set(str(len(self.selected)) + " selected" + (" · " + str(hidden) + " hidden by search" if hidden else ""))
+        return str(len(self.selected)) + " selected" + (" · " + str(hidden) + " hidden by search" if hidden else "")
 
     def invalidate(self):
         if self.locked or self.app.busy: return
         self.record = None; self.show(""); self.refresh_controls()
         self.say("Selection changed — select Check to see what will change. Clients you don't select stay unchanged.")
-        self.render_clients()
-
-    def toggle(self, item):
-        if self.locked or self.app.busy: return
-        target = self.visible.get(item)
-        if target is None: return
-        if target in self.selected: self.selected.remove(target)
-        else: self.selected.add(target)
-        self.invalidate()
-        if self.clients.exists(item): self.clients.focus(item); self.clients.selection_set(item)
-
-    def clicked(self, event):
-        item = self.clients.identify_row(event.y)
-        if item: self.toggle(item); return "break"
-
-    def toggle_focused(self, event):
-        self.toggle(self.clients.focus()); return "break"
 
     def select_shown(self):
-        if not self.locked and not self.app.busy: self.selected.update(self.visible.values()); self.invalidate()
+        if not self.can_pick(): return
+        self.filter.flush()  # "Shown" means what the search box asks for, even mid-typing.
+        self.selected.update(self.visible.values()); self.changed(self.visible)
 
     def clear(self):
-        if not self.locked and not self.app.busy: self.selected.clear(); self.invalidate()
+        if self.can_pick(): self.selected.clear(); self.changed(self.visible)
 
     def show(self, value):
         kit.set_text(self.text, value)
@@ -132,9 +204,13 @@ class AssignmentDialog:
             widget.configure(state="disabled" if self.locked else "normal")
         self.state_box.configure(state="disabled" if self.locked else "readonly")
         self.prepare_button.configure(text="Check again" if self.record else "Check")
-        self.submit_button.configure(state="normal" if self.record and not self.record.get("pull_request") else "disabled")
+        submittable = bool(self.record and not self.record.get("pull_request"))
+        self.submit_button.configure(state="normal" if submittable else "disabled")
         self.open_button.configure(state="normal" if self.record and self.record.get("pull_request") else "disabled")
         self.close_button.configure(state="normal")
+        # The blue button is the next step: Check, then Submit for approval; none once submitted.
+        lead = self.submit_button if submittable else None if self.locked else self.prepare_button
+        kit.promote(self.window, lead, *(b for b in (self.submit_button, self.prepare_button) if b is not lead))
 
     def work(self, title, task, done):
         def on_error(error):
@@ -171,7 +247,8 @@ class AssignmentDialog:
                      "nothing is deployed.")
 
     def submit(self):
-        if self.app.busy or not self.record or self.record.get("pull_request"): return
+        if self.app.busy or (self.record or {}).get("pull_request"): return
+        if not self.record: self.prepare(); return  # Check first, as the builder's Submit does.
         self.locked = True
         def done(url):
             self.say("Submitted for approval: " + url, "success")

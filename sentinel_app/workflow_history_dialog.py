@@ -25,38 +25,42 @@ class WorkflowHistoryDialog:
         bar = ttk.Frame(body, style="Card.TFrame"); bar.pack(fill="x", pady=(0, px(10)))
         self.search = tk.StringVar(); self.search_box = ttk.Entry(bar, textvariable=self.search)
         self.search_box.pack(side="left", fill="x", expand=True, padx=(0, px(12)))
-        kit.placeholder(self.search_box, self.search, "Search by rule, client, workspace or library")
+        kit.placeholder(self.search_box, self.search, "Search by rule, client, workspace or library", search=True)
         self.mode = tk.StringVar(value="All requests")
         self.mode_box = ttk.Combobox(bar, textvariable=self.mode, values=("All requests", "Preview", "Deploy"), state="readonly", width=14)
         self.mode_box.pack(side="right"); self.mode_box.bind("<MouseWheel>", lambda event: "break")
         # Bottom-anchored controls are packed first so they always have room; the lists share what remains.
-        self.actions, buttons = kit.action_row(body, primary=("Refresh status", self.refresh_status),
-                                               secondary=(("Open in GitHub", self.open_run), ("Reload", self.reload),
-                                                          ("Open receipt file…", self.open_file)),
-                                               close=("Close", self.close))
+        self.actions, buttons = kit.action_row(body, primary=("Refresh status", self.refresh_status), close=("Close", self.close),
+                                               aux=(("Open in GitHub", self.open_run), ("Reload", self.reload),
+                                                    ("Open receipt file…", self.open_file)))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.status_button, self.open_button, self.reload_button, self.file_button, self.close_button = buttons
+        self.status_button, self.close_button, self.open_button, self.reload_button, self.file_button = buttons
         self.buttons = (self.reload_button, self.status_button, self.open_button, self.file_button, self.close_button)
-        runs_frame, self.runs, self.runs_empty = kit.table(body, (("batch", "Batch", 60, False), ("run", "Run ID", 105, False),
-                                                                  ("state", "Last checked result", 465, True),
-                                                                  ("checked", "Checked (UTC)", 180, False)), height=4)
-        runs_frame.pack(side="bottom", fill="x")
-        ttk.Label(body, text="Runs", style="Section.TLabel").pack(side="bottom", anchor="w", pady=(px(10), px(6)))
         self.notice = tk.StringVar(value="Loading saved requests…")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
+        # Shown between the banner and the buttons while the selected request has run receipts, so the
+        # details keep their room (selected()).
+        self.runs_frame, self.runs, _ = kit.table(body, (("batch", "Batch", 60, False), ("run", "Run ID", 105, False),
+                                                         ("state", "Last checked result", 465, True),
+                                                         ("checked", "Checked (UTC)", 180, False)), height=1)
+        self.runs_label = ttk.Label(body, text="Runs", style="Section.TLabel")
         frame, self.table, self.empty = kit.table(body, (("mode", "Type", 75, False), ("rule", "Rule", 190, True),
                                                          ("repo", "Library", 180, True), ("clients", "Workspaces", 90, False),
                                                          ("state", "Saved status", 240, True), ("created", "Requested (UTC)", 170, False)),
-                                                  height=6)
+                                                  height=6, sort=True)
         frame.pack(fill="both", expand=True)
         ttk.Label(body, text="Details", style="Section.TLabel").pack(anchor="w", pady=(px(10), px(6)))
         detail_frame, self.detail = kit.text_area(body, 8, readonly=True); detail_frame.pack(fill="both", expand=True)
-        self.search.trace_add("write", lambda *args: self.render())
+        # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.
+        self.filter = kit.debounce(self.window, 150, self.render)
+        for key in ("<Down>", "<Return>"): self.search_box.bind(key, lambda event: self.filter.flush(), add="+")
+        kit.link_search(self.search_box, self.table)
+        self.search.trace_add("write", self.filter)
         self.mode.trace_add("write", lambda *args: self.render())
         self.table.bind("<<TreeviewSelect>>", self.selected)
         kit.place_dialog(self.window, app.root, 1080, 800, 920, 720)
         kit.modal(self.window, app.root, self.close, primary=self.status_button, focus=self.search_box)
-        self.reload()
+        self.controls(); self.reload()
 
     def say(self, text, tone="info"):
         self.notice.set(text); self.banner.tone(tone)
@@ -73,6 +77,8 @@ class WorkflowHistoryDialog:
             self.status_button.configure(state="disabled"); self.open_button.configure(state="disabled")
         self.search_box.configure(state="disabled" if busy else "normal")
         self.mode_box.configure(state="disabled" if busy else "readonly")
+        # Refresh status leads only while a request is selected; otherwise no button is blue.
+        kit.promote(self.window, *((self.status_button,) if self.current and not busy else (None, self.status_button)))
 
     def work(self, title, task, done):
         kit.run_in_dialog(self.app, self.window, title, task, done, controls=self.buttons + (self.search_box, self.mode_box),
@@ -86,6 +92,7 @@ class WorkflowHistoryDialog:
         self.work("Reading the saved receipts on this PC…", lambda: list_receipts(self.folder), done)
 
     def render(self):
+        self.filter.cancel()
         self.table.delete(*self.table.get_children()); self.visible = {}
         term = self.search.get().strip().casefold(); mode = self.mode.get()
         for i, row in enumerate(self.rows):
@@ -97,6 +104,7 @@ class WorkflowHistoryDialog:
             self.visible[str(i)] = row
             self.table.insert("", "end", iid=str(i), values=(row["mode"].title(), p["rule_path"].rsplit("/", 1)[-1], p["repository"],
                                                             len(p["targets"]), summary(record), record["created_at"]))
+        kit.sort_items(self.table)  # Keep the order chosen with the headings.
         if self.visible: self.empty.hide()
         elif self.rows: self.empty.show("No requests match your search.", ("Clear search", lambda: self.search.set("")))
         else: self.empty.show("No previews or deployments have been requested from this PC yet.")
@@ -123,8 +131,13 @@ class WorkflowHistoryDialog:
                 if not result.get("run_id"):
                     lines.append("No confirmed run ID. Check GitHub Actions before assuming the request failed; do not retry blindly.")
             text = "\n".join(lines)
-        if self.runs.get_children(): self.runs_empty.hide()
-        else: self.runs_empty.show("Select a request to see its runs." if not self.current else "No run receipts.")
+        count = len(self.runs.get_children())
+        self.runs.configure(height=max(1, min(3, count)))
+        if count and not self.runs_frame.winfo_manager():
+            self.runs_frame.pack(side="bottom", fill="x", before=self.banner)
+            self.runs_label.pack(side="bottom", anchor="w", pady=(px(10), px(6)), before=self.banner)
+        elif not count:
+            self.runs_frame.pack_forget(); self.runs_label.pack_forget()
         kit.set_text(self.detail, text)
         self.controls()
 

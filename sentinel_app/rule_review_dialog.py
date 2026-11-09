@@ -103,11 +103,10 @@ class ReviewDialog:
         self.summary = kit.KeyValues(body, key_width=16); self.summary.pack(fill="x")
 
         self.actions, buttons = kit.action_row(body, primary=("Submit for approval", self.submit),
-                                               secondary=(("Check", self.prepare), ("Open in GitHub", self.open_link)),
-                                               close=("Close", self.close))
+                                               secondary=(("Check", self.prepare),), close=("Close", self.close),
+                                               aux=(("Open in GitHub", self.open_link),))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.submit_button, self.prepare_button, self.link_button, self.close_button = buttons
-        self.submit_button.configure(state="disabled"); self.link_button.configure(state="disabled")
+        self.submit_button, self.prepare_button, self.close_button, self.link_button = buttons
 
         where = ttk.Frame(body, style="Card.TFrame"); where.pack(side="bottom", fill="x", pady=(px(10), 0))
         self.where_body = ttk.Frame(where, style="Card.TFrame", padding=(0, px(8), 0, 0))
@@ -120,18 +119,19 @@ class ReviewDialog:
             entry = ttk.Entry(self.where_body, textvariable=variable); entry.pack(fill="x", pady=(0, px(10)))
             self.controls.append(entry)
 
-        kit.section_label(body, "Why is this changing?").pack_configure(pady=(px(14), px(4)))
-        ttk.Label(body, text="Your teammate reads this when approving. One or two sentences is enough.",
-                  style="Hint.TLabel").pack(anchor="w", pady=(0, px(6)))
+        # The hint and the legend sit beside their headings, so the comparison keeps its room in a
+        # window clamped to a small screen (150% on 1080p).
+        why = kit.section_label(body, "Why is this changing?"); why.pack_configure(pady=(px(14), px(6)))
+        ttk.Label(why, text="Your teammate reads this when approving. One or two sentences is enough.",
+                  style="Hint.TLabel").pack(side="right", padx=(px(12), 0))
         frame, self.reason = kit.text_area(body, 3, font="body")
         frame.pack(fill="x")
         self.controls.append(self.reason)
         if record and record.get("note"): kit.set_text(self.reason, record["note"])
 
-        kit.section_label(body, "What will change").pack_configure(pady=(px(14), px(6)))
-        legend = ttk.Frame(body, style="Card.TFrame"); legend.pack(fill="x", pady=(0, px(6)))
-        for text, color in (("Added lines", COLORS["success"]), ("Removed lines", COLORS["danger"])):
-            tk.Label(legend, text="■ " + text, font=FONTS["small"], bg=COLORS["card"], fg=color).pack(side="left", padx=(0, px(14)))
+        legend = kit.section_label(body, "What will change"); legend.pack_configure(pady=(px(14), px(6)))
+        for text, color in (("Removed lines", COLORS["danger"]), ("Added lines", COLORS["success"])):
+            tk.Label(legend, text="■ " + text, font=FONTS["small"], bg=COLORS["card"], fg=color).pack(side="right", padx=(px(14), 0))
         frame, self.text = kit.text_area(body, 14, readonly=True, wrap="none",
                                          placeholder="The comparison with the rule library appears here after Check.")
         frame.pack(fill="both", expand=True)
@@ -142,12 +142,12 @@ class ReviewDialog:
 
         self.locked = record is not None
         self.repository.trace_add("write", self.invalidate); self.path.trace_add("write", self.invalidate)
-        kit.place_dialog(window, self.app.root, 900, 780, 720, 560)
+        kit.place_dialog(window, self.app.root, 900, 780, 720, 620)
         kit.modal(window, self.app.root, self.close, primary=self.prepare_button, focus=self.reason)
         if record:
             self.render()
         else:
-            self.stage(0)
+            self.refresh_controls(); self.stage(0)
             self.say("Select Check to compare this rule with the rule library. Nothing is sent until you submit.")
             self.summary.set(self.summary_rows())
             if auto: window.after(50, self.prepare)
@@ -184,8 +184,7 @@ class ReviewDialog:
         self.window.destroy()
 
     def invalidate(self, *args):
-        self.record = None; self.submit_button.configure(state="disabled"); self.link_button.configure(state="disabled")
-        self.prepare_button.configure(text="Check")
+        self.record = None; self.refresh_controls()
         self.show("")
         self.summary.set(self.summary_rows()); self.stage(0)
         self.say("Destination changed. Select Check to compare again.")
@@ -205,9 +204,13 @@ class ReviewDialog:
         for widget in self.controls: widget.configure(state="disabled" if self.locked else "normal")
         self.prepare_button.configure(state="disabled" if self.locked else "normal",
                                       text="Check again" if self.record else "Check")
-        self.submit_button.configure(state="normal" if self.record and not self.record.get("pull_request") else "disabled")
+        submittable = bool(self.record and not self.record.get("pull_request"))
+        self.submit_button.configure(state="normal" if submittable else "disabled")
         self.link_button.configure(state="normal" if self.record and self.record.get("pull_request") else "disabled")
         self.close_button.configure(state="normal")
+        # The blue button is the next step: Check, then Submit for approval; none once submitted.
+        lead = self.submit_button if submittable else None if self.locked else self.prepare_button
+        kit.promote(self.window, lead, *(b for b in (self.submit_button, self.prepare_button) if b is not lead))
 
     def run(self, title, task, done):
         def on_error(error):

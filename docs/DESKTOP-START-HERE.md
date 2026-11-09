@@ -1,19 +1,20 @@
 # Sentinel Workspace — desktop guide
 
-Double-click Start-Sentinel.cmd. Python 3.10+ with Tkinter and Azure CLI 2.76+ are required.
-GitHub CLI is needed only for the rule library and for submitting rules for approval.
+Open **Sentinel Workspace.exe** (from a copy of the repository, Start-Sentinel.cmd). Azure CLI
+2.76+ must be installed on the PC. GitHub CLI is needed only for the rule library and for
+submitting rules for approval.
 
 The app has three sections in the sidebar: **Connect**, **Rules** and **Rule builder**
-(Ctrl+1, Ctrl+2 and Ctrl+3). Sentinel audit exports and the onboarding/review screens are
-not part of the desktop app at present; onboarding remains available from the command line
-(`py -m sentinel_app.lighthouse_onboarding --help`). The status bar shows the app version,
+(Ctrl+1, Ctrl+2 and Ctrl+3). The status bar shows the app version,
 **About Sentinel Workspace** at the foot of the sidebar shows the version, the Python and Tk
 builds (Tk with its patch level, such as 8.6.15) and the app data folder, and a welcome banner
 on Connect points a new analyst at the two things to set up until a client or a rule library
 exists. **Help & prerequisites** (or F1) opens this guide inside the app, in the packaged exe
 too; **Open license** in About shows the license the same way.
 
-Only one copy of the app runs at a time: starting it again brings the open window forward.
+Only one copy of the app runs at a time: starting it again brings the open window forward. If
+the open copy was started with **Run as administrator**, the app says so instead; switch to it
+from the taskbar.
 
 ## Connect
 
@@ -29,10 +30,12 @@ Only one copy of the app runs at a time: starting it again brings the open windo
    **Windows account** as the sign-in method.
 3. Select **Sign in to <client>** (**Sign in with Microsoft** when no client is chosen), or
    press Enter in the tenant field, and complete sign-in and MFA. While Microsoft is
-   waiting, a panel offers **Bring window forward** and **Cancel sign-in**. If sign-in
-   fails, a red banner under the button explains why in plain words; **Copy details**
-   copies Microsoft's full message.
-4. Select the subscription and Log Analytics workspace. Workspaces refresh when the
+   waiting, a panel says where to finish (your browser, or the Windows account window for
+   **Windows account**) and offers **Bring window forward** and **Cancel sign-in**. If
+   sign-in fails, a red banner under the button explains why in plain words; **Copy
+   details** copies Microsoft's full message.
+4. Select the subscription and Log Analytics workspace. Each subscription shows its name, its
+   state when it isn't Enabled, and a shortened ID. Workspaces refresh when the
    subscription changes. After sign-in the app picks the subscription and workspace you
    used last for that client (remembered on this PC), or else the default subscription and
    its first workspace. **Copy details**, **View analytics rules** (the one blue button
@@ -53,9 +56,6 @@ repository. The Rules page's library view and **Submit for approval** use it. Se
 **Save** to keep it, and **Sign in to GitHub** if the card says you are not signed in; the
 one-time device code appears in **Session activity**.
 
-Contributor setup, Azure access management and setup-access checks were part of client
-onboarding and are no longer in the desktop app.
-
 ## Rules
 
 The switch at the top chooses **Workspace rules** or **Rule library**; the choice is
@@ -75,11 +75,12 @@ cloud only. Right-click a value in the details, such as the rule ID, to copy it.
 Connect (**GitHub**) or from a **Folder on this PC**. It needs no Azure sign-in.
 **Refresh library** (F5) reads it again; if it can't be read, a red banner in the source
 card says why and how to fix it. Select a rule and choose **Edit selected rule**,
-or double-click it, to open it in the Rule builder. The Library section offers
-**Assign to clients…**, **Preview and deploy…**, **Library issues**, **Open saved
-assignment…** and **Preview & deployment history…**; see
-[the repository pilot guide](REPOSITORY-PILOT.md). The history lists request and check times
-in your local time; point at a time to see it in UTC, as the receipts store it.
+or double-click it, to open it in the Rule builder. **Assign to clients…** and **Preview
+and deploy…** sit above the list; **Library issues**, **Open saved assignment…** and
+**Preview & deployment history…** are in the **Library ⋯** menu on the Rule library card.
+In the client lists of those dialogs, Space ticks or clears a client. The history lists
+request and check times in your local time; point at a time to see it in UTC, as the
+receipts store it.
 
 ## Rule builder
 
@@ -99,15 +100,18 @@ lines red) and the clients that use the rule, asks why the rule is changing, the
 pull request that is ready for a teammate's review; your note becomes its description.
 The library and file path sit under **Where it will be saved**. New rules start disabled.
 Closing the app asks before discarding an unsaved draft. Every 30 seconds the builder also
-keeps a recovery copy of unsaved work (`desktop-data/drafts/.autosave.rule-draft.json`). If
-the app or the PC stops before you save, the next start offers to restore it once; saving the
-draft or closing the app normally (including choosing **Discard**) removes the copy.
+keeps a recovery copy of unsaved work (`desktop-data/drafts/.autosave.rule-recovery.json`),
+and again when Windows signs out or restarts with the app open. If the app or the PC stops
+before you save, the next start offers to restore it: **Restore** opens it as unsaved work,
+**Discard** deletes it, and Esc (or closing the question) keeps it for the next start unless
+you start new work first. Saving the draft or closing the app normally removes the copy.
 
 When a check fails, the builder opens the step with the problem, outlines the field in red
 and explains the fix under it. On opening the Rule builder, the app checks GitHub sign-in: a
 pill in the toolbar shows **GitHub: <account>** (the Rule library card on Connect says the
-same) or **GitHub: not signed in** with a **Sign in to GitHub** action (**Go to Connect**
-when no library is set). The form stays editable while the app reads something in the
+same), **GitHub: not signed in** with a **Sign in to GitHub** action, or **Rule library not
+set** with **Go to Connect** when no library is set. The form stays editable while the app
+reads something in the
 background. **My submissions…** lists what you submitted from this
 PC and asks GitHub for each one's current state (GET requests only): waiting for review,
 changes requested, approved, merged or closed. **View changes** reopens one and **Open in
@@ -143,12 +147,15 @@ login fails with AADSTS700213, compare it with **Actions > Inspect Azure trust s
 
 ## Navigation and storage
 
-Tab navigates controls; Enter/Space activates a focused sidebar item or option, and the
-arrow keys move within a view switch. Dialogs close with Esc and run their main action
-with Enter. Pages scroll at smaller window sizes, smoothly with a touchpad. The window
-always fits the screen's work area at any display scaling (it opens maximised when the
-default size doesn't fit), reopens where you left it on whichever monitor that was, and
-remembers whether it was maximised, even when it is closed while minimised. The header
+Tab moves through each window in reading order, top to bottom and left to right; read-only
+boxes such as Session activity and this guide are Tab stops too, so the arrow and Page keys
+scroll them. Enter/Space activates a focused sidebar item or option, and the arrow keys move
+within a view switch. Dialogs close with Esc; Enter presses the blue button, except that it
+never starts a deployment or applies GCC High setup. Pages scroll at smaller window sizes,
+smoothly with a touchpad. The window always fits the screen's work area at any display
+scaling (it opens maximised when the default size doesn't fit), reopens where you left it on
+whichever monitor that was, and remembers whether it was maximised, even when it is closed
+while minimised or Windows signs out. Dialogs open over the window, on its monitor. The header
 names the client and workspace on every page (point at it for the tenant and subscription
 IDs), the window title and taskbar name the client once a workspace is chosen, and the
 sidebar shows the signed-in Microsoft account. The status bar reports Ready or Working; tasks that take more than a moment show a
@@ -162,11 +169,15 @@ action that fills them.
 
 If something unexpected goes wrong inside the app, the status bar says so, Session activity
 shows the details, and they are also written to `desktop-data/logs/errors.log` (kept under
-1 MB) for whoever supports you.
+1 MB) for whoever supports you. If the app can't start at all, a message says so and the
+details go to the same log (or, when that folder can't be written, to `Sentinel Workspace
+errors.log` in your temp folder).
 
 Client profiles, settings, drafts and submission records stay in desktop-data. Exports are
 written to the folder you choose. The window layout, the last workspace per client and
-similar view choices are kept in `desktop-data/ui-state.json`.
+similar view choices are kept in `desktop-data/ui-state.json`. The exe keeps desktop-data
+beside the .exe, or under `%LOCALAPPDATA%\Sentinel Workspace\desktop-data` when that
+folder can't be written (for example under Program Files).
 
 ## Keyboard shortcuts
 
@@ -179,44 +190,18 @@ similar view choices are kept in `desktop-data/ui-state.json`.
 - **Ctrl+Page Down** and **Ctrl+Page Up** move to the next and previous Rule builder step.
 - In the Query box, **Tab** indents and **Ctrl+Tab** moves on; in other text boxes **Tab**
   moves on.
-- In a list, the arrow keys move the selection, **Enter** opens the row's details (in the rule
-  library, the rule in the Rule builder) and **Ctrl+C** copies the selected rows.
-- In the client list, type the first letters of a name to choose that client.
-- In a dialog, **Enter** runs the blue button and **Esc** closes the dialog.
+- In the Rules page lists, the arrow keys move the selection and **Enter** opens the selected
+  rule (Workspace rules: moves into its details; Rule library: opens it in the Rule builder);
+  **Ctrl+C** copies the selected rows.
+- In a search box, **Enter** or **Down** moves to the first result and **Esc** clears the search.
+- In the client list on Connect, type the first letters of a name to choose that client.
+- In a dialog, **Enter** presses the blue button (a focused button presses itself) and **Esc**
+  closes it. Review deployment and Onboard GCC High never start anything from Enter, and
+  Enter in a dialog's client list or search box presses nothing.
 - Right-click a text box for Cut, Copy, Paste and Select all, a list row for its copy actions,
   or an ID in a details panel to copy it.
 
-## Build a Windows app (.exe)
-
-`Build-Exe.cmd` in the repository root builds `dist\Sentinel Workspace.exe` with
-PyInstaller. It first runs `scripts\make_build_assets.py`, which draws the app icon
-(`assets\sentinel-workspace.ico`) and writes the Windows version resource
-(`assets\version-info.txt`) from the same brand module and version number the running app
-uses, so the icon in Explorer, the taskbar and the window title bar match and the file's
-Details tab shows the product name and version. The .exe keeps its data in a `desktop-data`
-folder beside it (or under `%LOCALAPPDATA%\Sentinel Workspace` when that folder is
-read-only). The guide, the templates and the LICENSE are bundled inside it, and it is built
-without UPX compression, which antivirus tools often flag. Azure CLI and GitHub CLI are
-still needed on each PC.
-
-### Client slug and workspace label length
-
-Onboarding uses `<client-slug>-<workspace-label>` as its target. The combined
-value, including the separating hyphen, supports up to 64 characters. Each
-component allows up to 62 characters, leaving room for a hyphen and a one-character
-other component. Names use lowercase letters, digits and single hyphens, starting
-and ending with a letter or digit.
-
-Azure deployment names also allow 64 characters. Existing short deployment names
-are preserved. When `lighthouse-onboard-` plus the target exceeds that limit, the
-app uses a readable shortened target plus a stable hash suffix for the Azure
-deployment name only. The complete target stays in repository manifests, client
-paths and local state. For example, the 49-character target
-`explosive-countermeasures-international-workspace` is now accepted unchanged.
-This does not verify any independent naming restrictions in your detection pipeline.
-
-
-### Finding the Microsoft sign-in window
+## Finding the Microsoft sign-in window
 
 On Windows, the app attempts to bring newly opened Microsoft sign-in windows
 forward. If the window remains hidden, click **Bring window forward** in the
@@ -248,16 +233,15 @@ offers browser recovery; the sign-in method changes only if you accept.
 If authentication still fails, update Azure CLI (2.76.0 or later is required),
 restart the app and check the client's Entra sign-in logs using the correlation ID
 and UTC timestamp shown in the error. Inspect Authentication Details and Conditional
-Access results for Azure CLI / Windows Azure Service Management API. A successful
-preview does not prove an actual Lighthouse deployment will satisfy MFA. Your
+Access results for Azure CLI / Windows Azure Service Management API. Your
 administrator may need to enforce MFA at sign-in or resolve the account's MFA or
 cross-tenant policy requirements; do not disable those requirements to complete setup.
 
 An empty subscription list does not prove the account has no Azure permissions.
 The app retains CLI sign-in warnings, including failures for particular tenants.
 Enter the client tenant ID and use the same authorized identity as in Azure portal.
-When CLI sign-in itself succeeds but returns no subscriptions, **Check missing
-subscription** remains available using the subscription ID from the portal.
+When CLI sign-in itself succeeds but returns no subscriptions, **Can't see a
+subscription?** remains available using the subscription ID from the portal.
 A terminal az login uses a separate cache and does not refresh this app's session.
 
 References: [Azure CLI interactive sign-in](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli-interactively),

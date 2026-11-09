@@ -168,6 +168,11 @@ class DesignTests(unittest.TestCase):
             rows=(page.tree.winfo_height()-top)//int(self.root.tk.call("ttk::style","lookup","Treeview","-rowheight"))
             self.assertGreaterEqual(rows,least,(width,height))
             self.assertTrue(page.query_frame.winfo_ismapped())
+            # The shown columns fill the table exactly: no clipped name column, no sideways scrolling.
+            shown=page.tree["displaycolumns"]
+            used=int(page.tree.column("#0","width"))+sum(int(page.tree.column(key,"width")) for key in shown)
+            self.assertLessEqual(abs(used-page.tree.winfo_width()),1,(width,shown))
+            self.assertEqual("modified" in shown,width>=1360)
 
     def test_rules_split_and_sort_are_remembered(self):
         page=self.show_rules(self.sample_rules())

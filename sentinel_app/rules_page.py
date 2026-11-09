@@ -95,13 +95,26 @@ def flow(bar, item, column, room=220):
 
 def fit_columns(tree, needs):
     """Show an optional column only while the table is at least ``needs[key]`` (96-DPI px) wide;
-    the other columns always show."""
+    the other columns always show. Each time the shown columns change, the stretching ones take up
+    the difference, so the columns fill the table exactly: a Treeview shares out only later size
+    changes, and leaves a column it gains (or a first layout narrower than its columns) as overflow."""
     keys, shown = tuple(tree["columns"]), [None]
+    def fit():
+        if not tree.winfo_exists(): return
+        visible = shown[0] or keys
+        stretchy = [key for key in visible if tree.tk.getboolean(tree.column(key, "stretch"))]
+        lead = int(tree.column("#0", "width")) if "tree" in str(tree.cget("show")) else 0
+        spare = tree.winfo_width() - lead - sum(int(tree.column(key, "width")) for key in visible)
+        for index, key in enumerate(stretchy):
+            width = int(tree.column(key, "width"))
+            new = max(int(tree.column(key, "minwidth")), width + spare // (len(stretchy) - index))
+            tree.column(key, width=new); spare -= new - width
     def update(event):
         visible = tuple(key for key in keys if event.width >= px(needs.get(key, 0)))
         if visible != shown[0]:
             shown[0] = visible
             tree.configure(displaycolumns=visible)
+            tree._root().after_idle(fit)  # After the Treeview's own layout for this size.
     tree.bind("<Configure>", update, add="+")
 
 

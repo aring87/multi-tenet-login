@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from sentinel_app import desktop_app as ui
 from test_desktop import WORKSPACE
+from roomy_screen import roomy_screen, roomy_window
 
 
 def descendants(widget):
@@ -21,7 +22,8 @@ class DesignTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         p=patch.object(ui,"DATA",Path(self.temp.name));p.start();self.addCleanup(p.stop)
         self.addCleanup(self.no_hidden_errors)
-        self.root=tk.Tk();self.app=ui.App(self.root);self.root.geometry("1120x740")
+        roomy_screen(self)  # Layout is checked at the sizes set here, even on a small CI screen.
+        self.root=tk.Tk();roomy_window(self.root);self.app=ui.App(self.root);self.root.geometry("1120x740")
         self.root.update()
         self.addCleanup(self.cleanup)
 

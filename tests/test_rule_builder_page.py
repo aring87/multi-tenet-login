@@ -11,13 +11,16 @@ from sentinel_app import rule_schema
 from sentinel_app import rule_builder_page as rule_builder
 from sentinel_app.rule_builder_page import collect_issues, locate, tactic_label
 from test_rule_drafts import valid_form
+from roomy_screen import roomy_screen, roomy_window
 
 
 class RuleBuilderPageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         p = patch.object(ui, "DATA", Path(self.temp.name)); p.start(); self.addCleanup(p.stop)
-        self.root = tk.Tk(); self.root.withdraw(); self.app = ui.App(self.root); self.root.update()
+        roomy_screen(self)  # Layout is checked at the sizes set here, even on a small CI screen.
+        self.root = tk.Tk(); self.root.withdraw(); roomy_window(self.root)
+        self.app = ui.App(self.root); self.root.update()
         self.page = self.app.rule_builder
         self.addCleanup(self.cleanup)
 

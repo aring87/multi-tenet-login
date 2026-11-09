@@ -196,7 +196,8 @@ class CopyValues(kit.KeyValues):
         return "break"
 
     def copy(self, key, label):
-        self.clipboard_clear(); self.clipboard_append(str(label.cget("text")))
+        # The label may show a path or ID shortened with '…'; copy the whole value.
+        self.clipboard_clear(); self.clipboard_append(str(getattr(label, "full_text", label.cget("text"))))
         if self.copied: self.copied(key)
 
 

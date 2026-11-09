@@ -327,6 +327,8 @@ class ShellTests(unittest.TestCase):
         tenant = next(label for key, label in zip(app.details.keys, app.details.values) if key == "Tenant ID")
         self.assertTrue(tenant.bind("<Button-3>"))  # Right-click copies one ID.
         app.details.copy("Tenant ID", tenant); self.assertEqual(app.root.clipboard_get(), TENANT)
+        tenant.configure(text=TENANT[:8] + "…")  # Shown shortened in a narrow panel: Copy still takes the whole ID.
+        app.details.copy("Tenant ID", tenant); self.assertEqual(app.root.clipboard_get(), TENANT)
         again = self.start(); self.connect(again)
         self.assertTrue(again.details_panel.winfo_manager())
 

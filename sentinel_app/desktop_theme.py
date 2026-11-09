@@ -14,8 +14,10 @@ from tkinter import ttk
 COLORS = dict(
     canvas="#F4F6FA", card="#FFFFFF", raised="#F8FAFC", hover="#F1F5F9", stripe="#F6F8FB",
     line="#E2E8F0", line_strong="#CBD5E1", shadow="#DCE2EC",
-    # muted is the grey for text (AA contrast on card and canvas); subtle is for non-text marks only.
+    # muted is the grey for text (AA contrast on card and canvas); subtle is for non-text marks only;
+    # control_stroke is a control's own edge, such as an empty checkbox (3:1 on every surface).
     ink="#0F172A", ink_2="#334155", muted="#5B6778", subtle="#94A3B8", disabled="#A0AEC0",
+    control_stroke="#808DA1",
     accent="#2563EB", accent_hover="#1D4ED8", accent_pressed="#1E40AF",
     accent_soft="#EEF4FF", accent_line="#BFD3FE",
     # Selected table rows: stronger while the table has the keyboard, quieter when it does not.
@@ -86,7 +88,7 @@ def app_icon(root, size=32):
 
 # ------------------------------------------------------------------ checkboxes
 # Checkbox state -> (fill, border, tick) as COLORS names; no tick draws an empty box.
-CHECKBOX = dict(off=("card", "subtle", None), hover=("hover", "muted", None), pressed=("line", "muted", None),
+CHECKBOX = dict(off=("card", "control_stroke", None), hover=("hover", "muted", None), pressed=("line", "muted", None),
                 disabled=("raised", "line_strong", None), on=("accent", "accent", "#FFFFFF"),
                 on_hover=("accent_hover", "accent_hover", "#FFFFFF"),
                 on_pressed=("accent_pressed", "accent_pressed", "#FFFFFF"), on_disabled=("disabled", "disabled", "#FFFFFF"))

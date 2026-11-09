@@ -95,6 +95,15 @@ class TableTests(KitTestCase):
         self.assertEqual(self.stripes(tree), [False, True, False, True])
         self.assertIn("muted", tree.item("new", "tags"))
 
+    def test_scrollbars_show_only_while_the_rows_overflow(self):
+        bar = ttk.Scrollbar(self.root); update = kit.autohide(bar, bar.pack)
+        update("0.0", "0.5"); self.assertEqual(bar.winfo_manager(), "pack")
+        update("0.0", "1.0"); self.assertEqual(bar.winfo_manager(), "")
+        # A table squeezed below one row reports 0-0 for a moment: that must not show the bar
+        # (doing so narrowed a table, which hid a column, which let the table grow: a loop).
+        update("0.0", "0.0"); self.assertEqual(bar.winfo_manager(), "")
+        update("0.2", "0.6"); update("0.0", "0.0"); self.assertEqual(bar.winfo_manager(), "pack")
+
     def test_heading_sorts_naturally_and_shows_an_arrow(self):
         _, tree = self.make(sort=True)
         self.assertIsNone(tree.sort_state)
@@ -294,6 +303,45 @@ class EllipsisTests(KitTestCase):
         tree.event_generate("<Leave>"); self.root.update()
         self.assertEqual(tips(), [])
 
+    def test_a_tip_never_outlives_its_row(self):
+        tree = self.make()
+        errors = []
+        self.root.report_callback_exception = lambda *exc: errors.append(exc[1])
+        tips = lambda: [w for w in tree.winfo_children() if isinstance(w, tk.Toplevel)]
+        fill = lambda count: [tree.insert("", "end", iid=str(i), values=(self.LONG + " %d" % i, "On"))
+                              for i in range(count)]
+        fill(10); self.root.deiconify(); self.root.update()
+        def hover(item):
+            before = set(self.root.tk.call("after", "info"))
+            x, y, width, height = tree.bbox(item, "name")
+            tree.event_generate("<Motion>", x=x + 5, y=y + height // 2)
+            return set(self.root.tk.call("after", "info")) - before  # The tip's timer, on the root.
+        def flush(timers):
+            for timer in timers & set(self.root.tk.call("after", "info")):  # Run a pending tip now.
+                script = self.root.tk.splitlist(self.root.tk.call("after", "info", timer))[0]
+                self.root.tk.call("after", "cancel", timer); self.root.tk.eval(script)
+            self.root.update()
+        # The pointer rests on row 5 while a search redraws the list with three rows.
+        timers = hover("5")
+        tree.delete(*tree.get_children()); fill(3)
+        flush(timers)
+        self.assertEqual((errors, tips()), ([], []))
+        # Even rows taken away behind the kit's back don't break the tip when its time comes.
+        timers = hover("2")
+        ttk.Treeview.delete(tree, "2"); flush(timers)
+        self.assertEqual((errors, tips()), ([], []))
+        tree.delete(*tree.get_children()); fill(3)
+        # A tip already open closes when the rows are redrawn, or when its row's text changes.
+        timers = hover("1"); flush(timers)
+        self.assertEqual(len(tips()), 1)
+        tree.delete(*tree.get_children()); self.root.update()
+        self.assertEqual(tips(), [])
+        fill(3); timers = hover("2"); flush(timers)
+        tree.item("0", values=("Other row", "Off")); self.root.update()
+        self.assertEqual(len(tips()), 1)
+        tree.set("2", "name", self.LONG + " renamed"); self.root.update()
+        self.assertEqual((errors, tips()), ([], []))
+
 
 class KeyValueTests(KitTestCase):
     PATH = "rules/sentinel/identity-and-access/brute-force-against-entra-id-accounts.yml"
@@ -375,6 +423,9 @@ class CheckboxTests(KitTestCase):
         inside, middle = ring + px(3), ring + size // 2
         ticked = lambda img: any(color(img, x, y) == "#FFFFFF" for x in range(img.width()) for y in range(img.height())
                                  if not img.transparency_get(x, y))
+        # An empty box's edge is a control boundary: 3:1 against every surface a checkbox sits on.
+        for surface in ("card", "stripe", "raised", "canvas", "hover"):
+            self.assertGreaterEqual(contrast(COLORS[CHECKBOX["off"][1]], COLORS[surface]), 3, surface)
         for state, (fill, border, tick) in CHECKBOX.items():
             self.assertEqual(color(image(state), inside, inside), COLORS[fill], state)
             self.assertEqual(color(image(state), ring, middle), COLORS[border], state)

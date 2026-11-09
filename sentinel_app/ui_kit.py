@@ -42,9 +42,12 @@ def wrap_to_parent(label, margin=0, minimum=None):
 
 
 def autohide(scrollbar, show):
-    """Return a scroll command that shows the scrollbar only while content overflows."""
+    """Return a scroll command that shows the scrollbar only while content overflows.
+    A view with no room for even one row reports first == last (a table squeezed for a moment
+    by its other bar); that leaves the bar as it is, as reacting to it can make the layout loop."""
     def update(first, last):
         scrollbar.set(first, last)
+        if float(last) <= float(first): return
         overflowing = float(first) > 0 or float(last) < 1
         if overflowing and not scrollbar.winfo_manager(): show()
         elif not overflowing and scrollbar.winfo_manager():
@@ -739,6 +742,7 @@ class StripedTreeview(ttk.Treeview):
             result = super().item(item, option, **kw)
             if full: self._cells[item] = (full, shown)
             else: self._cells.pop(item, None)
+            self.hide_tip(item)  # Its text may be out of date.
             return result
         result = super().item(item, option, **kw)
         cells = self._cells.get(item)
@@ -767,6 +771,10 @@ class StripedTreeview(ttk.Treeview):
         super().delete(*items)
         for item in items: self._cells.pop(item, None)
         self._rows = len(self.get_children(""))
+        self.hide_tip()  # The rows under it may have moved or gone.
+
+    def hide_tip(self, item=None):
+        """Close a cell tip (kit.table sets this up): any, or only one over row ``item``."""
 
     def restripe(self):
         """Stripe every other top-level row by its current position."""
@@ -925,19 +933,27 @@ def _cell_tips(tree):
     def show():
         state["timer"] = None
         item, key = state["cell"]
-        text, box = tree.shortened(item, key), tree.winfo_exists() and tree.bbox(item, key)
-        if text and box:
+        # The rows may have been redrawn since the hover began (a search, a load finishing).
+        if not tree.winfo_exists() or not tree.exists(item): return
+        text = tree.shortened(item, key)
+        if not text: return
+        try: box = tree.bbox(item, key)
+        except tk.TclError: return
+        if box:
             state["window"] = _popup_tip(tree, text, tree.winfo_rootx() + box[0] + box[2] // 2,
                                          tree.winfo_rooty() + box[1] + box[3] + px(2))
+    def reset(item=None):
+        if item is None or (state["cell"] or (None,))[0] == item: hide(); state.update(cell=None)
     def motion(event):
         item, column = tree.identify_row(event.y), tree.identify_column(event.x)
         cell = (item, tree.column(column, "id")) if item and column not in ("", "#0") else None
         if cell == state["cell"]: return
         hide(); state["cell"] = cell
         if cell and tree.shortened(*cell): state["timer"] = root.after(600, show)
+    tree.hide_tip = reset
     tree.bind("<Motion>", motion, add="+")
-    for sequence in ("<Leave>", "<ButtonPress>", "<MouseWheel>", "<KeyPress>", "<Destroy>"):
-        tree.bind(sequence, lambda event: (hide(), state.update(cell=None)), add="+")
+    for sequence in ("<Leave>", "<Unmap>", "<ButtonPress>", "<MouseWheel>", "<KeyPress>", "<Destroy>"):
+        tree.bind(sequence, lambda event: reset(), add="+")
 
 
 def table(parent, columns, height=10, selectmode="browse", icon="rules", sort=None, menu=None, marker=False,

@@ -156,7 +156,7 @@ class RuleBuilderPageTests(unittest.TestCase):
         self.assertEqual(str(page.widgets["owner"].cget("style")), "Error.TEntry")
         self.assertTrue(page.widgets["query"].master.error)
         self.assertEqual(set(page.flag_labels), {"name", "owner", "query", "tactics"})
-        page.vars["owner"].set("soc-team")  # An edit clears only that field and updates its step.
+        page.vars["owner"].set("soc-team")  # An edit clears that field; the others are still wrong, so they stay.
         self.assertEqual(list(page.flagged), ["name", "query", "tactics"])
         self.assertEqual(str(page.widgets["owner"].cget("style")), "TEntry")
         self.assertEqual(status, {0: ("error", "1 issue"), 1: ("error", "1 issue"), 2: ("error", "1 issue")})
@@ -171,6 +171,22 @@ class RuleBuilderPageTests(unittest.TestCase):
         self.assertEqual(page.steps.index("current"), 4)
         page.vars["name"].set("Edited again")  # The ticks belong to the check that just went stale.
         self.assertEqual(status, {})
+        # An edit to another field that resolves a problem clears its flag, its step count and the banner too.
+        for change, flagged, fix in (
+                (dict(status="retired", enabled=True), ["enabled"], ("status", "baseline")),
+                (dict(tactics="", techniques="", subTechniques=""), ["tactics", "techniques"], ("allow_missing_mitre", True)),
+                (dict(queryFrequency="PT2H", queryPeriod="PT1H"), ["queryPeriod"], ("queryFrequency", "PT1H")),
+                (dict(techniques="T1003"), ["techniques"], ("subTechniques", ""))):
+            with self.subTest(fix=fix[0]):
+                page.load_form({**valid_form(), **change}); self.assertIsNone(page.validate())
+                self.assertEqual(list(page.flagged), flagged)
+                page.vars[fix[0]].set(fix[1])
+                self.assertEqual((page.flagged, status), ({}, {}))
+                self.assertFalse(page.note.get().startswith("Needs attention"))
+                self.assertIsNotNone(page.validate())
+        page.load_form(valid_form()); page.problem(ValueError("Unknown rule fields: x"))  # A full-check flag
+        page.vars["name"].set("Unrelated edit")  # waits for its own field, which the quick look can't judge.
+        self.assertEqual(list(page.flagged), ["advanced"])
 
     def test_back_and_next_follow_the_current_step(self):
         page = self.page
@@ -185,6 +201,13 @@ class RuleBuilderPageTests(unittest.TestCase):
         self.assertFalse(page.next_button.winfo_ismapped()); self.assertTrue(page.back_button.winfo_ismapped())
         page.back_button.invoke(); self.root.update()
         self.assertEqual(page.steps.index("current"), 3)
+        # Stepping with the keyboard to the end, or back to the start, hands focus to the button that stays.
+        page.next_button.focus_set(); page.next_button.invoke(); self.root.update()
+        self.assertFalse(page.next_button.winfo_ismapped()); self.assertIs(self.root.focus_lastfor(), page.back_button)
+        page.steps.select(1); self.root.update()
+        page.back_button.focus_set(); page.back_button.invoke(); self.root.update()
+        self.assertFalse(page.back_button.winfo_ismapped()); self.assertIs(self.root.focus_lastfor(), page.next_button)
+        page.steps.select(3); self.root.update()
         entry = page.widgets["name"]
         entry.event_generate("<Control-Prior>"); self.root.update()
         self.assertEqual(page.steps.index("current"), 2)
@@ -242,11 +265,18 @@ class RuleBuilderPageTests(unittest.TestCase):
 
     def test_schedule_is_in_view_on_the_query_step_at_minimum_size(self):
         self.root.deiconify(); self.root.geometry("1120x740"); self.app.show_page("builder")
-        self.page.github_checked("analyst", None)  # Signed in, as analysts usually are.
         self.page.load_form(valid_form()); self.page.steps.select(1); self.root.update()
-        canvas = self.app.page_canvases[2]
-        self.assertEqual(canvas.yview()[0], 0.0)
-        for key in ("queryFrequency", "queryPeriod", "triggerOperator", "triggerThreshold"):
-            widget = self.page.widgets[key]
-            self.assertTrue(widget.winfo_ismapped(), key)
-            self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), canvas.winfo_rooty() + canvas.winfo_height(), key)
+        canvas, query = self.app.page_canvases[2], self.page.texts["query"]
+        # Not signed in (the usual first run) the toolbar takes two rows here; the query box makes the room.
+        for user, error in ((None, "Run gh auth login"), (None, "gh is not installed"), (None, "connection timed out"),
+                            ("analyst", None)):
+            with self.subTest(user=user, error=error):
+                self.page.github_checked(user, error); self.root.update(); self.root.update()
+                self.assertEqual(canvas.yview()[0], 0.0)
+                for key in ("queryFrequency", "queryPeriod", "triggerOperator", "triggerThreshold"):
+                    widget = self.page.widgets[key]
+                    self.assertTrue(widget.winfo_ismapped(), key)
+                    self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(),
+                                         canvas.winfo_rooty() + canvas.winfo_height(), key)
+        self.assertEqual(self.page.toolbar_right.grid_info()["row"], 0)  # Signed in, it fits on one row
+        self.assertEqual(int(query.cget("height")), 8)  # and the query box is its full height again.

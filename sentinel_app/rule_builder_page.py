@@ -22,6 +22,7 @@ OPERATORS = (("GreaterThan", "is more than"), ("LessThan", "is fewer than"), ("E
 UNITS = (("minutes", 60), ("hours", 3600), ("days", 86400))
 RECENT_DRAFTS = 10
 TACTIC_COLUMNS = 3
+QUERY_LINES = 8
 MAX_SCHEDULE = 14 * 86400
 # The patterns rule_schema.validate checks inline. That module is a reviewed copy pinned by the hash in
 # docs/RULE-SCHEMA.md, so they are repeated here; test_quick_checks_agree_with_the_full_check catches drift.
@@ -172,6 +173,7 @@ class RuleBuilderPage:
         self.vars, self.texts = {}, {}
         self.widgets, self.labels = {}, {}
         self.flagged, self.flag_labels = {}, {}  # Field key -> advice, and the advice label under the field.
+        self.quick_flags = set()  # Flagged by collect_issues, so any edit that resolves them clears them.
         self.github_user, self.github_checking = None, False
         self.saved = None
         enabled = lambda: not app.busy
@@ -248,7 +250,7 @@ class RuleBuilderPage:
         self.field(basics, "Rule ID", "id", readonly=True, hint="Kept when you edit a rule; New rule creates a new one")
 
         # The query keeps its natural height, so the schedule below it stays in view at the smallest window size.
-        self.textbox(query, "Query (KQL)", "query", 8, label_hint="Runs against the client's workspace after approval",
+        self.textbox(query, "Query (KQL)", "query", QUERY_LINES, label_hint="Runs against the client's workspace after approval",
                      font="mono", expand=False,
                      placeholder="SigninLogs\n| where ResultType != 0\n| summarize Attempts = count() by UserPrincipalName")
         self.schedule = ttk.Frame(query, style="Card.TFrame"); self.schedule.pack(fill="x")
@@ -323,7 +325,8 @@ class RuleBuilderPage:
             self.footer.frame.pack_configure(padx=pad)
 
     def flow_toolbar(self, event=None):
-        """Keep the toolbar on one row while it fits, and move its right-hand group under it when it doesn't."""
+        """Keep the toolbar on one row while it fits, and move its right-hand group under it when it doesn't.
+        The query box then gives up that row's height, so the schedule stays in view at the smallest size."""
         left, right = self.toolbar_left, self.toolbar_right
         width = self.toolbar.winfo_width()
         wraps = width > 1 and left.winfo_reqwidth() + right.winfo_reqwidth() + px(16) > width
@@ -331,16 +334,28 @@ class RuleBuilderPage:
             dict(row=0, column=1, columnspan=1, sticky="e", pady=0)
         info = right.grid_info()
         if not info or int(info["row"]) != place["row"]: right.grid(**place)
+        query = self.texts.get("query")
+        if query is None: return
+        lines = QUERY_LINES
+        if wraps:  # Enough whole lines to cover the second row.
+            line = int(query.tk.call("font", "metrics", query.cget("font"), "-linespace"))
+            lines -= -(-(right.winfo_reqheight() + px(8)) // line)
+        if int(query.cget("height")) != lines: query.configure(height=lines)
 
     def step_changed(self, event=None):
         index = self.steps.index("current")
         title, description = STEPS[index]
         self.form_card.title_var.set(title); self.form_card.subtitle_var.set(description)
+        focused = self.app.root.focus_lastfor()
         self.back_button.pack_forget(); self.next_button.pack_forget()
         if index > 0: self.back_button.pack(side="left", padx=(0, px(8)))
         if index < len(STEPS) - 1:
             self.next_button.configure(text="Next: " + STEPS[index + 1][0] + "  →")
             self.next_button.pack(side="left")
+        # The keyboard mustn't stay on a button that just went away: hand it to the one that stays.
+        keep = self.back_button if focused is self.next_button and index == len(STEPS) - 1 else \
+            self.next_button if focused is self.back_button and index == 0 else None
+        if keep is not None: self.app.root.update_idletasks(); keep.focus_set()
 
     def step_by(self, step):
         index = self.steps.index("current") + step
@@ -529,11 +544,17 @@ class RuleBuilderPage:
         return self.saved is not None and self.form() != self.saved
 
     def changed(self, key=None):
-        """An edit (``key``) clears only that field's flag; a whole new form (None) clears them all."""
+        """An edit (``key``) clears that field's flag, and any quick-check flag it resolved elsewhere (Lifecycle
+        for Enabled, say); flags from the full check wait for their own field. A new form (None) clears them all."""
         if self.loading: return
         self.clear_flag(key)
         if key == "kind":
             for name in drafts.SCHEDULE_FIELDS: self.clear_flag(name)
+        stale = [name for name in self.flagged if name in self.quick_flags]
+        if stale:
+            still = dict(collect_issues(self.form()))
+            for name in stale:
+                if name not in still: self.clear_flag(name)
         self.render_issues()  # Also drops the ticks a passed check left on the steps.
         self.submitted_url = None
         self.banner.set_action()  # A previous rule's "Open in GitHub" no longer applies.
@@ -681,6 +702,7 @@ class RuleBuilderPage:
         if self.app.busy: return None
         self.clear_flag(); self.stepper.clear_status()
         issues = collect_issues(self.form())
+        self.quick_flags = {key for key, _ in issues}
         if issues: self.show_issues(issues); return None
         try:
             text, warnings = drafts.validated_yaml(self.form())

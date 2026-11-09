@@ -247,12 +247,13 @@ class Split(ttk.Panedwindow):
 
 
 class RawConfig:
-    """The 'Full configuration' disclosure: a toggle row with Copy JSON, and the JSON area it
-    opens. The area stays open or closed as the selection changes."""
+    """The 'Full configuration' disclosure (or another ``label``): a toggle row with Copy JSON, and
+    the JSON area it opens. The area stays open or closed as the selection changes."""
 
-    def __init__(self, parent, copy, height=14):
+    def __init__(self, parent, copy, height=14, label="Full configuration"):
+        self.label = label
         self.row = ttk.Frame(parent, style="Card.TFrame")
-        self.button = ttk.Button(self.row, text="+  Full configuration", style="Disclosure.TButton", command=self.toggle)
+        self.button = ttk.Button(self.row, text="+  " + label, style="Disclosure.TButton", command=self.toggle)
         self.button.pack(side="left", fill="x", expand=True)
         self.copy_button = ttk.Button(self.row, text="Copy JSON", style="Small.Ghost.TButton", command=copy)
         self.copy_button.pack(side="right", padx=(px(8), 0))
@@ -261,15 +262,16 @@ class RawConfig:
 
     def toggle(self, show=None):
         self.open = (not self.open) if show is None else show
-        self.button.configure(text=("−  " if self.open else "+  ") + "Full configuration")
+        self.button.configure(text=("−  " if self.open else "+  ") + self.label)
         self.place()
 
     def place(self, visible=True):
-        """Pack the toggle (and the JSON while open) after what is already packed, or hide both."""
+        """Pack the toggle after what is already packed (and the JSON under it while open), or hide both."""
         if not visible:
             self.row.pack_forget(); self.frame.pack_forget(); return
         if not self.row.winfo_manager(): self.row.pack(fill="x", pady=(kit.space("lg"), 0))
-        if self.open and not self.frame.winfo_manager(): self.frame.pack(fill="x", pady=(px(8), 0))
+        # Right under its own toggle, so a second disclosure packed after this one stays below it.
+        if self.open and not self.frame.winfo_manager(): self.frame.pack(fill="x", pady=(px(8), 0), after=self.row)
         elif not self.open: self.frame.pack_forget()
 
 
@@ -436,6 +438,7 @@ class RulesPage:
                          else "Select a workspace to load its rules.")
         self.label_filters(counted=False)
         self.sync()
+        self.app.drift_changed()
 
     def label_filters(self, counted=True):
         """Show how many loaded rules each state filter holds ('Enabled 7'), or just the names."""
@@ -512,6 +515,7 @@ class RulesPage:
         self.reset(); self.summary.set("Loading rules from " + workspace["workspace_name"] + "…")
         self.empty.show("Loading rules from " + workspace["workspace_name"] + "…", busy=True)
         self.loading = True
+        app.drift_changed()
         def task():
             try: return list_rules(session, workspace)
             except Exception as error: return dict(records=[], status="error", error=str(error))
@@ -543,6 +547,7 @@ class RulesPage:
             else:
                 app.flash("Rules loaded for " + workspace["workspace_name"] + ".")
             self.summary.set(text); self.sync()
+            app.drift_changed()
         app.work("Reading analytics rules…", task, done, page="rules", failed="Couldn't read analytics rules")
 
     def export(self):

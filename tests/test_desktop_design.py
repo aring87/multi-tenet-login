@@ -50,7 +50,7 @@ class DesignTests(unittest.TestCase):
         self.assertEqual(chip(),"Acme Corporation  ·  choose a workspace")
         self.assertEqual(app.session_detail.cget("text"),"analyst@example.com")  # The sidebar names the account only.
         app.workspace=dict(WORKSPACE);app.identity.set("Synthetic workspace")
-        for page,view in (("connect","workspace"),("rules","workspace"),("rules","repository"),("builder","workspace")):
+        for page,view in (("connect","workspace"),("rules","workspace"),("rules","repository"),("rules","drift"),("builder","workspace")):
             app.show_page(page);app.rule_view.set(view);self.root.update()
             self.assertEqual(chip(),"Acme Corporation  ·  law-example-sentinel",(page,view))
         self.assertEqual(self.root.title(),"Acme Corporation — Sentinel Workspace")
@@ -206,7 +206,7 @@ class DesignTests(unittest.TestCase):
 
     def test_all_pages_fit_horizontally_at_minimum_size(self):
         for index in range(len(self.app.page_contents)):
-            for view in ("workspace","repository"):
+            for view in ("workspace","repository","drift"):
                 self.app.rule_view.set(view)
                 self.app.tabs.select(index);self.root.update()
                 # The Rules page fills the window instead of scrolling: its frame is the visible area.

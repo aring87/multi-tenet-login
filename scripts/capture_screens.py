@@ -43,7 +43,7 @@ from sentinel_app.assignment_dialog import AssignmentDialog  # noqa: E402
 from sentinel_app.preview_dialog import PreviewDialog  # noqa: E402
 from sentinel_app.workflow_history_dialog import WorkflowHistoryDialog  # noqa: E402
 from sentinel_app.review_history import ReviewHistoryDialog  # noqa: E402
-from test_desktop import WORKSPACE, TENANT, SUB  # noqa: E402
+from test_desktop import WORKSPACE, TENANT, SUB, WS  # noqa: E402
 from test_rule_drafts import valid_form  # noqa: E402
 
 user32, gdi32, dwm = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.dwmapi
@@ -145,21 +145,27 @@ RULES = [rule("r1", "Brute force against Entra ID accounts", True, "High"),
 
 
 def library():
-    rules = {"brute-force": ("Brute force against Entra ID accounts", "High", True),
-             "impossible-travel": ("Impossible travel sign-in", "Medium", True),
-             "inbox-forwarding": ("Suspicious inbox forwarding rule", "High", False)}
+    # The IDs match the sample workspace rules (RULES), so Drift has something to compare: acme's
+    # target is the connected workspace and raises one rule's severity; MFA fatigue isn't deployed yet.
+    rules = {"brute-force": ("r1", "Brute force against Entra ID accounts", "High", True),
+             "impossible-travel": ("r2", "Impossible travel sign-in", "Medium", True),
+             "inbox-forwarding": ("r7", "Suspicious inbox forwarding rule", "High", False),
+             "mfa-fatigue": ("44444444-1111-4111-8111-111111111111", "MFA fatigue push notifications", "Medium", True)}
     files = {}
-    for index, (slug, (name, severity, enabled)) in enumerate(rules.items(), start=1):
+    for slug, (rule_id, name, severity, enabled) in rules.items():
         files["rules/sentinel/" + slug + ".yml"] = json.dumps(dict(
-            id=f"{index}{index}{index}{index}{index}{index}{index}{index}-1111-4111-8111-111111111111",
-            name=name, severity=severity, enabled=enabled)).encode()
-    for client, workspace, enabled, assigned in (("acme", "acme-primary", True, ["brute-force", "impossible-travel"]),
-                                                 ("bluestone", "bluestone-sentinel", True, ["brute-force"]),
-                                                 ("fabrikam", "fabrikam-law", False, ["inbox-forwarding", "brute-force"]),
-                                                 ("northwind", "northwind-prod", True, [])):
-        target = dict(version=1, target=client + "-primary", client=client, enabled=enabled,
-                      azure=dict(workspace_name=workspace),
-                      rules=[dict(path="rules/sentinel/" + slug + ".yml") for slug in assigned])
+            id=rule_id, name=name, severity=severity, enabled=enabled)).encode()
+    acme = [dict(path="rules/sentinel/brute-force.yml"),
+            dict(path="rules/sentinel/impossible-travel.yml", overrides=dict(severity="High")),
+            dict(path="rules/sentinel/mfa-fatigue.yml")]
+    for client, azure, enabled, assigned in (
+            ("acme", dict(workspace_name=WORKSPACE["workspace_name"], workspace_id=WS), True, acme),
+            ("bluestone", dict(workspace_name="bluestone-sentinel"), True, ["brute-force"]),
+            ("fabrikam", dict(workspace_name="fabrikam-law"), False, ["inbox-forwarding", "brute-force"]),
+            ("northwind", dict(workspace_name="northwind-prod"), True, [])):
+        target = dict(version=1, target=client + "-primary", client=client, enabled=enabled, azure=azure,
+                      rules=[item if isinstance(item, dict) else dict(path="rules/sentinel/" + item + ".yml")
+                             for item in assigned])
         files["clients/" + client + "/workspace.yml"] = json.dumps(target).encode()
     snapshot = catalog(files, "isi-security/detection-as-code / main", "9f3c2a1", identity="aring")
     snapshot.update(repository="isi-security/detection-as-code", private=True, can_push=True,
@@ -297,6 +303,12 @@ def main():
     preview = PreviewDialog(app, cat.snapshot, row); shot(preview.window, "22-dialog-preview"); preview.window.destroy()
     history = WorkflowHistoryDialog(app); settle(root, 800); shot(history.window, "23-dialog-history"); history.window.destroy()
 
+    # ---- Rules: drift between the library's acme target and the workspace rules read above
+    app.rule_view.set("drift"); root.update(); drift = app.drift_page
+    different = next(iid for iid in drift.tree.get_children() if drift.entries[int(iid)]["kind"] == "different")
+    drift.tree.selection_set(different); drift.tree.focus(different); drift.selected(); root.update()
+    shot(root, "39-rules-drift")
+
     # ---- Rule builder
     app.show_page("builder"); root.update(); builder = app.rule_builder
     builder.github_checked("aring", None)
@@ -329,6 +341,7 @@ def main():
     app.toggle_ids(True)  # The workspace IDs, opened.
     root.geometry("1700x1100+20+10"); app.show_page("connect"); settle(root, 500); shot(root, "33-connect-wide")
     app.show_page("rules"); app.rule_view.set("workspace"); settle(root, 500); shot(root, "34-rules-wide")
+    app.rule_view.set("drift"); settle(root, 500); shot(root, "40-rules-drift-wide")
     app.show_page("builder"); settle(root, 500); shot(root, "35-builder-wide")
 
     for timer in root.tk.call("after", "info"):

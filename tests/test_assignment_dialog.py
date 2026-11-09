@@ -52,6 +52,27 @@ class AssignmentDialogTests(unittest.TestCase):
         self.assertEqual(self.dialog.clients.selection(), tuple(self.dialog.visible))
         self.assertFalse(self.dialog.selected)  # Moving into the list ticks nothing.
 
+    def test_enter_in_the_search_or_the_list_never_submits(self):
+        self.prepare()
+        self.assertIs(self.dialog.window._enter_target, self.dialog.submit_button)
+        self.root.deiconify(); self.dialog.window.deiconify(); self.dialog.search_box.focus_force(); self.root.update()
+        before = len(self.remote.calls)
+        with patch.object(self.app, 'work', side_effect=self.work):
+            self.dialog.search.set('zzz'); self.dialog.search_box.event_generate('<Return>'); self.root.update()
+            self.dialog.search.set('413'); self.dialog.search_box.event_generate('<Return>'); self.root.update()
+            self.assertIs(self.root.focus_get(), self.dialog.clients)
+            self.dialog.clients.event_generate('<Return>'); self.root.update()
+        self.assertFalse([call for call in self.remote.calls[before:] if call[0] != 'GET'])
+        self.assertIsNone(self.dialog.record.get('pull_request'))
+
+    def test_tab_reaches_the_list_before_the_buttons(self):
+        self.root.deiconify(); self.dialog.window.deiconify(); self.root.update()
+        order, widget = [], self.dialog.search_box
+        for _ in range(12):
+            widget = widget.tk_focusNext(); order.append(widget)
+        self.assertLess(order.index(self.dialog.clients), order.index(self.dialog.prepare_button))
+        self.assertLess(order.index(self.dialog.prepare_button), order.index(self.dialog.close_button))
+
     def test_rows_tick_in_place_and_the_blue_button_moves_to_submit(self):
         style = lambda button: str(button.cget('style'))
         image = lambda value: str(self.root.tk.splitlist(value)[0])

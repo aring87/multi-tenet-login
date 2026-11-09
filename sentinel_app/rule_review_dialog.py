@@ -102,6 +102,7 @@ class ReviewDialog:
         frame, self.text = kit.text_area(body, 14, readonly=True, wrap="none",
                                          placeholder="The comparison with the rule library appears here after Check.")
         frame.pack(fill="both", expand=True)
+        where.lift(); self.actions.lift()  # Packed first to keep their room; Tab reaches them last, as they read.
         for tag, fg, bg in (("added", COLORS["success"], COLORS["success_soft"]),
                             ("removed", COLORS["danger"], COLORS["danger_soft"]),
                             ("meta", COLORS["muted"], None), ("hunk", COLORS["accent"], None)):

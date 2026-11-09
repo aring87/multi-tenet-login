@@ -37,12 +37,13 @@ class PreviewDialog(ClientPicker):
         self.all_button.pack(side="left"); self.clear_button.pack(side="left", padx=px(8))
         self.count = tk.StringVar(); ttk.Label(bar, textvariable=self.count, style="Hint.TLabel").pack(side="left", padx=(px(8), 0))
         # Bottom-anchored controls are packed first so they always have room; the Check result takes what remains.
-        self.actions, buttons = kit.action_row(body, primary=("Start previews", self.start),
-                                               secondary=(("Check", self.prepare), ("Deploy…", self.open_deployment)),
+        # The steps read right to left towards Close, as in every dialog: [Deploy…] [Start previews] [Check] [Close].
+        self.actions, buttons = kit.action_row(body, primary=("Deploy…", self.open_deployment),
+                                               secondary=(("Start previews", self.start), ("Check", self.prepare)),
                                                close=("Close", self.close),
-                                               aux=(("Refresh status", self.refresh_status), ("Open GitHub", self.open_run)))
+                                               aux=(("Refresh status", self.refresh_status), ("Open in GitHub", self.open_run)))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.start_button, self.prepare_button, self.deploy_button, self.close_button, self.status_button, self.open_button = buttons
+        self.deploy_button, self.start_button, self.prepare_button, self.close_button, self.status_button, self.open_button = buttons
         self.notice = tk.StringVar(value="Choose clients, then select Check. No GitHub run starts until you select Start previews.")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
         # Shown between the banner and the buttons once there are runs (render_runs).
@@ -57,6 +58,8 @@ class PreviewDialog(ClientPicker):
         review_frame, self.review = kit.text_area(body, 6, readonly=True,
                                                   placeholder="Select Check to see the exact workspaces and workflow runs before anything starts.")
         review_frame.pack(fill="both", expand=True, pady=(px(12), 0))
+        # Packed first to keep their room at the bottom; Tab reaches them after the list, as they read.
+        self.runs_label.lift(); self.runs_frame.lift(); self.banner.lift(); self.actions.lift()
         # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.
         self.filter = kit.debounce(self.window, 150, self.render_clients)
         for key in ("<Down>", "<Return>"): self.search_box.bind(key, lambda event: self.filter.flush(), add="+")
@@ -177,7 +180,7 @@ class PreviewDialog(ClientPicker):
         if self.app.busy or not self.record: return
         self.work("Reading the preview run status from GitHub…", lambda: self.service.refresh(self.record, self.folder),
                   lambda value: self.say("Status refreshed. Deploy becomes available once every preview succeeds at the checked "
-                                         "revision. Open GitHub to inspect the preview artifacts."))
+                                         "revision. Open in GitHub to inspect the preview artifacts."))
 
     def open_run(self):
         if self.app.busy: return

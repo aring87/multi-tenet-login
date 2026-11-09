@@ -112,7 +112,7 @@ class DesktopTests(unittest.TestCase):
         session=MagicMock();session.env={};session.account={}
         session.login.return_value=[dict(id=SUB,tenantId=TENANT,name="Example",isDefault=True)]
         session.discover.return_value=[WORKSPACE]
-        def work(title,task,done):
+        def work(title,task,done,**kw):
             done(task())
         with patch.object(ui,"Session",return_value=session),patch.object(app,"work",side_effect=work):
             app.login()
@@ -194,7 +194,7 @@ class DesktopTests(unittest.TestCase):
         old=backend.Session(self.data/"old");old.az_exe="fake"
         app.session=old
         new=MagicMock();new.env={}
-        with patch.object(old,"az",side_effect=Stop("There are no active accounts.")),patch.object(ui,"Session",return_value=new),patch.object(app,"work",side_effect=lambda title,task,done:task()):
+        with patch.object(old,"az",side_effect=Stop("There are no active accounts.")),patch.object(ui,"Session",return_value=new),patch.object(app,"work",side_effect=lambda title,task,done,**kw:task()):
             app.login()
         new.login.assert_called_once_with(TENANT)
         self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"false")

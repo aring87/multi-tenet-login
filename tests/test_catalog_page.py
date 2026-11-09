@@ -89,6 +89,24 @@ class CatalogPageTests(unittest.TestCase):
         self.page.source.set("another folder")
         self.assertFalse(self.page.error_banner.winfo_manager())
 
+    def test_searching_while_the_library_loads_keeps_saying_it_is_loading(self):
+        self.page.source.set("first folder"); callbacks = []
+        with patch.object(self.app, "work", side_effect=lambda title, task, done, **kw: callbacks.append(done)):
+            self.page.load()
+        self.page.search.set("abc"); self.page.render_soon.flush()
+        self.assertEqual(self.page.empty.text.get(), "Reading the rule library…")
+        self.assertTrue(self.page.empty.line.running())
+        callbacks[0]((catalog(fixtures(), "synthetic", "one"), None))
+        self.assertFalse(self.page.loading); self.assertFalse(self.page.empty.line.running())
+
+    def test_advice_for_a_failed_read_is_not_said_twice(self):
+        self.page.mode.set("GitHub repository"); self.page.source.set("isi-security/detection-as-code")
+        self.page.failed("GitHub read failed. HTTP 401")
+        self.assertTrue(self.page.error.get().startswith("Couldn't read the rule library with your GitHub account."))
+        self.assertNotIn("couldn't be read. Couldn't read", self.page.error.get())
+        self.page.failed("Disk is on fire")  # A message the advice doesn't know keeps the plain opening.
+        self.assertEqual(self.page.error.get(), "The rule library couldn't be read. Disk is on fire")
+
     def test_source_folds_away_once_loaded(self):
         self.page.source.set("first folder"); callbacks = []
         self.assertTrue(self.page.form.winfo_manager())  # A folder that hasn't been read keeps the form open.

@@ -185,10 +185,8 @@ class Session:
                 require(accounts, "Azure did not return a tenant account. Sign in to the client tenant again.")
                 self.log("Signed in without visible subscriptions. Review Azure access management to continue.")
                 return []
-            raise Stop("Sign-in returned no accessible Azure subscriptions. This can mean the wrong "
-                       "account/tenant, incomplete tenant authentication, or missing Azure access. "
-                       "Enter the client tenant ID and sign in again. If sign-in succeeded, use "
-                       "Check missing subscription with its ID from Azure portal.\n" + self.login_diagnostics)
+            # Kept short: the Sign in card shows the first line, and advice.py says what to do next.
+            raise Stop("Sign-in returned no accessible Azure subscriptions.\n" + self.login_diagnostics)
         return subscriptions
 
     def prepare_cloud(self, tenant_hint=""):

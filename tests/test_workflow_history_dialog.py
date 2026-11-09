@@ -44,6 +44,16 @@ class WorkflowHistoryDialogTests(unittest.TestCase):
         self.dialog.filter.flush();self.assertFalse(self.dialog.visible)
         self.assertEqual(str(self.dialog.status_button.cget('state')),'disabled')
 
+    def test_saved_request_count_and_empty_details_read_naturally(self):
+        self.assertTrue(self.dialog.notice.get().startswith('1 saved request. Select one, then Refresh status'))
+        self.assertEqual(self.dialog.detail.get('1.0','end-1c'),'')  # Nothing selected: the muted hint shows instead.
+        self.assertEqual(self.dialog.detail.placeholder_label.winfo_manager(),'place')
+        self.select();self.assertNotEqual(self.dialog.detail.get('1.0','end-1c'),'')
+        self.assertEqual(self.dialog.detail.placeholder_label.winfo_manager(),'')
+        empty=Path(self.temp.name)/'empty';empty.mkdir();self.dialog.folder=empty
+        with patch.object(self.app,'work',side_effect=self.work):self.dialog.reload()
+        self.assertEqual(self.dialog.notice.get(),'No previews or deployments have been saved on this PC yet.')
+
     def test_refresh_status_is_blue_only_while_a_request_is_selected(self):
         style=lambda button:str(button.cget('style'))
         self.assertEqual(style(self.dialog.status_button),'Secondary.TButton');self.assertIsNone(self.dialog.window._enter_target)

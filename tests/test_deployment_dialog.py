@@ -54,6 +54,13 @@ class DeploymentDialogTests(unittest.TestCase):
         with patch.object(self.app, "work", side_effect=self.work): dialog.start()
         self.assertEqual((style(dialog.start_button), style(dialog.status_button)), ("Secondary.TButton", "Primary.TButton"))
         self.assertEqual(dialog.window.bind("<Return>"), "")  # A deployment never starts from the keyboard.
+        self.assertEqual(dialog.open_button.cget("text"), "Open in GitHub")
+
+    def test_the_review_has_the_keyboard(self):
+        self.root.deiconify(); self.dialog.window.deiconify(); self.root.update()
+        dialog = self.review(); self.root.update()
+        self.assertIs(dialog.window.focus_lastfor(), dialog.review)  # So it scrolls from the keyboard.
+        self.assertEqual(str(dialog.review.cget("takefocus")), "1")
 
     def test_submit_is_explicit_and_reopening_cannot_duplicate(self):
         dialog = self.review()

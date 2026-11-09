@@ -98,6 +98,56 @@ class SingleInstanceTests(unittest.TestCase):
         self.assertFalse(ui.bring_existing_forward(User32({11: ("Notes", "TkTopLevel", 0)})))
 
 
+class ElevatedCopyTests(unittest.TestCase):
+    def test_a_copy_running_as_administrator_counts_as_running(self):
+        kernel32 = MagicMock(); kernel32.CreateMutexW.return_value = None  # Refused: a higher integrity level holds it.
+        with patch.object(ui, "_INSTANCE", []) as held, patch.object(ui, "_ELEVATED_OWNER", []) as elevated:
+            self.assertFalse(ui.claim_instance(kernel32, lambda: ui.ERROR_ACCESS_DENIED))
+            self.assertEqual((held, elevated), ([], [True]))
+            self.assertTrue(ui.claim_instance(kernel32, lambda: 0))  # No mutex for another reason: start anyway.
+
+    def test_second_launch_says_the_running_copy_is_elevated(self):
+        if ui.os.name != "nt": self.skipTest("Windows only")
+        with patch.object(ui, "claim_instance", return_value=False), patch.object(ui, "_ELEVATED_OWNER", [True]), \
+             patch.object(ui, "bring_existing_forward", return_value=False), patch.object(ui.tk, "Tk") as tk_root, \
+             patch("tkinter.messagebox.showinfo") as showinfo:
+            ui.main()
+        showinfo.assert_called_once(); tk_root.assert_not_called()
+        self.assertIn("administrator", showinfo.call_args.args[1])
+
+
+class StartupTests(unittest.TestCase):
+    """Starting the app when its data folder is new, or when the window can't be built."""
+
+    def test_app_starts_when_the_data_folder_parent_is_missing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = Path(folder) / "Sentinel Workspace" / "desktop-data"
+            with patch.object(ui, "DATA", data), patch.object(backend, "DATA", data), \
+                 patch.object(ui, "create_handoff", return_value=None):
+                root = tk.Tk(); root.withdraw()
+                try:
+                    ui.App(root); root.update()
+                    self.assertTrue(data.is_dir())
+                finally:
+                    for timer in root.tk.call("after", "info"): root.after_cancel(timer)
+                    root.destroy()
+
+    def test_a_window_that_cant_be_built_is_explained_and_logged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = Path(folder)
+            with patch.object(ui, "DATA", data), patch.object(backend, "DATA", data), \
+                 patch.object(ui, "os", SimpleNamespace(name="test")), \
+                 patch.object(ui, "App", side_effect=PermissionError(13, "Access is denied")), \
+                 patch("tkinter.messagebox.showerror") as showerror:
+                ui.main()  # Returns: no raw Python error reaches the analyst.
+            log = data / "logs" / "errors.log"
+            text = log.read_text(encoding="utf-8")
+            self.assertIn("Traceback", text); self.assertIn("Access is denied", text); self.assertIn("(start-up)", text)
+            showerror.assert_called_once()
+            title, message = showerror.call_args.args
+            self.assertEqual(title, "Sentinel Workspace couldn't start"); self.assertIn(str(log), message)
+
+
 class ErrorLogTests(unittest.TestCase):
     def test_log_appends_and_keeps_its_newest_half_under_the_cap(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -187,10 +237,11 @@ class ShellTests(unittest.TestCase):
                "'Microsoft.SecurityInsights/alertRules/read'")
         def start(thread): thread.run()
         with patch.object(ui.threading.Thread, "start", start):
-            app.work("Reading analytics rules…", MagicMock(side_effect=Stop(raw)), lambda result: None)
+            app.work("Reading analytics rules…", MagicMock(side_effect=Stop(raw)), lambda result: None,
+                     failed="Couldn't read analytics rules")
         with patch.object(ui.kit, "alert") as alert: app.poll()
         title, message = alert.call_args.args[1:3]
-        self.assertEqual(title, "Reading analytics rules")
+        self.assertEqual(title, "Couldn't read analytics rules")  # The outcome, not the progress title.
         self.assertIn("Microsoft Sentinel Reader", message); self.assertIn("law-example-sentinel", message)
         self.assertEqual(alert.call_args.kwargs["details"], raw)
         self.assertEqual(app.status.get(), "Couldn't finish: Your account can't read analytics rules in law-example-sentinel.")
@@ -254,7 +305,7 @@ class ShellTests(unittest.TestCase):
         session.login.return_value = [dict(id=SUB, tenantId=TENANT, name="Production", isDefault=True),
                                       dict(id=SUB2, tenantId=TENANT, name="Development")]
         session.discover.return_value = [dict(row, subscription_id=sub) for row, sub in zip(rows, (SUB, SUB))]
-        with patch.object(ui, "Session", return_value=session), patch.object(app, "work", side_effect=lambda t, task, done: done(task())), \
+        with patch.object(ui, "Session", return_value=session), patch.object(app, "work", side_effect=lambda t, task, done, **kw: done(task())), \
              patch.object(app.rules_page, "load"):
             app.login()
             app.finish_signin(); session.signed_in = True; app.render_session()
@@ -280,7 +331,7 @@ class ShellTests(unittest.TestCase):
         app.wsbox.current(1)
         with patch.object(app.rules_page, "load"): app.workspace_changed(SimpleNamespace())
         session.refresh_subscriptions.return_value = session.login.return_value
-        run = lambda title, task, done: done(task())
+        run = lambda title, task, done, **kw: done(task())
         app.vars["client_name"].set("Bluebird"); app.client_changed(SimpleNamespace())
         session.refresh_subscriptions.assert_not_called()  # Acme's session isn't used for Bluebird.
         with patch.object(app, "work", side_effect=run), patch.object(app.rules_page, "load"):
@@ -388,6 +439,131 @@ class ShellTests(unittest.TestCase):
             self.assertEqual([call.args for call in scroll.call_args_list], [(1, "units"), (1, "units")])
             scroll.reset_mock(); app.scroll_page(event(120))  # Turning back starts again from zero: a whole notch.
             self.assertEqual(scroll.call_args.args, (-3, "units"))
+
+    # ------------------------------------------------------------ review fixes
+    def test_failed_task_without_an_outcome_heading_says_it_didnt_finish(self):
+        app = self.app
+        with patch.object(ui.threading.Thread, "start", lambda thread: thread.run()):
+            app.work("Finish signing in to GitHub in the browser…", MagicMock(side_effect=Stop("odd failure")), None)
+        with patch.object(ui.kit, "alert") as alert: app.poll()
+        self.assertEqual(alert.call_args.args[1], "This didn't finish")  # Not the instruction it was showing.
+
+    def test_github_sign_in_failure_is_titled_as_an_outcome(self):
+        app = self.app
+        app.session = SimpleNamespace(gh_exe=None, env={})  # GitHub CLI isn't installed: no process starts.
+        with patch.object(ui.subprocess, "Popen", side_effect=AssertionError("no process")) as popen, \
+             patch.object(ui.threading.Thread, "start", lambda thread: thread.run()), \
+             patch.object(ui.kit, "alert") as alert:
+            app.github_login(); app.poll()
+        title, message = alert.call_args.args[1:3]
+        self.assertEqual(title, "GitHub sign-in didn't finish")
+        self.assertIn("administrator", message); popen.assert_not_called()
+        app.session = None
+
+    def test_a_task_that_follows_another_keeps_the_busy_look(self):
+        app = self.app
+        app.set_busy(True)
+        self.assertEqual(str(app.clientbox.cget("state")), "readonly")  # A quick task alone: nothing greys yet.
+        app.set_busy(False)
+        app.set_busy(True, immediate=True); app.set_busy(False)
+        app.set_busy(True)  # The next link of a chain (sign-in, workspaces, rules): no usable flash in between.
+        self.assertEqual(str(app.clientbox.cget("state")), "disabled")
+        self.assertIn("Working", app.activity_badge.cget("text"))
+        app.set_busy(False)
+
+    def test_refreshing_workspaces_while_busy_keeps_the_selection(self):
+        app = self.app; self.connect(app)
+        before = (dict(app.workspace), str(app.wsbox.cget("values")))
+        app.busy = True  # The moment before the busy visuals show.
+        app.ws_refresh.invoke()
+        self.assertEqual((app.workspace, str(app.wsbox.cget("values"))), before)
+        self.assertEqual(app.status.get(), "Wait for the current task to finish.")
+        app.busy = False
+        app.reset_workspaces()
+        self.assertNotIn(before[0]["workspace_name"], app.workspace_context.get())  # The chip lets it go too.
+        self.assertEqual(app.root.title(), ui.TITLE)
+
+    def test_a_damaged_ui_state_file_falls_back_to_defaults(self):
+        (self.data / "ui-state.json").write_text('{"library_view": ["Rules"], "rule_view": {"a": 1}, "rules_split": NaN, '
+                                                 '"library_split": "nan", "client": 7}', encoding="utf-8")
+        app = self.start()
+        self.assertEqual((app.catalog_page.view.get(), app.rule_view.get()), ("Rules", "workspace"))
+        app.root.geometry("1200x800"); app.root.deiconify(); app.show_page("rules"); app.root.update()
+        app.rule_view.set("repository"); app.root.geometry("1300x820"); app.root.update()
+        app.save_state()
+        def no_nan(value): raise ValueError(value)
+        state = json.loads((self.data / "ui-state.json").read_text(encoding="utf-8"), parse_constant=no_nan)
+        self.assertTrue(all(isinstance(state.get(key, 0.5), float) for key in ("rules_split", "library_split")))
+        from sentinel_app.rules_page import Split
+        self.assertEqual(Split(app.root, "nan").share, 0.6)
+
+    def test_help_shows_brackets_that_are_not_links_and_never_leaves_an_empty_window(self):
+        text = tk.Text(self.app.root)
+        ui.render_markdown(text, "[Optional] Set the rule library.\n\n## [Draft] Notes\n\nUse `x`[y] here.")
+        shown = text.get("1.0", "end")
+        for part in ("[Optional] Set the rule library.", "[Draft] Notes", "[y] here"): self.assertIn(part, shown)
+        before = [w for w in self.app.root.winfo_children() if isinstance(w, tk.Toplevel)]
+        with patch.object(ui, "render_markdown", side_effect=AttributeError("bad guide")), \
+             patch.object(ui.kit, "alert") as alert:
+            self.assertIsNone(self.app.open_help())
+        alert.assert_called_once()
+        self.assertEqual([w for w in self.app.root.winfo_children() if isinstance(w, tk.Toplevel)], before)
+
+    def test_windows_sign_out_keeps_the_layout_and_unsaved_builder_work(self):
+        app = self.app
+        app.rule_builder.vars["name"].set("Half-written rule")
+        app.root.tk.call(app.root.protocol("WM_SAVE_YOURSELF"))  # As Tk calls it on WM_QUERYENDSESSION.
+        state = json.loads((self.data / "ui-state.json").read_text(encoding="utf-8"))
+        self.assertIn("geometry", state); self.assertEqual(state["client"], "Acme Corporation")
+        self.assertTrue(app.rule_builder.recovery_path().exists())
+        self.assertTrue(app.root.winfo_exists()); self.assertFalse(app.closing)  # Still open if it is cancelled.
+
+    def test_sign_in_with_no_subscriptions_reads_as_signed_in(self):
+        app = self.app
+        session = MagicMock(); session.env = {}
+        with patch.object(ui, "Session", return_value=session), patch.object(app, "work") as work: app.login()
+        done = work.call_args.args[2]
+        session.signed_in = True
+        raw = "Sign-in returned no accessible Azure subscriptions.\nTenant accounts: 1"
+        app.events.put(("done", (done, None, Stop(raw))))
+        with patch.object(ui.kit, "alert") as alert: app.poll()
+        alert.assert_not_called()
+        text = app.signin_error_text.get()
+        for wrong in ("…", "Check missing subscription", "didn't finish"): self.assertNotIn(wrong, text)
+        self.assertIn("Can't see a subscription?", text)
+        app.finish_signin()
+
+    def test_enter_closes_about_but_not_the_guide(self):
+        app = self.app; app.root.deiconify(); app.root.update()
+        app.open_about()
+        about = [w for w in app.root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+        close = next(w for w in descendants(about) if isinstance(w, ui.ttk.Button) and w.cget("text") == "Close")
+        about.update(); close.focus_force(); about.update()
+        close.event_generate("<Return>"); app.root.update()
+        self.assertFalse(about.winfo_exists())
+        guide = app.open_help(); self.addCleanup(lambda: guide.winfo_exists() and guide.destroy())
+        guide.update(); guide.document.focus_force(); guide.update()
+        guide.document.event_generate("<Return>"); app.root.update()
+        self.assertTrue(guide.winfo_exists())  # Enter in the document does nothing.
+        guide.destroy()
+
+    def test_tab_order_follows_the_screen(self):
+        app = self.app; app.root.deiconify(); app.show_page("builder"); app.root.update()
+        rows = [item["row"] for item in app.nav]
+        cycle, widget = [], rows[0]
+        for _ in range(400):
+            widget = widget.tk_focusNext()
+            if widget is None or widget is rows[0]: break
+            cycle.append(widget)
+        self.assertEqual(cycle[:2], rows[1:])  # The other pages, before the links under them.
+        self.assertEqual(cycle[2].cget("text"), "Help & prerequisites")
+        footer = [w for w in descendants(app.footer_slot) if isinstance(w, ui.ttk.Button)]
+        check = next(w for w in footer if w.cget("text") == "Check rule")
+        submit = next(w for w in footer if w.cget("text") == "Submit for approval")
+        name = app.rule_builder.widgets["name"]
+        self.assertLess(cycle.index(name), cycle.index(check))  # The page, then its footer,
+        self.assertLess(cycle.index(check), cycle.index(submit))  # which reads left to right.
+        self.assertNotIn("TLabel", [w.winfo_class() for w in cycle])  # No silent stops (the status bar).
 
 
 if __name__ == "__main__":

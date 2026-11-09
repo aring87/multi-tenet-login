@@ -21,6 +21,10 @@ FRIENDLY = (
     (("Signed in as", "GitHub read failed"), MISSING_REPOSITORY),  # The account works; the repository read didn't.
     ("AADSTS50076", MFA),
     ("AADSTS50079", MFA),
+    ("no accessible Azure subscriptions",
+     "You're signed in, but this account can't see any Azure subscriptions in this tenant yet. If you just activated "
+     "access in CyberQP, wait a few minutes and select Refresh beside Subscription, or use Can't see a subscription? "
+     "with the ID from the Azure portal."),
     ("Evidence collection supports Azure public cloud only",
      "Workspace rules can't be read from Azure Government (GCC High) workspaces yet."),
     ("already exists or its source is stale",
@@ -29,12 +33,13 @@ FRIENDLY = (
     ("rule ID already exists",
      "This rule is already in the library. Use Edit existing rule in the Rule builder to change it instead of adding a copy."),
     ("original repository rule is missing",
-     "The rule you started from is no longer at that location in the library. Use Edit existing rule to open it again."),
+     "This file isn't in the library at the path under Where it will be saved. Put back the rule's original path, "
+     "or use Edit existing rule to open it again."),
     ("needs write access",
      "Your GitHub account can view the rule library but cannot submit to it. Ask a repository admin for write access."),
     ("catalog is incomplete or invalid",
      "Submissions are paused because some library files have problems. Ask an engineer to check "
-     "Rules > Rule library > Library issues."),
+     "Rules > Rule library > Library ⋯ > Library issues."),
     ("no file changes to submit",
      "Nothing has changed compared with the library version of this rule."),
     ("repository changed after preview",
@@ -45,7 +50,9 @@ FRIENDLY = (
      "(Connect > Rule library > Sign in to GitHub) and have access to the repository."),
     ("GitHub request failed", "GitHub did not accept the request. Check that you are signed in "
      "(Connect > Rule library > Sign in to GitHub) and have write access to the repository."),
-    ("GitHub CLI is not installed", "GitHub CLI is not installed on this PC. Ask your administrator to install it."),
+    (("GitHub CLI", "installed"), "GitHub CLI is not installed on this PC. Ask your administrator to install it."),
+    ("GitHub sign-in didn't finish",
+     "Select Sign in to GitHub to get a new one-time code, then enter it on the GitHub page that opens in your browser."),
     ("GitHub timed out", "GitHub took too long to answer. Check your connection, then try again."),
 )
 

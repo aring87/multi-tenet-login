@@ -97,11 +97,17 @@ class RuleBuilderPageTests(unittest.TestCase):
                 if widget.winfo_ismapped() and isinstance(widget, ui.ttk.Checkbutton):  # Tactic names aren't cut off.
                     self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth(), widget.cget("text"))
 
+    def test_owner_hint_keeps_its_example_at_the_smallest_size(self):
+        self.root.geometry("1x1"); self.root.deiconify(); self.app.show_page("builder"); self.root.update()
+        row = next(w for w in self.page.widgets["owner"].master.winfo_children() if getattr(w, "hint", None))
+        self.assertEqual(row.label.cget("text"), "Owner")
+        self.assertEqual(row.hint.cget("text"), "Team ID, for example soc-team")  # Not shortened with '…'.
+
     def test_tactic_boxes_round_trip_the_tactics_field(self):
         page, ticked = self.page, self.page.tactic_vars
         labels = [box.cget("text") for box in page.widgets["tactics"].winfo_children()]
         self.assertEqual(sorted(labels), sorted(tactic_label(name) for name in rule_schema.TACTICS))
-        self.assertIn("Defense Evasion", labels); self.assertIn("Command And Control", labels)
+        self.assertIn("Defense Evasion", labels); self.assertIn("Command and Control", labels)
         page.vars["tactics"].set("Impact, NotATactic, DefenseEvasion"); self.root.update()
         self.assertEqual([name for name, var in ticked.items() if var.get()], ["DefenseEvasion", "Impact"])
         self.assertTrue(page.unknown_tactics.winfo_manager())
@@ -320,7 +326,7 @@ class RecoveryDraftTests(unittest.TestCase):
         page.autosave(schedule=False); self.assertFalse(page.recovery_path().exists())  # Nothing unsaved yet.
         page.vars["name"].set("Unsaved detection")
         page.autosave(schedule=False)
-        path = self.data / "drafts" / ".autosave.rule-draft.json"
+        path = self.data / "drafts" / ".autosave.rule-recovery.json"
         self.assertEqual(page.recovery_path(), path)
         self.assertEqual(drafts.read_draft(path)["name"], "Unsaved detection")
         self.assertEqual(page.recent_drafts(), [])  # Never offered as a recent draft.
@@ -396,3 +402,38 @@ class RecoveryDraftTests(unittest.TestCase):
         self.assertFalse(self.app.closing)  # The window stays open, so its work is copied again.
         self.assertIn(page.autosave_timer, self.root.tk.call("after", "info"))
         page.autosave(schedule=False); self.assertTrue(page.recovery_path().exists())
+
+    def test_putting_the_offer_off_keeps_the_copy_for_the_next_start(self):
+        self.page.vars["name"].set("Maybe later"); self.page.autosave(schedule=False)
+        self.answer.return_value = None  # Esc, or the window's X: not Discard.
+        page = self.start()
+        self.assertFalse(page.offer_recovery())
+        self.assertTrue(page.recovery_path().exists())
+        page.autosave(schedule=False); self.assertTrue(page.recovery_path().exists())  # A clean form keeps it,
+        with patch.object(self.root, "destroy"): self.app.close()  # and so does a normal close.
+        self.assertTrue(page.recovery_path().exists())
+        self.answer.return_value = True
+        page = self.start()
+        self.assertTrue(page.offer_recovery()); self.assertEqual(page.vars["name"].get(), "Maybe later")
+
+    def test_the_recovery_copy_opens_as_unsaved_work_and_saves_as_a_draft(self):
+        import fnmatch
+        page = self.page
+        page.vars["name"].set("Recovered detection"); page.autosave(schedule=False)
+        recovery = page.recovery_path()
+        self.assertFalse(fnmatch.fnmatch(recovery.name, "*.rule-draft.json"))  # Open draft file… doesn't list it.
+        page.load_form(drafts.new_form())
+        with patch.object(page, "can_discard", return_value=True): page.open_path(recovery, True)
+        self.assertIsNone(page.draft_path); self.assertTrue(page.dirty())
+        page.autosave(schedule=False); self.assertTrue(recovery.exists())
+        page.save()
+        self.assertTrue((self.data / "drafts" / "recovered-detection.rule-draft.json").is_file())
+        self.assertNotIn(".autosave", page.note.get()); self.assertFalse(page.is_recovery(page.draft_path))
+
+
+class TacticNameTests(unittest.TestCase):
+    def test_rules_details_name_tactics_as_the_builder_does(self):
+        from sentinel_app.rules_page import rule_overview
+        rows = dict(rule_overview({"properties": {"tactics": ["InitialAccess", "CommandAndControl", "PreAttack"]}}))
+        self.assertEqual(rows["Tactics"], "Initial Access, Command and Control, PreAttack")  # Unknown values as they are.
+        self.assertEqual(tactic_label("CommandAndControl"), drafts.tactic_name("CommandAndControl"))

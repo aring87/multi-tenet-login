@@ -145,4 +145,21 @@ class PreviewDialogTests(unittest.TestCase):
             self.assertLessEqual(button.winfo_rootx() + button.winfo_width(), right)
 
 
+    def test_buttons_read_as_steps_towards_close_and_enter_in_search_starts_nothing(self):
+        dialog = self.dialog
+        self.root.deiconify(); dialog.window.deiconify(); self.root.update()
+        order = [b.winfo_x() for b in (dialog.deploy_button, dialog.start_button, dialog.prepare_button, dialog.close_button)]
+        self.assertEqual(order, sorted(order))  # [Deploy…] [Start previews] [Check] [Close]
+        self.assertEqual(dialog.open_button.cget("text"), "Open in GitHub")
+        self.prepare()
+        self.assertIs(dialog.window._enter_target, dialog.start_button)  # The blue button moved on; Enter follows it,
+        dialog.search_box.focus_force(); self.root.update()
+        with patch.object(self.app, "work", side_effect=self.work):
+            dialog.search.set("zzz-no-such-client")
+            dialog.search_box.event_generate("<Return>"); self.root.update()
+            dialog.search.set("client-1"); dialog.search_box.event_generate("<Return>"); self.root.update()
+            self.assertIs(self.root.focus_get(), dialog.clients)
+            dialog.clients.event_generate("<Return>"); self.root.update()
+        self.assertEqual(self.remote.dispatched, [])  # but never from a search box or the client list.
+
 if __name__ == "__main__": unittest.main()

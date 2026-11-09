@@ -4,7 +4,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog
 from . import ui_kit as kit
-from .advice import friendly
+from .advice import lookup
 from .desktop_theme import px
 from .repository_catalog import GitHubReader, load_local, state
 from .preview_dialog import PreviewDialog
@@ -54,13 +54,14 @@ class CatalogPage:
         self.source = tk.StringVar()
         self.search = tk.StringVar()
         view = app.ui_state.get("library_view")
-        self.view = tk.StringVar(value=view if view in HEADINGS else "Rules")
+        self.view = tk.StringVar(value=view if isinstance(view, str) and view in HEADINGS else "Rules")
         self.filter = tk.StringVar(value="All states")
         self.sort = ("name", False)
         self.source_open = False  # The analyst asked to change the source.
         self.searchable = (None, {})  # (snapshot, {kind: search text per row}), built once per library.
         self.note = tk.StringVar()  # Guidance about the last command, shown above the command bar.
         self.shown = None  # The client or rule in the details pane.
+        self.loading = False  # A read of the library is running (searching meanwhile keeps saying so).
         self.build_source(parent)
         self.split = Split(parent, app.ui_state.get("library_split", 0.6))
         self.split.pack(fill="both", expand=True)
@@ -223,7 +224,9 @@ class CatalogPage:
     def failed(self, error):
         """The library couldn't be read: say why in the source card, with the way to fix it."""
         github = self.mode.get() == "GitHub repository"
-        self.error.set("The rule library couldn't be read. " + friendly(error, repo=self.source.get().strip() if github else None))
+        # The advice already says what went wrong; the generic opening is only for a message it doesn't know.
+        tip = lookup(error, repo=self.source.get().strip() if github else None)
+        self.error.set(tip or "The rule library couldn't be read. " + str(error))
         self.error_banner.set_action(*(("Go to Connect", self.app.show_github_settings) if github
                                        else ("Choose folder…", self.choose)))
         if not self.error_banner.winfo_manager(): self.error_banner.pack(fill="x", pady=(px(12), 0))
@@ -461,7 +464,9 @@ class CatalogPage:
         if self.snapshot is None:
             self.summary_pill.set("Not loaded")
             self.summary_pill.configure(cursor=""); self.summary_pill.tooltip_text = ""
-            self.empty.show(*self.empty_state()); self.show_row(None); self.sync_actions(); return
+            if self.loading: self.empty.show(busy=True)  # Keeps the reading message and its progress.
+            else: self.empty.show(*self.empty_state())
+            self.show_row(None); self.sync_actions(); return
         if self.searchable[0] is not self.snapshot: self.index()
         needle = self.search.get().strip().casefold()
         for row, text in self.ordered(self.snapshot[kind.lower()], self.searchable[1][kind.lower()]):
@@ -567,6 +572,7 @@ class CatalogPage:
         self.empty.show("Reading the rule library…", busy=True)
         self.reading("Reading the rule library…"); self.show_source()
         progress = self.app.file_progress(self.reading)
+        self.loading = True
         def task():
             try:
                 snapshot = load_local(key[1]) if key[0] == "Local folder" else GitHubReader().load(key[1], progress)
@@ -574,6 +580,7 @@ class CatalogPage:
             except Exception as error:
                 return None, str(error)
         def done(result):
+            self.loading = False
             if key != (self.mode.get(), self.source.get().strip()): return
             snapshot, error = result
             if error:
@@ -583,7 +590,7 @@ class CatalogPage:
             self.loaded(snapshot, key[1] if key[0] == "Local folder" else snapshot["source"].split(" / ")[0])
             self.app.log("Library revision: " + str(snapshot["revision"]))
             self.app.flash("Rule library loaded.")
-        self.app.work("Reading the rule library…", task, done, page="rules")
+        self.app.work("Reading the rule library…", task, done, page="rules", failed="Couldn't read the rule library")
 
     def loaded(self, snapshot, where):
         """Fold the source card down to where the library came from and when."""

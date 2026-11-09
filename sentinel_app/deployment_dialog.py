@@ -27,19 +27,23 @@ class DeploymentDialog:
         # Bottom-anchored controls are packed first so they always have room; the review takes what remains.
         self.actions, buttons = kit.action_row(body, primary=("Start deployment", self.start),
                                                secondary=(("Refresh status", self.refresh),), close=("Close", self.close),
-                                               aux=(("Open GitHub", self.open_run),))
+                                               aux=(("Open in GitHub", self.open_run),))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
         self.start_button, self.status_button, self.close_button, self.open_button = buttons
         self.buttons = tuple(buttons)
         runs_frame, self.runs, self.runs_empty = kit.table(body, (("batch", "Batch", 60, False), ("run", "GitHub run", 120, False),
                                                                   ("state", "Last checked state", 530, True)), height=4)
         runs_frame.pack(side="bottom", fill="x")
-        ttk.Label(body, text="Deployment runs", style="Section.TLabel").pack(side="bottom", anchor="w", pady=(px(10), px(6)))
+        runs_label = ttk.Label(body, text="Deployment runs", style="Section.TLabel")
+        runs_label.pack(side="bottom", anchor="w", pady=(px(10), px(6)))
         self.notice = tk.StringVar(value="Checking successful previews and the current library settings…")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
         review_frame, self.review = kit.text_area(body, 12, readonly=True); review_frame.pack(fill="both", expand=True)
+        # Packed first to keep their room at the bottom; Tab reaches them after the review, as they read.
+        self.banner.lift(); runs_label.lift(); runs_frame.lift(); self.actions.lift()
         kit.place_dialog(self.window, parent.window, 940, 690, 800, 620)
-        kit.modal(self.window, parent.window, self.close)
+        # The review has the keyboard, so it scrolls from the keyboard; Enter still starts nothing.
+        kit.modal(self.window, parent.window, self.close, focus=self.review)
         self.render_runs(); self.controls()
         if self.record:
             self.render()
@@ -114,13 +118,13 @@ class DeploymentDialog:
     def start(self):
         if self.app.busy or not self.record or self.record["attempted"]: return
         self.work("Starting the deployment runs…", lambda: self.service.dispatch(self.record, self.folder),
-                  lambda _: self.say("Deployment runs started. Select Refresh status, and open GitHub for the jobs and any required "
+                  lambda _: self.say("Deployment runs started. Select Refresh status, and Open in GitHub for the jobs and any required "
                                      "environment approvals. A started run does not mean the deployment succeeded.", "success"))
 
     def refresh(self):
         if self.app.busy or not self.record: return
         self.work("Reading the deployment run status from GitHub…", lambda: self.service.refresh(self.record, self.folder),
-                  lambda _: self.say("Status refreshed. Open GitHub for each workspace's jobs, preview artifacts and any required "
+                  lambda _: self.say("Status refreshed. Open in GitHub for each workspace's jobs, preview artifacts and any required "
                                      "approvals."))
 
     def open_run(self):

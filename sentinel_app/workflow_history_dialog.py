@@ -10,6 +10,10 @@ from .desktop_theme import COLORS, FONTS, px
 from .workflow_history import list_receipts, load_receipt, summary, workflow_url, WorkflowHistoryService
 
 
+def plural(count, word):
+    return f"{count} {word}{'s' if count != 1 else ''}"
+
+
 def parse_time(value):
     try:
         moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
@@ -108,7 +112,11 @@ class WorkflowHistoryDialog:
                                                   height=6, sort=True)
         frame.pack(fill="both", expand=True)
         ttk.Label(body, text="Details", style="Section.TLabel").pack(anchor="w", pady=(px(10), px(6)))
-        detail_frame, self.detail = kit.text_area(body, 8, readonly=True); detail_frame.pack(fill="both", expand=True)
+        detail_frame, self.detail = kit.text_area(body, 8, readonly=True,
+                                                  placeholder="Select a saved request to see its clients and run receipts.")
+        detail_frame.pack(fill="both", expand=True)
+        # Packed first to keep their room at the bottom; Tab reaches them after the details, as they read.
+        self.runs_label.lift(); self.runs_frame.lift(); self.banner.lift(); self.actions.lift()
         # Times show in local time; pointing at one shows it in UTC, as the receipts store it.
         cell_tooltips(self.table, {"created": lambda iid: utc_time(self.visible[iid]["record"]["created_at"])
                                    if iid in self.visible else ""})
@@ -150,8 +158,10 @@ class WorkflowHistoryDialog:
     def reload(self):
         def done(result):
             self.rows, issues = result; self.render()
-            self.say(str(len(self.rows)) + " saved requests. Select Refresh status to read the latest result from GitHub."
-                     + (" " + " ".join(issues[:3]) if issues else ""), "warning" if issues else "info")
+            message = ("No previews or deployments have been saved on this PC yet." if not self.rows else
+                       plural(len(self.rows), "saved request") + ". Select one, then Refresh status to read its latest "
+                       "result from GitHub.")
+            self.say(message + (" " + " ".join(issues[:3]) if issues else ""), "warning" if issues else "info")
         self.work("Reading the saved receipts on this PC…", lambda: list_receipts(self.folder), done)
 
     def render(self):
@@ -176,7 +186,7 @@ class WorkflowHistoryDialog:
     def selected(self, event=None):
         selection = self.table.selection(); self.current = self.visible.get(selection[0]) if selection else None
         self.runs.delete(*self.runs.get_children())
-        text = "Select a saved request to see its clients and run receipts."
+        text = ""  # The placeholder says what appears here.
         if self.current:
             r = self.current["record"]; p = r["plan"]
             lines = ["Library: " + p["repository"], "Requested by: " + p["identity"],

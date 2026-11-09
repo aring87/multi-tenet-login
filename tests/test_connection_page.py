@@ -115,5 +115,27 @@ class ConnectionPageTests(unittest.TestCase):
         new.login.assert_not_called()
         self.app.finish_signin()
 
+    def test_subscription_names_fit_the_box_and_show_their_state(self):
+        sub='22222222-2222-4222-8222-222222222222'
+        self.assertEqual(ui.App.subscription_label(dict(id=sub,tenantId=TENANT,name='Acme',state='Warned')),
+                         'Acme (Warned)  ·  22222222…2222')
+        label=ui.App.subscription_label(dict(id=sub,tenantId=TENANT,name='Acme Production',state='Enabled'))
+        self.assertEqual(label,'Acme Production  ·  22222222…2222')
+        self.root.geometry('1x1');self.root.deiconify();self.root.update()  # Clamped to the smallest size.
+        self.assertLess(ui.kit.font(self.root,'body').measure(label),self.app.subbox.winfo_width()-ui.px(30))
+
+    def test_waiting_panel_names_the_window_the_method_opens(self):
+        for method,expected,other in (('Windows account window','the Windows account window','browser'),
+                                      ('Browser','your browser','Windows account')):
+            with self.subTest(method=method):
+                self.app.vars['login_method'].set(method)
+                session=MagicMock();session.env={}
+                with patch.object(ui,'Session',return_value=session),patch.object(ui,'create_handoff',return_value=None),\
+                     patch.object(self.app,'work'):
+                    self.app.login()
+                self.assertIn(expected,self.app.signin_waiting.get());self.assertNotIn(other,self.app.signin_waiting.get())
+                self.assertIn(expected,self.app.session_detail.cget('text'))  # The sidebar says the same.
+                self.app.finish_signin()
+
 
 if __name__=='__main__':unittest.main()

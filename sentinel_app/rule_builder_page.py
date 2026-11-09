@@ -24,7 +24,8 @@ OPERATORS = (("GreaterThan", "is more than"), ("LessThan", "is fewer than"), ("E
 UNITS = (("minutes", 60), ("hours", 3600), ("days", 86400))
 RECENT_DRAFTS = 10
 AUTOSAVE_MS = 30000  # How often unsaved work is copied to the recovery draft.
-RECOVERY_NAME = ".autosave.rule-draft.json"  # In drafts/; never listed as a recent draft.
+# In drafts/. Not a *.rule-draft.json name, so Open draft file… never lists it as a draft.
+RECOVERY_NAME = ".autosave.rule-recovery.json"
 TACTIC_COLUMNS = 3
 QUERY_LINES = 8
 MAX_SCHEDULE = 14 * 86400
@@ -153,8 +154,8 @@ def draft_name(name):
 
 
 def tactic_label(name):
-    """'DefenseEvasion' -> 'Defense Evasion'."""
-    return re.sub(r"(?<!^)(?=[A-Z])", " ", name)
+    """'DefenseEvasion' -> 'Defense Evasion', 'CommandAndControl' -> 'Command and Control' (drafts.tactic_name)."""
+    return drafts.tactic_name(name)
 
 
 def short_label(label):
@@ -244,8 +245,8 @@ class RuleBuilderPage:
         self.textbox(basics, "Description", "description", 4, "Explain what this detects and why — at least 20 characters.")
         kit.field_label(basics, "Severity")
         self.choice(basics, "severity", ("Informational", "Low", "Medium", "High"), "Severity")
-        self.pair(basics, ("Owner (team identifier)", "owner", None, "For example soc-team"),
-                  ("Lifecycle", "status", LIFECYCLES))
+        # A short label leaves the hint room for its example at the smallest window size.
+        self.pair(basics, ("Owner", "owner", None, "Team ID, for example soc-team"), ("Lifecycle", "status", LIFECYCLES))
         kit.field_label(basics, "Rule type")
         self.choice(basics, "kind", ("Scheduled", "NRT"), "Rule type", labels={"NRT": "Near real-time"})
         flags = ttk.Frame(basics, style="Card.TFrame"); flags.pack(fill="x", pady=(0, px(6)))
@@ -290,8 +291,9 @@ class RuleBuilderPage:
         self.back_button = app.button(actions, "←  Back", lambda: self.step_by(-1))
         self.next_button = app.button(actions, "Next  →", lambda: self.step_by(1))
         kit.tooltip(self.back_button, "Previous step (Ctrl+Page Up)"); kit.tooltip(self.next_button, "Next step (Ctrl+Page Down)")
-        app.button(actions, "Submit for approval", self.review, "Primary.TButton").pack(side="right")
+        submit = app.button(actions, "Submit for approval", self.review, "Primary.TButton"); submit.pack(side="right")
         app.button(actions, "Check rule", self.validate).pack(side="right", padx=(0, px(8)))
+        submit.lift()  # Tab order follows the row: Check rule, then Submit for approval.
         # The footer lines up with the content column above it, whatever the window width.
         self.canvas = next(canvas for canvas, content in zip(app.page_canvases, app.page_contents) if content is parent)
         app.footer_slot.bind("<Configure>", self.align_footer, add="+")
@@ -303,6 +305,7 @@ class RuleBuilderPage:
         self.load_form(drafts.new_form())
         self.step_changed()
         self.autosaved, self.recovery_offered = None, False
+        self.recovery_waiting = False  # A copy offered at start-up and put off (Esc): kept for the next start.
         self.autosave_timer = None; self.start_autosave()
 
     # ------------------------------------------------------------ widgets
@@ -638,11 +641,21 @@ class RuleBuilderPage:
             filetypes=[("Rule draft", "*.rule-draft.json")] if draft else [("Rule file", "*.yml *.yaml")])
         if path: self.open_path(path, draft)
 
+    def is_recovery(self, path):
+        """Whether ``path`` is the recovery copy itself (never a draft to save into)."""
+        try: return bool(path) and Path(path).resolve() == self.recovery_path().resolve()
+        except (OSError, ValueError): return False
+
     def open_path(self, path, draft):
         try:
             form = drafts.read_draft(path) if draft else drafts.read_rule(path)
             source = drafts.read_draft_source(path) if draft else None
             if not self.can_discard(): return
+            if draft and self.is_recovery(path):
+                # The recovery copy opens as unsaved work: Save draft gives it a draft of its own.
+                self.load_form(form, None, source); self.saved = {}; self.render_state()
+                self.note.set("Opened the recovery copy. Select Save draft to keep it as a draft.")
+                return
             self.load_form(form, str(path) if draft else None, source)
         except (ValueError, OSError, RecursionError) as error: self.error(error); return
         if not draft: self.match_library(form)
@@ -673,7 +686,8 @@ class RuleBuilderPage:
             self.source_uploaded = True
             self.note.set("Matched “" + match["name"] + "” in the library (" + match["path"] + "). Submitting will "
                           "update that rule; you will see exactly what changes before anything is sent.")
-        self.app.work("Checking whether this rule is already in the rule library…", task, done, page="builder")
+        self.app.work("Checking whether this rule is already in the rule library…", task, done, page="builder",
+                      failed="Couldn't check the rule library")
 
     def edit_rule(self, rule, source=None):
         if self.app.busy: return False
@@ -689,6 +703,7 @@ class RuleBuilderPage:
         if self.app.busy: return
         try:
             folder = self.data_dir / "drafts"; folder.mkdir(parents=True, exist_ok=True)
+            if self.is_recovery(self.draft_path): self.draft_path = None  # Saving there would delete it straight after.
             path = Path(self.draft_path) if self.draft_path else folder / draft_name(self.vars["name"].get())
             if not self.draft_path and path.exists():
                 try: owner = drafts.read_draft(path)["id"]
@@ -716,7 +731,9 @@ class RuleBuilderPage:
         if schedule: self.autosave_timer = self.app.root.after(AUTOSAVE_MS, self.autosave)
         try:
             if not self.dirty():
-                self.discard_recovery(); return
+                # A copy put off at start-up waits for the next start; nothing new needs its place yet.
+                if not self.recovery_waiting: self.discard_recovery()
+                return
             form, path = self.form(), self.recovery_path()
             if form == self.autosaved and path.exists(): return
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -724,7 +741,7 @@ class RuleBuilderPage:
                 "format": "sentinel-rule-draft", "version": 1, "form": form, "source": self.source,
                 "recovery": {"draft_path": self.draft_path, "saved_at": datetime.now(timezone.utc).isoformat()}},
                 indent=2) + "\n")
-            self.autosaved = form
+            self.autosaved, self.recovery_waiting = form, False  # New unsaved work takes the copy's place.
         except (OSError, ValueError, TypeError) as error:
             self.app.log("Couldn't keep a recovery copy of the rule: " + str(error))
 
@@ -736,6 +753,7 @@ class RuleBuilderPage:
             self.app.root.after_cancel(self.autosave_timer); self.autosave_timer = None
 
     def discard_recovery(self):
+        if self.recovery_waiting: return  # Put off at start-up (Esc): it is offered again at the next start.
         self.autosaved = None
         try: self.recovery_path().unlink(missing_ok=True)
         except OSError: pass
@@ -748,7 +766,7 @@ class RuleBuilderPage:
         try:
             form, source = drafts.read_draft(path), drafts.read_draft_source(path)
             original = (json.loads(drafts.read_bounded(path)).get("recovery") or {}).get("draft_path")
-            original = Path(original) if isinstance(original, str) and original else None
+            original = Path(original) if isinstance(original, str) and original and not self.is_recovery(original) else None
             kept = path.stat().st_mtime
             if original is not None and original.is_file() and original.stat().st_mtime >= kept:
                 self.discard_recovery(); return False  # Saved normally after the copy was made.
@@ -756,9 +774,12 @@ class RuleBuilderPage:
             self.discard_recovery(); return False
         when = datetime.fromtimestamp(kept).strftime("%d %b %Y at %H:%M")
         name = "“" + form["name"].strip() + "”" if form["name"].strip() else "an untitled rule"
-        if not kit.confirm(self.app.root, "Restore unsaved rule?",
-                           f"Sentinel Workspace closed before your changes to {name} were saved. Restore the copy "
-                           f"kept on {when}?", ok="Restore", cancel="Discard"):
+        answer = kit.confirm(self.app.root, "Restore unsaved rule?",
+                             f"Sentinel Workspace closed before your changes to {name} were saved. Restore the copy "
+                             f"kept on {when}?", ok="Restore", cancel="Discard", closed=None)
+        if answer is None:  # Esc or the window's X: not now. Only Discard deletes the work.
+            self.recovery_waiting = True; return False
+        if not answer:
             self.discard_recovery(); return False
         keep = original if original is not None and original.is_file() else None
         self.load_form(form, str(keep) if keep else None, source)

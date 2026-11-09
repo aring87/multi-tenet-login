@@ -43,6 +43,8 @@ class ClientPicker:
         self.clients.configure(style="Pick.Lead.Treeview")
         self.clients.heading("#0", command=self.toggle_shown)
         self.clients.bind("<Button-1>", self.clicked, add="+"); self.clients.bind("<space>", self.toggle_focused)
+        # Enter from the search box lands here; it must not go on to press Submit for approval or Start previews.
+        self.clients.bind("<Return>", lambda event: "break")
 
     def selectable(self, target):
         return True
@@ -139,6 +141,8 @@ class AssignmentDialog(ClientPicker):
         review, self.text = kit.text_area(body, 10, readonly=True,
                                           placeholder="Select clients, then Check to see exactly which client files will change.")
         review.pack(fill="both", expand=True)
+        # Packed first to keep their room at the bottom; Tab reaches them after the review, as they read.
+        self.banner.lift(); self.actions.lift()
         # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.
         self.filter = kit.debounce(self.window, 150, self.render_clients)
         for key in ("<Down>", "<Return>"): self.search_box.bind(key, lambda event: self.filter.flush(), add="+")

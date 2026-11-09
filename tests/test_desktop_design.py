@@ -116,6 +116,16 @@ class DesignTests(unittest.TestCase):
         callbacks[0](dict(records=[dict(name="stale")],status="collected"))
         self.assertFalse(app.rules_page.rows)
 
+    def test_searching_while_rules_load_keeps_saying_they_are_loading(self):
+        app=self.app;app.session=object();app.workspace=dict(WORKSPACE);page=app.rules_page
+        callbacks=[]
+        with patch.object(app,"work",side_effect=lambda title,task,done,**kw:callbacks.append(done)):page.load()
+        page.search.set("abc");page.render_soon.flush()
+        self.assertEqual(page.empty.text.get(),"Loading rules from "+WORKSPACE["workspace_name"]+"…")
+        self.assertTrue(page.empty.line.running())
+        callbacks[0](dict(records=[],status="no_records"))
+        self.assertFalse(page.loading);self.assertFalse(page.empty.line.running())
+
     def load_rules_for_export(self, status="collected"):
         app=self.app; app.session=object(); app.workspace=dict(WORKSPACE)
         result=dict(records=[dict(name="one",properties=dict(enabled=True)),
@@ -189,7 +199,7 @@ class DesignTests(unittest.TestCase):
                                                                       query="SigninLogs | take 1",tactics=["InitialAccess"]))]
         page.render();page.tree.selection_set("0");page.selected()
         self.assertEqual(page.detail_card.title_var.get(),"First")
-        self.assertIn("InitialAccess",[label.cget("text") for label in page.overview.values])
+        self.assertIn("Initial Access",[label.cget("text") for label in page.overview.values])  # MITRE's name, as in the builder.
         self.assertIn("SigninLogs",page.query.get("1.0","end"))
         page.reset();self.assertEqual(page.detail_card.title_var.get(),"Rule details")
         self.assertFalse(page.overview.values)

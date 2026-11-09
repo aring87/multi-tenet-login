@@ -49,6 +49,14 @@ class ReviewDialogTests(unittest.TestCase):
         self.assertEqual(str(self.dialog.submit_button.cget("state")), "disabled")
         self.assertEqual(str(self.dialog.link_button.cget("state")), "normal")
 
+    def test_a_moved_library_rule_opens_where_it_will_be_saved(self):
+        self.assertFalse(self.dialog.where_body.winfo_manager())
+        error = "The original repository rule is missing or the destination changed. Start a new draft for a new rule."
+        with patch.object(self.app, "work", side_effect=lambda title, task, done, **kw: done((None, error))):
+            self.dialog.prepare()
+        self.assertTrue(self.dialog.where_body.winfo_manager())
+        self.assertIn("Where it will be saved", self.dialog.notice.get())
+
     def test_destination_change_invalidates_prepared_review(self):
         with patch.object(self.app, "work", side_effect=self.work): self.dialog.prepare()
         self.dialog.path.set("rules/sentinel/other.yml")

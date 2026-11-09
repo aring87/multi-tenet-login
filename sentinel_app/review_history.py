@@ -128,12 +128,14 @@ class ReviewHistoryDialog:
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
         self.open_button, self.close_button, self.github_button, self.refresh_button, self.file_button = buttons
         self.detail = tk.StringVar(value="Select a submission to see its details.")
-        kit.wrap_to_parent(ttk.Label(body, textvariable=self.detail, style="Hint.TLabel", justify="left", width=1),
-                           minimum=px(200)).pack(side="bottom", fill="x", pady=(px(10), 0))
+        detail_label = kit.wrap_to_parent(ttk.Label(body, textvariable=self.detail, style="Hint.TLabel", justify="left",
+                                                    width=1), minimum=px(200))
+        detail_label.pack(side="bottom", fill="x", pady=(px(10), 0))
         frame, self.table, self.empty = kit.table(body, (("name", "Rule", 250, True), ("repository", "Library", 170, False),
                                                         ("status", "Status", 300, True), ("modified", "Last updated", 125, False)),
                                                   height=5, sort=self.order)
         frame.pack(fill="both", expand=True)
+        detail_label.lift(); self.actions.lift()  # Packed first to keep their room; Tab reaches them last.
         self.table.tag_configure("quiet", foreground=COLORS["muted"])
         kit.tooltip(self.refresh_button, "Read the saved submissions again and ask GitHub for their status (F5)")
         # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.

@@ -317,7 +317,7 @@ def main():
     # ---- Help, a failed task, and the offer to restore unsaved builder work
     help_window = app.open_help(); shot(help_window, "36-dialog-help"); help_window.destroy()
     raw = "AuthorizationFailed: the client does not have authorization to perform action 'Microsoft.SecurityInsights/alertRules/read'"
-    alert = kit.MessageDialog(root, "Reading analytics rules", advice.friendly(raw, workspace="law-example-sentinel"),
+    alert = kit.MessageDialog(root, "Couldn't read analytics rules", advice.friendly(raw, workspace="law-example-sentinel"),
                               details=raw, tone="danger")
     shot(alert.window, "37-dialog-task-error"); alert.window.destroy()
     restore = kit.MessageDialog(root, "Restore unsaved rule?", "Sentinel Workspace closed before your changes to "

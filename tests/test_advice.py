@@ -40,6 +40,22 @@ class AdviceTests(unittest.TestCase):
         self.assertIn("took too long", friendly("GitHub timed out. Refresh to try this read again."))
         self.assertIsNone(lookup("The operation timed out. A cloud change may still be running."))  # Azure, not GitHub.
 
+    def test_sign_in_without_subscriptions_names_the_current_control(self):
+        tip = lookup("Sign-in returned no accessible Azure subscriptions.\nTenant accounts: 1")
+        self.assertTrue(tip.startswith("You're signed in"))
+        self.assertIn("Can't see a subscription?", tip); self.assertNotIn("Check missing subscription", tip)
+
+    def test_github_cli_and_sign_in_failures(self):
+        for message in ("GitHub CLI isn't installed on this PC. Ask your administrator to install it.",
+                        "GitHub CLI is not installed. Install it first."):
+            self.assertEqual(lookup(message), "GitHub CLI is not installed on this PC. Ask your administrator to install it.")
+        self.assertIn("Sign in to GitHub", lookup("GitHub sign-in didn't finish. Check the one-time code shown in Session activity."))
+
+    def test_a_moved_library_rule_points_at_where_it_will_be_saved(self):
+        tip = lookup("The original repository rule is missing or the destination changed. Start a new draft for a new rule.")
+        self.assertIn("Where it will be saved", tip)
+        self.assertIn("Library ⋯", lookup("The catalog is incomplete or invalid"))
+
     def test_review_dialog_keeps_its_old_import(self):
         from sentinel_app import rule_review_dialog
         self.assertIs(rule_review_dialog.FRIENDLY, advice.FRIENDLY)

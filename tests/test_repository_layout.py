@@ -35,6 +35,18 @@ class RepositoryLayoutTests(unittest.TestCase):
                 self.assertIn('resources', document)
         self.assertTrue((paths.DOCS / 'DESKTOP-START-HERE.md').is_file())
 
+    def test_unwritable_data_folder_falls_back_to_local_app_data(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base, local = Path(folder) / 'app', Path(folder) / 'local'
+            base.mkdir(); local.mkdir()
+            (base / 'desktop-data').write_text('')  # A file where the folder should be: it can't be used.
+            with patch.dict(os.environ, {'LOCALAPPDATA': str(local)}):
+                data = paths._data_folder(base)
+            self.assertEqual(data, local / 'Sentinel Workspace' / 'desktop-data')
+            self.assertTrue(data.is_dir())  # Created, parents included, on a fresh PC.
+            with patch.dict(os.environ, {'LOCALAPPDATA': ''}), patch.object(paths.Path, 'home', return_value=local):
+                self.assertTrue(paths._data_folder(base).is_absolute())
+
     def test_module_launcher_calls_desktop_main(self):
         with patch('sentinel_app.desktop_app.main') as start:
             runpy.run_module('sentinel_app', run_name='__main__')

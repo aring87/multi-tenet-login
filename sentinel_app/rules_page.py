@@ -1,5 +1,6 @@
 """Workspace-scoped analytics rule inventory view."""
 import json
+import math
 from copy import deepcopy
 from datetime import datetime, timezone
 import tkinter as tk
@@ -7,6 +8,7 @@ from tkinter import ttk, filedialog
 from . import ui_kit as kit
 from .advice import lookup as advice_for
 from .desktop_theme import COLORS, px
+from .rule_drafts import tactic_name
 from .rule_export import export_rules
 from .workspace_tools import list_rules, rule_values
 
@@ -59,7 +61,10 @@ def rule_overview(row):
     rows = [("Runs every", kit.duration_text(props["queryFrequency"]) if props.get("queryFrequency") else None),
             ("Looks back", kit.duration_text(props["queryPeriod"]) if props.get("queryPeriod") else None),
             ("Alert when", alert),
-            ("Tactics", join(props.get("tactics"))), ("Techniques", join(props.get("techniques"))),
+            # MITRE's names, as the Rule builder shows them ('Command and Control'), not the API's keys.
+            ("Tactics", ", ".join(map(tactic_name, props["tactics"])) if isinstance(props.get("tactics"), list)
+             else props.get("tactics")),
+            ("Techniques", join(props.get("techniques"))),
             ("Last modified", friendly_stamp(props["lastModifiedUtc"]) if props.get("lastModifiedUtc") else None),
             ("Rule ID", row.get("name")), ("Template", props.get("alertRuleTemplateName"))]
     return [(key, str(value)) for key, value in rows if value not in (None, "", [])]
@@ -212,6 +217,7 @@ class Split(ttk.Panedwindow):
         super().__init__(parent, orient="horizontal")
         try: fraction = float(fraction)
         except (TypeError, ValueError): fraction = 0.6
+        if not math.isfinite(fraction): fraction = 0.6  # 'nan' converts, and would break every resize.
         self.share, self.seen_width = min(max(fraction, 0.3), 0.8), None
         self.bind("<Configure>", self.resized, add="+")
         self.bind("<ButtonRelease-1>", lambda event: self.dragged(), add="+")
@@ -276,6 +282,7 @@ class RulesPage:
         self.loaded_session = None
         self.loaded_workspace = None
         self.shown = -1  # Index of the rule in the details pane: None for none, -1 until it is drawn.
+        self.loading = False  # A read is running: an empty list says so, even while the analyst searches.
         self.sort = saved_sort(app.ui_state.get("rules_sort"), SORT_KEYS)
         # The list fills the window and its details sit beside it; each scrolls by itself.
         self.split = Split(parent, app.ui_state.get("rules_split", 0.6))
@@ -423,7 +430,7 @@ class RulesPage:
         self.detail(self.rows[index] if index is not None else None)
 
     def reset(self):
-        self.collection = None; self.loaded_session = None; self.loaded_workspace = None
+        self.collection = None; self.loaded_session = None; self.loaded_workspace = None; self.loading = False
         self.rows = []; self.cache = []; self.banner.pack_forget(); self.render()
         self.summary.set("Select Refresh to read the rules from Sentinel." if self.ready()
                          else "Select a workspace to load its rules.")
@@ -482,6 +489,8 @@ class RulesPage:
             term = self.search.get().strip()
             text = (f"No rules match “{term}”" if term else "No rules") + ("" if state == "All states" else f" with the {state} filter") + "."
             self.empty.show(text, ("Clear search and filter", self.clear_filters))
+        elif self.loading and self.ready():
+            self.empty.show("Loading rules from " + self.app.workspace["workspace_name"] + "…", busy=True)
         elif not self.ready():
             self.empty.show("Sign in and choose a workspace to see its analytics rules.",
                             ("Go to Connect", lambda: self.app.show_page("connect")))
@@ -502,10 +511,12 @@ class RulesPage:
         session, workspace = app.session, dict(app.workspace)
         self.reset(); self.summary.set("Loading rules from " + workspace["workspace_name"] + "…")
         self.empty.show("Loading rules from " + workspace["workspace_name"] + "…", busy=True)
+        self.loading = True
         def task():
             try: return list_rules(session, workspace)
             except Exception as error: return dict(records=[], status="error", error=str(error))
         def done(result):
+            self.loading = False
             if app.session is not session or app.workspace != workspace: return
             self.collection = deepcopy(result)
             self.collection.setdefault("collected_at_utc", datetime.now(timezone.utc).isoformat())
@@ -532,7 +543,7 @@ class RulesPage:
             else:
                 app.flash("Rules loaded for " + workspace["workspace_name"] + ".")
             self.summary.set(text); self.sync()
-        app.work("Reading analytics rules…", task, done, page="rules")
+        app.work("Reading analytics rules…", task, done, page="rules", failed="Couldn't read analytics rules")
 
     def export(self):
         app = self.app
@@ -557,4 +568,5 @@ class RulesPage:
         def done(manifest):
             status = "complete collection" if manifest["complete"] else "INCOMPLETE collection"
             app.flash(f"Exported {manifest['record_count']} rules ({status}) to {path}")
-        app.work("Exporting the rules…", lambda: export_rules(path, workspace, collection), done, page="rules")
+        app.work("Exporting the rules…", lambda: export_rules(path, workspace, collection), done, page="rules",
+                 failed="Couldn't export the rules")

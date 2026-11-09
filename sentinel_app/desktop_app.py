@@ -1,10 +1,12 @@
 """Sentinel Workspace: local Windows desktop interface."""
 import json
+import math
 import os
 import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -12,12 +14,14 @@ import tkinter.font as tkfont
 import traceback
 import webbrowser
 from datetime import datetime
+from pathlib import Path
 from tkinter import ttk
 from . import __version__
 from .desktop_theme import configure_theme, COLORS, FONTS, TONES, px
 from . import advice
 from . import brand
 from . import ui_kit as kit
+from .ui_kit import work_area, window_frame, on_a_monitor  # Window placement, shared with dialogs.
 from .auth_recovery import AuthenticationRequired, SignInCancelled
 from .signin_process import check_cancelled
 from .rules_page import CopyValues, RulesPage
@@ -134,8 +138,8 @@ def render_markdown(text, source):
             if not part: continue
             if part.startswith("**") and part.endswith("**"): text.insert("end", part[2:-2], (kind, "bold"))
             elif part.startswith("`") and part.endswith("`"): text.insert("end", part[1:-1], (kind, "mono"))
-            elif part.startswith("["):
-                label, url = re.match(r"\[([^\]]+)\]\(([^)\s]+)\)", part).groups()
+            elif (link := re.fullmatch(r"\[([^\]]+)\]\(([^)\s]+)\)", part)) is not None:
+                label, url = link.groups()
                 if url.startswith("https://"):
                     tag = "link%d" % len(links); links[tag] = url
                     text.insert("end", label, (kind, "link", tag))
@@ -175,66 +179,6 @@ def plan_geometry(remembered, area, frame, on_monitor, zoomed=False):
     return width, height, x, y, min_w, min_h, zoom
 
 
-_USER32 = []
-
-
-def _user32():
-    """user32 with pointer-sized monitor handles (its own copy, so other modules' calls are unaffected)."""
-    if not _USER32:
-        import ctypes
-        from ctypes import wintypes
-        user32 = ctypes.WinDLL("user32")
-        user32.MonitorFromPoint.restype = wintypes.HMONITOR
-        user32.MonitorFromPoint.argtypes = (wintypes.POINT, wintypes.DWORD)
-        _USER32.append(user32)
-    return _USER32[0]
-
-
-def work_area(root, x=None, y=None):
-    """The work area (left, top, width, height) of the monitor holding (x, y), or of the primary
-    monitor, without the taskbar; the whole screen when Windows can't say."""
-    try:
-        import ctypes
-        from ctypes import wintypes
-        class MONITORINFO(ctypes.Structure):
-            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
-                        ("dwFlags", wintypes.DWORD)]
-        user32 = _user32()
-        rect = wintypes.RECT()
-        monitor = user32.MonitorFromPoint(wintypes.POINT(x, y), 0) if x is not None else None
-        info = MONITORINFO(); info.cbSize = ctypes.sizeof(info)
-        if monitor and user32.GetMonitorInfoW(wintypes.HMONITOR(monitor), ctypes.byref(info)):
-            rect = info.rcWork
-        elif not user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
-            raise OSError("No work area")
-        if rect.right - rect.left > 0 and rect.bottom - rect.top > 0:
-            return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
-    except (AttributeError, OSError, ImportError, ValueError, TypeError):
-        pass
-    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight() - px(40)
-
-
-def window_frame():
-    """The title bar and resize borders Windows adds around the client area: (width, height)."""
-    try:
-        metric = _user32().GetSystemMetrics
-        padded = metric(92)  # SM_CXPADDEDBORDER
-        sizes = (2 * (metric(32) + padded), metric(4) + 2 * (metric(33) + padded))  # SM_CXSIZEFRAME, SM_CYCAPTION, SM_CYSIZEFRAME
-        if all(0 <= size < 400 for size in sizes): return sizes
-    except (AttributeError, OSError, ImportError):
-        pass
-    return px(16), px(40)
-
-
-def on_a_monitor(x, y):
-    """Whether (x, y) is on any monitor, not just the primary one."""
-    try:
-        from ctypes import wintypes
-        return bool(_user32().MonitorFromPoint(wintypes.POINT(x, y), 0))  # MONITOR_DEFAULTTONULL
-    except (AttributeError, OSError, ImportError, ValueError, TypeError):
-        return x >= 0 and y >= 0
-
-
 class App:
     def __init__(self, root):
         self.root = root
@@ -244,7 +188,7 @@ class App:
         root.report_callback_exception = self.callback_failed
         self.state_file = DATA / "ui-state.json"
         self.error_log = DATA / "logs" / "errors.log"
-        DATA.mkdir(exist_ok=True)
+        DATA.mkdir(parents=True, exist_ok=True)
         self.ui_state = self.read_state()
         self.normal_geometry, self.was_zoomed, self.closing = None, False, False
         self.apply_geometry(self.ui_state.get("geometry"), self.ui_state.get("zoomed") is True)
@@ -252,6 +196,7 @@ class App:
         self.events = queue.Queue()
         self.busy = False
         self.busy_visual, self.busy_shown = None, False
+        self.busy_ended = float("-inf")  # When the busy visuals last went away (time.monotonic()).
         self.session = None
         self.session_client = None  # The client the current Microsoft session was started for.
         self.auth_hint = None
@@ -273,11 +218,13 @@ class App:
         self.wheel = 0
         self.operation_page = "connect"
         self.operation_title = ""
+        self.operation_failed = None  # The heading of the alert shown if the running task fails.
         self.flash_timer = None
         self.signin_handoff = None
         self.signin_timer = None
         self.signin_active = False
         self.signin_cancel = None
+        self.signin_window = "your browser"  # Where Microsoft asks the analyst to finish signing in.
         self.auth_recovery_attempts = set()
         self.build()
         remembered = self.ui_state.get("client")
@@ -292,14 +239,25 @@ class App:
         self.root.after(EVENT_POLL_MS, self.poll)
         self.root.after(600, self.rule_builder.offer_recovery)  # Unsaved builder work from a crash, once.
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        # Windows signing out or restarting: Tk turns WM_QUERYENDSESSION into WM_SAVE_YOURSELF, not a close.
+        self.root.protocol("WM_SAVE_YOURSELF", self.end_session)
 
     # ---------------------------------------------------------------- storage
     def read_state(self):
+        """ui-state.json as a dict. A value of the wrong type (a hand-edited or damaged file) is dropped,
+        so the window always opens with defaults for it."""
         try:
             value = json.loads(self.state_file.read_text(encoding="utf-8")) if self.state_file.exists() else {}
-            return value if isinstance(value, dict) else {}
         except (OSError, ValueError):
             return {}
+        if not isinstance(value, dict): return {}
+        def usable(key, item):
+            if key in ("rule_view", "library_view", "geometry", "client"): return isinstance(item, str)
+            if key in ("rules_split", "library_split"):
+                return isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)
+            if key == "last_workspace": return isinstance(item, dict)
+            return True
+        return {key: item for key, item in value.items() if usable(key, item)}
 
     def save_state(self):
         state = dict(self.ui_state)
@@ -491,6 +449,8 @@ class App:
         self.build_connect(connect)
         self.build_rules(rules)
         self.rule_builder = RuleBuilderPage(self, builder, DATA)
+        # Packed first so they keep their room; Tab reaches them after the page, as they read.
+        self.footer_slot.lift(); self.statusbar.lift()
         self.last_page = None
         self.tabs.bind("<<NotebookTabChanged>>", self.page_changed)
         self.page_changed()
@@ -596,6 +556,8 @@ class App:
             row.bind("<space>", lambda event, n=name: self.show_page(n))
             kit.tooltip(row, f"{title}  (Ctrl+{index + 1})")
             self.nav.append(dict(row=row, title=label, description=detail, marker=marker, parts=parts, icon=glyph))
+        # The account panel and links were packed first to keep the bottom of the sidebar; Tab reaches them last.
+        session.lift(); footer.lift()
 
     def open_help(self):
         """The desktop guide, in a window of its own (F1). It works in the packaged exe, where a .md file
@@ -634,12 +596,20 @@ class App:
         actions.pack(side="bottom", fill="x", pady=(px(14), 0))
         frame, text = kit.text_area(body, 24, readonly=True, font="body")
         frame.pack(fill="both", expand=True)
+        actions.lift()  # Tab: the document, then Close.
         text.configure(padx=px(18), pady=px(14), spacing1=px(1), spacing3=px(2), bg=COLORS["card"])
         frame.configure(bg=COLORS["card"])
-        render_markdown(text, source) if markdown else kit.set_text(text, source)
+        try:
+            render_markdown(text, source) if markdown else kit.set_text(text, source)
+        except Exception as error:  # A guide edit the viewer can't show must not leave an empty window behind.
+            window.destroy()
+            kit.alert(self.root, title, "The document isn't available in this copy of the app.",
+                      details=str(path) + "\n\n" + str(error), tone="warning")
+            return None
         window.document = text
         kit.place_dialog(window, self.root, 820, 760, 560, 420)
-        kit.modal(window, parent, close, focus=text)
+        # Enter on Close closes; Enter in the document does nothing (text areas ignore it).
+        kit.modal(window, parent, close, primary=buttons[0], focus=text)
         return window
 
     def open_about(self):
@@ -667,7 +637,7 @@ class App:
             close=("Close", window.destroy))
         actions.pack(fill="x", pady=(px(20), 0))
         kit.place_dialog(window, self.root, width=520)
-        kit.modal(window, self.root, window.destroy, focus=buttons[-1])
+        kit.modal(window, self.root, window.destroy, primary=buttons[-1], focus=buttons[-1])
 
     def paint_nav(self, index, hover=False):
         c = COLORS
@@ -712,7 +682,7 @@ class App:
 
     def build_statusbar(self, main):
         c = COLORS
-        bar = tk.Frame(main, bg=c["card"]); bar.pack(side="bottom", fill="x")
+        bar = self.statusbar = tk.Frame(main, bg=c["card"]); bar.pack(side="bottom", fill="x")
         tk.Frame(bar, bg=c["line"], height=1).pack(fill="x")
         row = ttk.Frame(bar, style="Card.TFrame", padding=(kit.space("xl"), kit.space("sm"))); row.pack(fill="x")
         self.activity_badge = kit.Pill(row, "Ready", "success")
@@ -797,7 +767,9 @@ class App:
         panel = tk.Frame(self.signin_panel, bg=c["accent_soft"]); panel.pack(fill="x", padx=px(14), pady=px(12))
         tk.Label(panel, text="Waiting for Microsoft sign-in", font=FONTS["strong"], bg=c["accent_soft"],
                  fg=c["ink"], bd=0, anchor="w").pack(fill="x")
-        waiting = tk.Label(panel, text="Finish signing in in the browser window. If you closed it, select Cancel sign-in.",
+        # Names the window the chosen sign-in method opens; see login().
+        self.signin_waiting = tk.StringVar(value=self.waiting_text())
+        waiting = tk.Label(panel, textvariable=self.signin_waiting,
                            font=FONTS["small"], bg=c["accent_soft"], fg=c["ink_2"], bd=0, anchor="w", justify="left",
                            width=1)  # width=1: the wrapped text must not feed its width back into the layout.
         waiting.pack(fill="x", pady=(px(2), px(10))); kit.wrap_to_parent(waiting)
@@ -907,6 +879,10 @@ class App:
         self.ui_state["show_ids"] = self.show_ids
         self.ids_button.configure(text=("−  Hide" if self.show_ids else "+  Show") + " workspace IDs")
         self.render_details()
+
+    def waiting_text(self):
+        """The waiting panel's instruction, naming where the chosen sign-in method asks for the account."""
+        return "Complete sign-in in " + self.signin_window + ". If you closed it, select Cancel sign-in."
 
     def copy_signin_error(self):
         self.root.clipboard_clear(); self.root.clipboard_append(self.signin_error_details)
@@ -1108,7 +1084,8 @@ class App:
         user = account.get("user", {}).get("name", "") if isinstance(account, dict) else ""
         # The sidebar names the Microsoft account only; the header chip owns the client and workspace.
         if self.signin_active:
-            title, detail, color, pill = "Signing in…", "Finish signing in in your browser.", c["warning"], ("Signing in", "warning")
+            title, detail, color, pill = ("Signing in…", "Complete sign-in in " + self.signin_window + ".", c["warning"],
+                                          ("Signing in", "warning"))
         elif signed_in and here and self.workspace:
             title, detail, color, pill = "Signed in", user, c["sidebar_success"], ("Connected", "success")
         elif signed_in:
@@ -1309,7 +1286,7 @@ class App:
             cancel = getattr(callback, "_signin_cancel", None)
             if isinstance(cancel, threading.Event) and cancel.is_set():
                 error = SignInCancelled()
-            title = self.operation_title
+            failed = self.operation_failed
             self.set_busy(False)
             if error:
                 details = str(error)
@@ -1328,9 +1305,10 @@ class App:
                 else:
                     self.activity_badge.set("Stopped", "danger")
                     if not signin:  # A failed sign-in is explained on the Sign in card instead.
-                        kit.alert(self.root, title.rstrip("….") or "Operation stopped",
-                                  tip or "This didn't finish. The full message is below and in Session activity on the "
-                                         "Connect page.", details=details)
+                        # The heading states the outcome; the progress title ('Reading…') would read as still running.
+                        kit.alert(self.root, failed or "This didn't finish",
+                                  tip or "The full message is below and in Session activity on the Connect page.",
+                                  details=details)
             elif callback:
                 callback(result)
 
@@ -1353,19 +1331,23 @@ class App:
     def set_busy(self, busy, immediate=False):
         """Mark a task as running (handlers check ``busy`` at once). Its visuals (disabled controls, the
         activity line and the Working badge) wait BUSY_DELAY_MS, so a quick local read finishes without
-        greying the window; ``immediate`` shows them at once. Inputs (``self.inputs``) stay usable."""
+        greying the window; ``immediate`` shows them at once. Inputs (``self.inputs``) stay usable.
+
+        A task that starts within BUSY_DELAY_MS of one whose visuals showed (sign-in, then the workspaces,
+        then the rules) shows them at once too, so a chain of tasks never flashes the window usable."""
         self.busy = busy
         if self.busy_visual is not None:
             self.root.after_cancel(self.busy_visual); self.busy_visual = None
         if busy:
             if self.flash_timer is not None:
                 self.root.after_cancel(self.flash_timer); self.flash_timer = None
+            immediate = immediate or (time.monotonic() - self.busy_ended) * 1000 < BUSY_DELAY_MS
             if immediate or BUSY_DELAY_MS <= 0: self.show_busy()
             elif not self.busy_shown: self.busy_visual = self.root.after(BUSY_DELAY_MS, self.show_busy)
             return
         self.activity_badge.set("Ready", "success"); self.status.set("Ready.")
         if self.busy_shown:
-            self.busy_shown = False
+            self.busy_shown = False; self.busy_ended = time.monotonic()
             self.progress.stop(); self.progress.pack_forget()
             for widget, state in self.controls:
                 widget.configure(state=state)
@@ -1429,10 +1411,12 @@ class App:
                                      "Signed in. Select Refresh to list the subscriptions" + client + ".")
         else: self.connection_note.set("Sign in to load your subscriptions and workspaces.")
 
-    def work(self, title, task, done=None, page="connect"):
+    def work(self, title, task, done=None, page="connect", failed=None):
+        """Run ``task`` on a worker thread and hand its result to ``done`` on the UI thread. ``title`` says
+        what is happening; ``failed`` is the alert's heading if it fails ("Couldn't load workspaces")."""
         if self.busy:
             self.flash("Wait for the current task to finish.", "warning", 3); return
-        self.operation_page, self.operation_title = page, title
+        self.operation_page, self.operation_title, self.operation_failed = page, title, failed
         self.set_busy(True); self.status.set(title); self.log(title)
         def run():
             try: result, error = task(), None
@@ -1555,8 +1539,11 @@ class App:
         old = self.session
         self.session = Session(logger=self.log)
         self.session_client = self.client_name()
-        self.session.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] = (
-            "true" if self.vars["login_method"].get() == "Windows account window" else "false")
+        broker = self.vars["login_method"].get() == "Windows account window"
+        self.session.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] = "true" if broker else "false"
+        # With the broker, Windows asks in its own account window and no browser opens.
+        self.signin_window = "the Windows account window" if broker else "your browser"
+        self.signin_waiting.set(self.waiting_text())
         self.finish_signin()
         cancel = threading.Event()
         self.signin_cancel = cancel
@@ -1607,9 +1594,14 @@ class App:
     # ------------------------------------------------------------- discovery
     @staticmethod
     def subscription_label(row):
+        """'Acme (Warned)  ·  22222222…2222': short enough for the box at the smallest window size, with a
+        state other than Enabled beside the name. The full IDs are under Show workspace IDs and on the
+        header chip."""
         state = row.get("state", "Unknown")
-        return "  ·  ".join(filter(None, (row.get("name") or "Unnamed subscription", row["id"],
-                                          None if state == "Enabled" else state, "Tenant " + row["tenantId"])))
+        name = row.get("name") or "Unnamed subscription"
+        sid = row["id"]
+        return name + ("" if state == "Enabled" else " (" + state + ")") + "  ·  " + \
+            (sid[:8] + "…" + sid[-4:] if len(sid) > 13 else sid)
 
     def display_subscriptions(self, rows, discover=True, select=None):
         rows = sorted(rows, key=lambda r: (r.get("name", "").casefold(), r["id"]))
@@ -1635,9 +1627,11 @@ class App:
             self.clear_selection()
             self.display_subscriptions(rows, select=current or self.remembered_workspace().get("subscription_id"))
             if not rows: self.status.set("No subscriptions are visible for this account.")
-        self.work(LISTING_SUBSCRIPTIONS, self.session.refresh_subscriptions, done)
+        self.work(LISTING_SUBSCRIPTIONS, self.session.refresh_subscriptions, done, failed="Couldn't refresh subscriptions")
 
     def check_subscription(self):
+        if self.busy:  # Before the form opens: the check couldn't start anyway.
+            self.flash("Wait for the current task to finish.", "warning", 3); return
         if not self.session or not (self.subscriptions or self.signed_in_here()):
             kit.alert(self.root, "Check a subscription", "Sign in with Microsoft first.", tone="info"); return
         values = kit.FormDialog(self.root, "Check a subscription",
@@ -1661,9 +1655,10 @@ class App:
             actions, buttons = kit.action_row(body, secondary=(("Copy results", copy),), close=("Close", window.destroy))
             actions.pack(fill="x")
             kit.place_dialog(window, self.root, 860, 600, 600, 400)
-            kit.modal(window, self.root, window.destroy, focus=buttons[-1])
+            kit.modal(window, self.root, window.destroy, primary=buttons[-1], focus=buttons[-1])
             self.flash("Subscription check complete.", "info")
-        self.work("Checking subscription access and workspaces…", lambda: self.session.check_subscription(value), done)
+        self.work("Checking subscription access and workspaces…", lambda: self.session.check_subscription(value), done,
+                  failed="Couldn't check the subscription")
 
     @staticmethod
     def workspace_rows(sub, workspace=None, note=None):
@@ -1680,6 +1675,7 @@ class App:
         self.workspace = None; self.workspaces = []
         self.rules_page.reset()
         self.wsbox.configure(values=[]); self.vars["workspace"].set("")
+        self.update_workspace_context()  # The header chip and title no longer name the cleared workspace.
 
     def subscription_changed(self, event=None):
         if event is not None and self.busy:  # Chosen in the moment before the busy visuals showed.
@@ -1695,11 +1691,14 @@ class App:
         self.discover()
 
     def discover(self):
+        if self.busy:  # Clicked in the moment before the busy visuals showed: keep the selection.
+            self.flash("Wait for the current task to finish.", "warning", 3); return
         index = self.subbox.current()
         if not self.session or index < 0:
             kit.alert(self.root, "Refresh workspaces", "Sign in and choose a subscription first.", tone="info"); return
         sub = self.subscriptions[index]
         self.reset_workspaces()
+        self.identity.set(self.workspace_rows(sub, note="Loading workspaces…"))  # Not the old workspace's IDs.
         def done(rows):
             self.workspaces = rows
             self.sync_connection()
@@ -1715,7 +1714,8 @@ class App:
             else:
                 self.identity.set(self.workspace_rows(sub, note="No accessible workspaces"))
                 self.status.set("No workspaces in this subscription. Choose another subscription, or check your access.")
-        self.work("Loading workspaces…", lambda: self.session.discover(sub["id"], sub["tenantId"]), done)
+        self.work("Loading workspaces…", lambda: self.session.discover(sub["id"], sub["tenantId"]), done,
+                  failed="Couldn't load workspaces")
 
     def remembered_workspace(self):
         """The subscription and workspace this client used last ({} when none), from ui-state.json."""
@@ -1788,6 +1788,8 @@ class App:
 
     # ----------------------------------------------------------------- github
     def github_login(self):
+        if self.busy:  # Before the page scrolls: the sign-in couldn't start anyway.
+            self.flash("Wait for the current task to finish.", "warning", 3); return
         def task():
             session = self.session or Session(logger=self.log)
             require(session.gh_exe, "GitHub CLI isn't installed on this PC. Ask your administrator to install it.")
@@ -1807,14 +1809,15 @@ class App:
         def done(result):
             self.flash(result)
             self.rule_builder.check_github(force=True)
-        self.work("Finish signing in to GitHub in the browser; the one-time code appears in Session activity…", task, done)
+        self.work("Finish signing in to GitHub in the browser; the one-time code appears in Session activity…", task, done,
+                  failed="GitHub sign-in didn't finish")
 
     def logout(self):
         if not self.session or self.busy: return
         session = self.session
         def done(_):
             self.session = self.session_client = None; self.clear_selection(); self.flash("Signed out.")
-        self.work("Signing out…", session.logout, done)
+        self.work("Signing out…", session.logout, done, failed="Couldn't sign out")
 
     def close(self):
         if self.busy:
@@ -1835,19 +1838,31 @@ class App:
         self.save_state()
         if self.session:
             session = self.session
-            self.work("Signing out before closing…", session.logout, lambda _: self.root.destroy())
+            self.work("Signing out before closing…", session.logout, lambda _: self.root.destroy(), failed="Couldn't sign out")
         else: self.root.destroy()
+
+    def end_session(self):
+        """Windows is signing out or restarting (Tk turns WM_QUERYENDSESSION into WM_SAVE_YOURSELF): keep the
+        layout and any unsaved Rule builder work, which is offered at the next start. Nothing waits on Azure
+        (Windows allows only a few seconds), and the window stays open in case the shutdown is cancelled."""
+        if not self.closing:
+            self.rule_builder.autosave(schedule=False)
+        self.save_state()
 
 
 APP_USER_MODEL_ID = "ISIEnterprises.SentinelWorkspace"
+ERROR_ACCESS_DENIED = 5
 ERROR_ALREADY_EXISTS = 183
 _INSTANCE = []  # The single-instance mutex handle, held for the life of the process.
+_ELEVATED_OWNER = []  # Set when the running copy was started with Run as administrator.
 
 
 def claim_instance(kernel32=None, last_error=None):
     """Hold a per-session named mutex. Returns False when another copy of the app already holds it.
     Two copies would race on ui-state.json, clients.json and settings.json and run two Azure CLI
-    sessions, so a second launch brings the first window forward instead."""
+    sessions, so a second launch brings the first window forward instead. A copy running as
+    administrator holds the mutex at a higher integrity level, so this one is refused access to it
+    (ERROR_ACCESS_DENIED); that is another copy too (``_ELEVATED_OWNER`` is set)."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -1860,6 +1875,8 @@ def claim_instance(kernel32=None, last_error=None):
         error = (last_error or ctypes.get_last_error)()
     except (AttributeError, OSError, ImportError):
         return True  # Not Windows, or no mutex: never stop the app from starting.
+    if not handle and error == ERROR_ACCESS_DENIED:
+        _ELEVATED_OWNER.append(True); return False
     if handle: _INSTANCE.append(handle)
     return not (handle and error == ERROR_ALREADY_EXISTS)
 
@@ -1910,10 +1927,37 @@ def set_dpi_awareness():
     except (AttributeError, OSError): pass
 
 
+def report_startup_failure(error):
+    """The window couldn't be built: write the traceback to errors.log (or, when DATA can't be written,
+    to the temp folder) and say so in plain words, instead of the packaged exe's raw Python error box."""
+    text = (datetime.now().isoformat(timespec="seconds") + "  Sentinel Workspace " + __version__ + " (start-up)\n"
+            + "".join(traceback.format_exception(type(error), error, error.__traceback__)))
+    log_path = DATA / "logs" / "errors.log"
+    try:
+        append_error_log(log_path, text)
+    except OSError:
+        log_path = Path(tempfile.gettempdir()) / "Sentinel Workspace errors.log"
+        try: append_error_log(log_path, text)
+        except OSError: log_path = None
+    message = advice.lookup(str(error)) or "Something went wrong while starting."
+    if log_path is not None: message += " Details were saved to " + str(log_path) + "."
+    try:
+        from tkinter import messagebox
+        messagebox.showerror("Sentinel Workspace couldn't start", message)
+    except tk.TclError:
+        pass
+    return log_path
+
+
 def main():
     if os.name == "nt":
         if not claim_instance():
             bring_existing_forward()
+            if _ELEVATED_OWNER:
+                # Windows may not let this copy restore a window running as administrator.
+                from tkinter import messagebox
+                messagebox.showinfo(TITLE, "Sentinel Workspace is already running as administrator. Switch to it "
+                                           "from the taskbar or with Alt+Tab.")
             return
         import ctypes
         try:
@@ -1925,8 +1969,16 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
         except (AttributeError, OSError):
             pass
-    root = tk.Tk()
-    app = App(root)
+    root = None
+    try:
+        root = tk.Tk()
+        app = App(root)
+    except Exception as error:  # SystemExit and KeyboardInterrupt still pass through.
+        if root is not None:
+            try: root.destroy()
+            except tk.TclError: pass
+        report_startup_failure(error)
+        return
     if app.start_zoomed: root.after_idle(lambda: root.state("zoomed"))
     root.mainloop()
 

@@ -10,7 +10,9 @@ The app has three sections in the sidebar: **Connect**, **Rules** and **Rule bui
 builds (Tk with its patch level, such as 8.6.15) and the app data folder, and a welcome banner
 on Connect points a new analyst at the two things to set up until a client or a rule library
 exists. **Help & prerequisites** (or F1) opens this guide inside the app, in the packaged exe
-too; **Open license** in About shows the license the same way.
+too; **Open license** in About shows the license the same way. If something isn't working,
+start with **Check this PC**, also at the foot of the sidebar, and send **Copy support info**
+to whoever supports you (see Check this PC and support info, below).
 
 Only one copy of the app runs at a time: starting it again brings the open window forward. If
 the open copy was started with **Run as administrator**, the app says so instead; switch to it
@@ -167,6 +169,54 @@ If a step fails, fix the cause and apply again: finished steps are found and ski
 secrets are created. The GitHub trust subject uses the organization's immutable-ID format; if
 login fails with AADSTS700213, compare it with **Actions > Inspect Azure trust subject**.
 
+## Check this PC and support info
+
+**Check this PC** at the foot of the sidebar checks what the app needs, without changing
+anything on the PC or in any tenant:
+
+- **Azure CLI**: installed, and version 2.76 or later. Azure CLI is asked for its version with
+  an empty, temporary settings folder, so your own Azure CLI sign-ins are not touched.
+- **GitHub CLI**: installed, and its version. It is needed only for the rule library and for
+  submitting rules for approval.
+- **GitHub sign-in**: whether GitHub CLI has a signed-in github.com account (GitHub CLI asks
+  GitHub to confirm it).
+- **Data folder**: the app can save in its data folder (it writes and removes a tiny test file).
+- **App version**: the version you are running and, when an update folder is set, whether a
+  newer one is waiting there.
+
+Each line says **OK** or **Needs action**, with what to do in plain words, for example asking
+your administrator to update Azure CLI. After a tool is installed or updated, close and reopen
+the app, then select **Check again**. **Sign in to GitHub**, **Open folder** and **Set update
+folder…** appear on the lines they help with.
+
+**Copy support info** (in the sidebar, or at the foot of Check this PC) copies what a support
+ticket needs: the app version, the Windows, Python and Tk versions, the data folder, the result
+of each check (Azure CLI and GitHub CLI versions included) and the last 100 lines of
+`desktop-data/logs/errors.log`. It never includes client names, tenant or subscription IDs,
+accounts, tokens or rules: from the error log it keeps each error's type, where in the app it
+happened and the first line of its message, with IDs, accounts, quoted names and tokens
+removed. A window shows exactly what was copied; paste it into the ticket.
+
+### Update notice
+
+Your team can keep new versions of the app in one folder, such as a team share. Select **Set
+update folder…** on the App version line of Check this PC and enter the folder, for example
+`\\fileserver\SOC\Sentinel Workspace` (it is kept in `desktop-data/settings.json` as
+`update_folder`). Each time the app starts it reads `latest.json` in that folder and, when it
+names a newer version than yours, shows a quiet notice at the top of Connect with the folder
+and **Open folder**. Get the new version from there, then close the old copy and start the new
+one. The app never downloads or installs anything and makes no web requests for this; if the
+folder can't be read (off the VPN, say), Session activity says so and nothing else happens.
+
+Whoever publishes a new version copies it to the folder and updates `latest.json`:
+
+```
+{"version": "2.2.0", "notes": "Check this PC and Copy support info in the sidebar."}
+```
+
+`notes` is optional; up to 240 characters of it are shown after the notice. Clear the folder
+in Check this PC to stop checking.
+
 ## Navigation and storage
 
 Tab moves through each window in reading order, top to bottom and left to right; read-only
@@ -191,7 +241,8 @@ action that fills them.
 
 If something unexpected goes wrong inside the app, the status bar says so, Session activity
 shows the details, and they are also written to `desktop-data/logs/errors.log` (kept under
-1 MB) for whoever supports you. If the app can't start at all, a message says so and the
+1 MB) for whoever supports you; **Copy support info** includes its last 100 lines, without
+client details. If the app can't start at all, a message says so and the
 details go to the same log (or, when that folder can't be written, to `Sentinel Workspace
 errors.log` in your temp folder).
 

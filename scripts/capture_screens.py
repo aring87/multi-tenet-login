@@ -11,6 +11,7 @@ only the app's own pixels are ever captured, whatever else is on the screen.
 import ctypes
 import json
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -35,6 +36,7 @@ from sentinel_app import desktop_backend as backend  # noqa: E402
 from sentinel_app import catalog_page, rule_builder_page  # noqa: E402
 from sentinel_app import ui_kit as kit  # noqa: E402
 from sentinel_app import advice  # noqa: E402
+from sentinel_app import support_tools as support  # noqa: E402
 from sentinel_app.repository_catalog import catalog  # noqa: E402
 from sentinel_app.gov_onboarding import GOV_CLOUD  # noqa: E402
 from sentinel_app.gov_onboarding_dialog import GovOnboardingDialog  # noqa: E402
@@ -182,6 +184,30 @@ class Session:
 
 def fail_github(self, repository, progress=None):
     raise RuntimeError("GitHub read failed (HTTP 404): repository not found or no access.")
+
+
+# Check this PC and Copy support info: the tools' answers, so Azure CLI and GitHub CLI never run, and an
+# update folder that is never opened.
+SHARE = "\\\\fileserver\\SOC\\Sentinel Workspace"
+LATEST = dict(version="2.2.0", notes="Check this PC and Copy support info in the sidebar.")
+TOOL_ANSWERS = {("version", "--output", "json"): (0, '{"azure-cli": "2.79.0"}', ""),
+                ("--version",): (0, "gh version 2.63.0 (2024-11-27)\n", ""),
+                ("auth", "status", "--hostname", "github.com"):
+                    (1, "", "You are not logged into any GitHub hosts. To log in, run: gh auth login\n")}
+TOOLS = {"az": "C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\wbin\\az.cmd", "gh": "C:\\Program Files\\GitHub CLI\\gh.exe"}
+SAMPLE_ERRORS = """2026-11-08T09:12:03  Sentinel Workspace 2.1.0
+Traceback (most recent call last):
+  File "sentinel_app\\desktop_app.py", line 1281, in dispatch
+    data()
+  File "sentinel_app\\rules_page.py", line 210, in loaded
+    self.render()
+KeyError: 'Brute force against Entra ID accounts'
+"""
+
+
+def answer_tool(args, timeout, env=None):
+    code, out, err = TOOL_ANSWERS[tuple(args[1:])]
+    return subprocess.CompletedProcess(args, code, out, err)
 
 
 def main():
@@ -336,6 +362,24 @@ def main():
                                 "“Brute force against Entra ID accounts” were saved. Restore the copy kept on "
                                 "02 Nov 2026 at 14:20?", tone="info", icon="help", ok="Restore", cancel="Discard")
     shot(restore.window, "38-dialog-restore"); restore.window.destroy()
+
+    # ---- Support tools: the update notice on Connect, Check this PC and Copy support info
+    with patch.object(support, "_run", answer_tool), patch.object(support.shutil, "which", TOOLS.get), \
+         patch.object(support, "read_latest", lambda folder: dict(LATEST)), tempfile.TemporaryDirectory() as logs:
+        app.settings["update_folder"] = SHARE
+        app.show_page("connect"); app.update_checked(SHARE, dict(LATEST), None); settle(root)
+        shot(root, "39-connect-update-notice")
+        with patch.object(threading.Thread, "start", lambda thread: None):  # Caught while it checks.
+            check = app.open_check_pc()
+        shot(check.window, "40-dialog-check-pc-checking")
+        support.run_checks(data, SHARE, report=check.show); check.finished()
+        shot(check.window, "41-dialog-check-pc-results")
+        logged, app.error_log = app.error_log, Path(logs) / "errors.log"
+        app.error_log.write_text(SAMPLE_ERRORS, encoding="utf-8")
+        info = app.support_info_dialog(app.support_info([check.checks[key] for key, _ in support.CHECKS]), check.window)
+        shot(info.window, "42-dialog-support-info"); info.window.destroy(); check.window.destroy()
+        app.error_log = logged
+        del app.settings["update_folder"]; app.check_for_update()
 
     # ---- A large window (the shots above are at the smallest size the app allows)
     app.toggle_ids(True)  # The workspace IDs, opened.

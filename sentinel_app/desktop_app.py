@@ -28,14 +28,18 @@ from .rules_page import CopyValues, RulesPage
 from .catalog_page import CatalogPage
 from .drift_page import DriftPage
 from .rule_builder_page import RuleBuilderPage
+from . import support_tools as support
+from .support_dialog import CheckDialog
 from .signin_window import create_handoff
 from .desktop_backend import (BASE, DATA, Session, Stop, require, guid, validate_tenant_hint, CYBERQP_PORTALS)
 from .gov_onboarding import GOV_CLOUD
 from .gov_onboarding_dialog import GovOnboardingDialog
 
-# Only the GitHub repository is edited here. Any other keys found in an existing
-# settings.json (the command-line onboarding tools keep theirs there) are preserved verbatim.
+# The GitHub repository is edited on Connect, and update_folder in Check this PC (save_update_folder).
+# Any other keys found in an existing settings.json (the command-line onboarding tools keep theirs
+# there) are preserved verbatim.
 SETTINGS_KEYS = ("github_owner", "github_repo")
+UPDATE_CHECK_DELAY_MS = 500  # After start: latest.json in the update folder is read on a worker thread.
 
 # Page keys in notebook order, with navigation and header copy.
 PAGES = ("connect", "rules", "builder")
@@ -239,6 +243,7 @@ class App:
         self.signin_cancel = None
         self.signin_window = "your browser"  # Where Microsoft asks the analyst to finish signing in.
         self.auth_recovery_attempts = set()
+        self.support_collecting = False  # Copy support info is running its checks.
         self.build()
         remembered = self.ui_state.get("client")
         if isinstance(remembered, str) and any(c["name"] == remembered for c in self.clients):
@@ -250,6 +255,7 @@ class App:
         if "/" in self.github_repository():
             self.root.after(300, self.rule_builder.check_github)
         self.root.after(EVENT_POLL_MS, self.poll)
+        if self.update_folder(): self.root.after(UPDATE_CHECK_DELAY_MS, self.check_for_update)
         self.root.after(600, self.rule_builder.offer_recovery)  # Unsaved builder work from a crash, once.
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         # Windows signing out or restarting: Tk turns WM_QUERYENDSESSION into WM_SAVE_YOURSELF, not a close.
@@ -528,6 +534,11 @@ class App:
 
         footer = tk.Frame(side, bg=c["sidebar"]); footer.pack(side="bottom", fill="x", padx=px(20), pady=(0, px(18)))
         for text, command, tip in (("Help & prerequisites", self.open_help, "The desktop guide and keyboard shortcuts (F1)"),
+                                   ("Check this PC", self.open_check_pc,
+                                    "Read-only checks of Azure CLI, GitHub CLI, the data folder and the app version"),
+                                   ("Copy support info", self.copy_support_info,
+                                    "Versions and recent errors for a support ticket, without client names, tenant IDs "
+                                    "or tokens"),
                                    ("Open app data folder", self.open_data_folder, "Clients, drafts and submissions saved on this PC"),
                                    ("About Sentinel Workspace", self.open_about, "Version, components and license")):
             item = kit.link(footer, text, command, c["sidebar_muted"], c["sidebar_ink"], c["sidebar"],
@@ -663,6 +674,110 @@ class App:
         kit.place_dialog(window, self.root, width=520)
         kit.modal(window, self.root, window.destroy, primary=buttons[-1], focus=buttons[-1])
 
+    # ---------------------------------------------------------------- support tools
+    def open_check_pc(self):
+        return CheckDialog(self)
+
+    def data_folder(self):
+        return DATA
+
+    def update_folder(self):
+        """The folder the team copies new versions to (settings.json update_folder), or ''."""
+        return self.settings.get("update_folder", "").strip()
+
+    def ask_update_folder(self, parent):
+        """Ask for the update folder over ``parent`` and save it. True once it was saved (or cleared)."""
+        def validate(values):
+            folder = values["folder"].strip().strip('"').strip()
+            if folder.casefold().endswith(support.LATEST_FILE): folder = str(Path(folder).parent)  # The file itself.
+            if folder and not Path(folder).is_absolute():
+                raise kit.FieldError("folder", "Enter the whole path, such as \\\\fileserver\\SOC\\Sentinel Workspace.")
+            return folder
+        folder = kit.FormDialog(parent, "Update folder",
+                                "The folder your team copies new versions of Sentinel Workspace to, such as a team "
+                                "share. The app reads latest.json there when it starts; it never downloads or "
+                                "installs anything.",
+                                [("folder", "Folder", self.update_folder(),
+                                  "Leave it blank to stop checking for newer versions.")],
+                                submit="Save", validate=validate).show()
+        return folder is not None and self.save_update_folder(folder, parent)
+
+    def save_update_folder(self, folder, parent=None):
+        value = dict(self.settings)
+        if folder: value["update_folder"] = folder
+        else: value.pop("update_folder", None)
+        try:
+            write_json(self.settingsfile, value)
+        except OSError as error:
+            kit.alert(parent or self.root, "Update folder", "The setting couldn't be saved.", details=str(error))
+            return False
+        self.settings = value
+        self.flash("Update folder saved." if folder else "Update folder cleared.")
+        self.check_for_update()
+        return True
+
+    def check_for_update(self):
+        """Read latest.json in the update folder on a worker thread (a team share can be slow, or
+        offline), then show or hide the update notice on Connect. Nothing is downloaded."""
+        folder = self.update_folder()
+        if not folder:
+            self.update_banner.grid_forget(); return
+        def run():
+            try: result = (support.read_latest(folder), None)
+            except Exception as error: result = (None, str(error) or type(error).__name__)
+            self.call_soon(lambda: self.update_checked(folder, *result))
+        threading.Thread(target=run, daemon=True).start()
+
+    def update_checked(self, folder, latest, error):
+        if folder != self.update_folder(): return  # Changed while it was being read.
+        if latest and support.newer(latest["version"]):
+            self.update_text.set(support.update_message(latest, folder))
+            self.update_banner.set_action("Open folder", lambda: self.open_path(folder, "Open update folder"))
+            if not self.update_banner.winfo_manager():
+                self.update_banner.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, kit.space("lg")))
+            self.log("Sentinel Workspace " + latest["version"] + " is available in " + folder + ".")
+            return
+        self.update_banner.grid_forget()
+        if error: self.log("Couldn't check for a newer version: in " + folder + ", " + error + ".")
+
+    def support_info(self, checks):
+        """The text Copy support info copies; see support_tools.support_text for what it leaves out."""
+        facts = support.system_facts(self.root.tk.call("info", "patchlevel"), DATA)
+        return support.support_text(facts, checks, self.error_log, self.clients)
+
+    def copy_support_info(self):
+        """Run the checks on a worker thread (Azure CLI takes a moment), then copy the support info."""
+        if self.support_collecting: return
+        self.support_collecting = True
+        self.status.set("Collecting support info…")
+        data, folder = DATA, self.update_folder()
+        def run():
+            try: result = (support.run_checks(data, folder), None)
+            except Exception as error: result = (None, error)
+            self.call_soon(lambda: self.support_collected(*result))
+        threading.Thread(target=run, daemon=True).start()
+
+    def support_collected(self, checks, error):
+        self.support_collecting = False
+        if error is not None:
+            if not self.busy: self.status.set("Ready.")
+            kit.alert(self.root, "Couldn't collect support info", "Select Copy support info again. If it keeps "
+                      "failing, send the details below instead.", details=str(error) or type(error).__name__)
+            return
+        self.show_support_info(self.support_info(checks))
+
+    def show_support_info(self, text, parent=None):
+        """Copy ``text`` and show it, so the analyst sees exactly what they are about to share."""
+        self.root.clipboard_clear(); self.root.clipboard_append(text)
+        self.flash("Support info copied.")
+        self.support_info_dialog(text, parent).show()
+
+    def support_info_dialog(self, text, parent=None):
+        return kit.MessageDialog(parent or self.root, "Support info copied",
+                                 "Paste it into your support ticket or message. It has the app and tool versions, the "
+                                 "checks and recent errors; client names, tenant IDs, accounts, tokens and rules are "
+                                 "left out.", details=text, tone="success")
+
     def paint_nav(self, index, hover=False):
         c = COLORS
         item = self.nav[index]
@@ -737,11 +852,14 @@ class App:
         c = COLORS
         page.columnconfigure((0, 1), weight=1, uniform="connect")
         gap = kit.space("sm")
+        # Row 0: a newer version in the update folder (update_checked); row 1: the welcome (refresh_first_run).
+        self.update_text = tk.StringVar()
+        self.update_banner = kit.Banner(page, self.update_text, "info")
         self.first_run_text = tk.StringVar()
         self.first_run_banner = kit.Banner(page, self.first_run_text, "info")
         # Two independent columns, so a tall card on one side leaves no gap on the other.
         left, right = ttk.Frame(page), ttk.Frame(page)
-        left.grid(row=1, column=0, sticky="new", padx=(0, gap)); right.grid(row=1, column=1, sticky="new", padx=(gap, 0))
+        left.grid(row=2, column=0, sticky="new", padx=(0, gap)); right.grid(row=2, column=1, sticky="new", padx=(gap, 0))
 
         signin = kit.Card(left, "Sign in", "Choose the client, then sign in with Microsoft.", icon="key")
         signin.frame.pack(fill="x", pady=(0, kit.space("lg")))
@@ -971,7 +1089,7 @@ class App:
         self.first_run_text.set("Welcome. Add a client and sign in with Microsoft to open its workspace. To submit "
                                 "rules for approval, also set your team's rule library.")
         self.first_run_banner.set_action("Set up rule library", self.show_github_settings)
-        self.first_run_banner.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, kit.space("lg")))
+        self.first_run_banner.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, kit.space("lg")))
 
     def show_github_settings(self):
         """Open Connect at the rule library card, ready to type."""

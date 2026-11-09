@@ -11,12 +11,15 @@ from tkinter import ttk
 COLORS = dict(
     canvas="#F4F6FA", card="#FFFFFF", raised="#F8FAFC", hover="#F1F5F9", stripe="#F6F8FB",
     line="#E2E8F0", line_strong="#CBD5E1", shadow="#DCE2EC",
-    ink="#0F172A", ink_2="#334155", muted="#64748B", subtle="#94A3B8", disabled="#A0AEC0",
+    # muted is the grey for text (AA contrast on card and canvas); subtle is for non-text marks only.
+    ink="#0F172A", ink_2="#334155", muted="#5B6778", subtle="#94A3B8", disabled="#A0AEC0",
     accent="#2563EB", accent_hover="#1D4ED8", accent_pressed="#1E40AF",
-    accent_soft="#EEF4FF", accent_line="#BFD3FE", accent_disabled="#9DB7F2",
+    accent_soft="#EEF4FF", accent_line="#BFD3FE",
+    # Selected table rows: stronger while the table has the keyboard, quieter when it does not.
+    selection="#D3E2FD", selection_inactive="#E2EAF8",
     success="#157F3C", success_soft="#E9F7EF",
     warning="#B45309", warning_soft="#FEF5E6",
-    danger="#B42318", danger_soft="#FEF1F0", danger_line="#F5C2BD",
+    danger="#B42318", danger_hover="#9A1D14", danger_pressed="#7F1810", danger_soft="#FEF1F0", danger_line="#F5C2BD",
     sidebar="#0B1526", sidebar_hover="#131F35", sidebar_active="#1A2A47", sidebar_line="#1B2940",
     sidebar_ink="#E7ECF4", sidebar_muted="#8593AA", sidebar_accent="#60A5FA", sidebar_success="#4ADE80",
 )
@@ -33,7 +36,7 @@ SPACE = dict(xs=4, sm=8, md=12, lg=16, xl=24, page=32)
 # Segoe Fluent Icons / Segoe MDL2 Assets share these code points.
 ICONS = dict(connect="", rules="", builder="", shield="", cloud="",
              key="", library="", info="", warning="", check="",
-             document="", activity="", help="")
+             document="", activity="", help="", search="")
 
 FONTS = {}
 _SCALE = [1.0]
@@ -52,17 +55,22 @@ def _resolve_fonts(root):
     families = set(tkfont.families(root))
     text = _first(families, "Segoe UI Variable Text", "Segoe UI", fallback="TkDefaultFont")
     display = _first(families, "Segoe UI Variable Display", "Segoe UI", fallback=text)
-    strong = _first(families, "Segoe UI Semibold", fallback=text)
-    strong_weight = "normal" if strong == "Segoe UI Semibold" else "bold"
+    small = _first(families, "Segoe UI Variable Small", fallback=text)
+    # GDI lists the variable font's named instances under names cut to 31 characters.
+    strong = _first(families, "Segoe UI Variable Text Semibold", "Segoe UI Semibold", fallback=text)
+    display_strong = _first(families, "Segoe UI Variable Display Semib", "Segoe UI Semibold", fallback=display)
+    # A real Semibold family is drawn at its own weight; only a plain family needs synthetic bold.
+    weight = lambda family: "normal" if "Semib" in family else "bold"
     mono = _first(families, "Cascadia Mono", "Consolas", "Courier New", fallback="TkFixedFont")
     icons = _first(families, "Segoe Fluent Icons", "Segoe MDL2 Assets", fallback="")
     FONTS.clear()
     FONTS.update(
-        body=(text, 10), small=(text, 9),
-        strong=(strong, 10, strong_weight), strong_small=(strong, 9, strong_weight),
-        eyebrow=(strong, 8, strong_weight), field=(strong, 9, strong_weight),
-        title=(display, 12, "bold"), page=(display, 19, "bold"), brand=(display, 12, "bold"),
-        stat=(display, 22, "bold"), mono=(mono, 9),
+        body=(text, 10), small=(small, 9),
+        strong=(strong, 10, weight(strong)), strong_small=(strong, 9, weight(strong)),
+        eyebrow=(strong, 9, weight(strong)), field=(strong, 9, weight(strong)),
+        title=(display_strong, 12, weight(display_strong)), page=(display_strong, 19, weight(display_strong)),
+        brand=(display_strong, 12, weight(display_strong)), stat=(display_strong, 22, weight(display_strong)),
+        mono=(mono, 9),
         icon=(icons, 12) if icons else None, icon_large=(icons, 15) if icons else None,
         icon_hero=(icons, 26) if icons else None, icon_small=(icons, 10) if icons else None)
 
@@ -83,7 +91,7 @@ def configure_theme(root):
     for pattern, value in (("*TCombobox*Listbox.font", font_spec(f["body"])),
                            ("*TCombobox*Listbox.background", c["card"]),
                            ("*TCombobox*Listbox.foreground", c["ink"]),
-                           ("*TCombobox*Listbox.selectBackground", c["accent_soft"]),
+                           ("*TCombobox*Listbox.selectBackground", c["selection"]),
                            ("*TCombobox*Listbox.selectForeground", c["ink"]),
                            ("*TCombobox*Listbox.borderWidth", 0),
                            ("*Text.background", c["card"]), ("*Text.foreground", c["ink"]),
@@ -126,32 +134,36 @@ def configure_theme(root):
             ("PageSubtitle", f["body"], c["muted"], c["card"]),
             ("Context", f["body"], c["muted"], c["canvas"])):
         style.configure(name + ".TLabel", font=font, foreground=color, background=background)
+    # A form field's hint becomes this while the field holds an error (FormDialog).
+    style.configure("ErrorHint.TLabel", font=f["small"], foreground=c["danger"], background=c["card"])
 
-    # Buttons: flat fills, 1px borders, a coloured border for keyboard focus.
+    # Buttons: flat fills, 1px borders, a coloured border for keyboard focus. Disabled buttons
+    # go quiet: bordered ones (Primary and Danger included) look like a disabled Secondary, and
+    # borderless ones (Ghost, Disclosure) keep their card fill and only grey their text.
     pad = (px(14), px(7))
-    for name, background, foreground, border, hover, pressed in (
-            ("TButton", c["card"], c["ink"], c["line_strong"], c["hover"], c["line"]),
-            ("Secondary.TButton", c["card"], c["ink"], c["line_strong"], c["hover"], c["line"]),
-            ("Primary.TButton", c["accent"], "#FFFFFF", c["accent"], c["accent_hover"], c["accent_pressed"]),
-            ("Ghost.TButton", c["card"], c["accent"], c["card"], c["accent_soft"], c["accent_line"]),
-            ("Disclosure.TButton", c["card"], c["ink_2"], c["card"], c["hover"], c["line"])):
+    for name, background, foreground, border, hover, pressed, quiet, focus in (
+            ("TButton", c["card"], c["ink"], c["line_strong"], c["hover"], c["line"], False, c["accent"]),
+            ("Secondary.TButton", c["card"], c["ink"], c["line_strong"], c["hover"], c["line"], False, c["accent"]),
+            ("Primary.TButton", c["accent"], "#FFFFFF", c["accent"], c["accent_hover"], c["accent_pressed"], False,
+             c["accent_pressed"]),
+            ("Danger.TButton", c["danger"], "#FFFFFF", c["danger"], c["danger_hover"], c["danger_pressed"], False,
+             c["danger_pressed"]),
+            ("Ghost.TButton", c["card"], c["accent"], c["card"], c["accent_soft"], c["accent_line"], True, c["accent"]),
+            ("Disclosure.TButton", c["card"], c["ink_2"], c["card"], c["hover"], c["line"], True, c["accent"])):
+        filled = foreground == "#FFFFFF"
         style.configure(name, padding=pad, background=background, foreground=foreground,
                         bordercolor=border, lightcolor=background, darkcolor=background,
-                        relief="raised", borderwidth=1, focusthickness=0, focuscolor=background,
+                        relief="raised", borderwidth=1, focusthickness=px(1) if filled else 0,
+                        focuscolor="#FFFFFF" if filled else background,
                         font=f["strong"], width=-6, anchor="w" if name.startswith("Disclosure") else "center")
+        off = c["card"] if quiet else c["raised"]
         style.map(name,
-                  background=[("disabled", c["raised"] if name != "Primary.TButton" else c["accent_disabled"]),
-                              ("pressed", pressed), ("active", hover)],
-                  lightcolor=[("disabled", c["raised"] if name != "Primary.TButton" else c["accent_disabled"]),
-                              ("pressed", pressed), ("active", hover)],
-                  darkcolor=[("disabled", c["raised"] if name != "Primary.TButton" else c["accent_disabled"]),
-                             ("pressed", pressed), ("active", hover)],
-                  foreground=[("disabled", c["disabled"] if name != "Primary.TButton" else "#FFFFFF")],
-                  bordercolor=[("disabled", c["line"] if name != "Primary.TButton" else c["accent_disabled"]),
-                               ("focus", c["accent"])])
-    # Keyboard focus on the filled primary button: a white inner ring inside a darker edge.
-    style.configure("Primary.TButton", focusthickness=px(1), focuscolor="#FFFFFF")
-    style.map("Primary.TButton", bordercolor=[("disabled", c["accent_disabled"]), ("focus", c["accent_pressed"])])
+                  background=[("disabled", off), ("pressed", pressed), ("active", hover)],
+                  lightcolor=[("disabled", off), ("pressed", pressed), ("active", hover)],
+                  darkcolor=[("disabled", off), ("pressed", pressed), ("active", hover)],
+                  foreground=[("disabled", c["disabled"])],
+                  # Keyboard focus: an accent border, or on a filled button a white inner ring inside a darker edge.
+                  bordercolor=[("disabled", c["card"] if quiet else c["line"]), ("focus", focus)])
     style.configure("Small.Secondary.TButton", padding=(px(10), px(4)), font=f["strong_small"])
     style.configure("Small.Primary.TButton", padding=(px(10), px(4)), font=f["strong_small"])
     style.configure("Small.Ghost.TButton", padding=(px(8), px(4)), font=f["strong_small"])
@@ -168,6 +180,8 @@ def configure_theme(root):
                   foreground=[("disabled", c["muted"])], arrowcolor=[("disabled", c["disabled"])],
                   selectbackground=[("readonly", c["card"]), ("!focus", c["line"])],
                   selectforeground=[("readonly", c["ink"])])
+    # A search box: room on the left for the magnifier glyph that kit.placeholder(search=True) draws.
+    style.configure("Search.TEntry", padding=(px(32), px(6)))
 
     for name in ("Error.TEntry", "Error.TCombobox", "Error.TSpinbox"):
         style.configure(name, bordercolor=c["danger"], lightcolor=c["danger_line"])
@@ -186,15 +200,21 @@ def configure_theme(root):
                   lowerbordercolor=[("selected", c["accent"]), ("focus", c["accent"])])
 
     # Tables.
-    row = max(px(34), int(tkfont.Font(root, font=f["body"]).metrics("linespace") * 2.2))
+    row = max(px(30), int(tkfont.Font(root, font=f["body"]).metrics("linespace") * 1.85))
     style.configure("Treeview", background=c["card"], fieldbackground=c["card"], foreground=c["ink"],
                     rowheight=row, borderwidth=0, relief="flat", font=f["body"])
     style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+    # Tables with a leading dot or checkbox column (kit.table marker/check): a flat list, so
+    # the first column holds just the centred image, with no expand indicator beside it.
+    style.layout("Lead.Treeview.Item", [("Treeitem.padding", {"sticky": "nswe", "children": [
+        ("Treeitem.image", {"sticky": ""})]})])
     style.configure("Treeview.Heading", background=c["raised"], foreground=c["muted"], font=f["strong_small"],
                     padding=(px(3), px(8)), relief="flat", borderwidth=0,
                     bordercolor=c["line"], lightcolor=c["raised"], darkcolor=c["line"])
     style.map("Treeview.Heading", background=[("active", c["hover"])], lightcolor=[("active", c["hover"])])
-    style.map("Treeview", background=[("selected", c["accent_soft"])], foreground=[("selected", c["ink"])])
+    # The selected row beats the stripe tag (checked on Tk 8.6.15), so striping needs no special case.
+    style.map("Treeview", background=[("selected", "focus", c["selection"]), ("selected", c["selection_inactive"])],
+              foreground=[("selected", c["ink"])])
 
     # Slim, arrowless scrollbars.
     for orient, sticky in (("Vertical", "ns"), ("Horizontal", "ew")):
@@ -221,6 +241,10 @@ def configure_theme(root):
                     bordercolor=c["line"], lightcolor=c["canvas"], font=f["strong_small"])
     style.map("TNotebook.Tab", background=[("selected", c["card"])], foreground=[("selected", c["ink"])],
               lightcolor=[("selected", c["card"])])
+
+    # Split views: the sash is a wide, invisible gap on the canvas, dragged by its cursor.
+    style.configure("TPanedwindow", background=c["canvas"])
+    style.configure("Sash", sashthickness=px(12), background=c["canvas"], gripcount=0)
 
     style.configure("Horizontal.TProgressbar", background=c["accent"], troughcolor=c["card"], borderwidth=0,
                     thickness=px(3), bordercolor=c["card"], lightcolor=c["accent"], darkcolor=c["accent"])

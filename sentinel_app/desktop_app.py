@@ -616,7 +616,7 @@ class App:
         frame, self.logbox = kit.text_area(log.body, 7, readonly=True,
                                            placeholder="Sign-in steps, GitHub one-time codes and any errors appear here.")
         frame.pack(fill="both", expand=True)
-        self.logbox.tag_configure("stamp", foreground=c["subtle"])
+        self.logbox.tag_configure("stamp", foreground=c["muted"])
         self.render_tenant()
         self.render_details()
         self.sync_connection()

@@ -121,6 +121,24 @@ class HistoryDialogTests(unittest.TestCase):
         self.dialog.table.toggle_sort("name"); self.assertEqual(names(), ["a", "b", "c"])
         self.dialog.render(); self.assertEqual(names(), ["a", "b", "c"])  # A redraw keeps the order.
 
+    def test_double_click_opens_a_row_but_not_a_heading(self):
+        save_request(self.data / "review-requests", request("Second rule"))
+        with patch.object(self.app, "work", side_effect=lambda title, task, done, **kwargs: done(task())):
+            self.dialog.refresh()
+        self.assertEqual(len(self.dialog.visible), 2)
+        self.root.deiconify(); self.dialog.window.deiconify(); self.root.update(); self.select(); self.root.update()
+        table = self.dialog.table
+        def double_click(x, y):
+            for kind in ("ButtonPress-1", "ButtonRelease-1") * 2:
+                if table.winfo_exists(): table.event_generate("<" + kind + ">", x=x, y=y)
+        with patch("sentinel_app.review_history.ReviewDialog") as open_dialog:
+            self.assertEqual(table.identify_region(table.winfo_width() - 60, 10), "heading")
+            double_click(table.winfo_width() - 60, 10)  # Last updated sorts twice; the selected row stays put.
+            open_dialog.assert_not_called(); self.assertTrue(self.dialog.window.winfo_exists())
+            x, y, width, height = table.bbox(table.selection()[0], "name")
+            double_click(x + width // 2, y + height // 2)
+        open_dialog.assert_called_once()
+
     def test_open_reuses_saved_request_and_preserves_unsaved_draft(self):
         self.builder.vars["name"].set("Unsaved analyst work")
         before = self.builder.form(); self.select()

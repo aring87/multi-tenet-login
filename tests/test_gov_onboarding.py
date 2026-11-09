@@ -327,6 +327,14 @@ class GovDialogTests(unittest.TestCase):
             self.assertTrue(run.call_args.args[2])
             self.assertEqual(dialog.pull_request, "https://github.com/isi-security/detection-as-code/pull/7")
             self.assertEqual(dialog.window.bind("<Return>"), "")
+            # Right after an apply nothing is blue (open the pull request next); new settings bring Preview back.
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Secondary.TButton", "Secondary.TButton"))
+            dialog.vars["label"].set("workspace-gcch2")
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Primary.TButton", "Secondary.TButton"))
+            dialog.vars["label"].set("workspace-gcch"); dialog.preview(); dialog.apply()
+            self.assertEqual(style(dialog.preview_button), "Secondary.TButton")
+            dialog.failed("STOPPED: Preview failed."); dialog.controls()  # As run_in_dialog's after= does.
+            self.assertEqual((style(dialog.preview_button), str(dialog.pr_button.cget("state"))), ("Primary.TButton", "normal"))
             dialog.close()
             dialog = dialog_module.GovOnboardingDialog(app)
             with patch.object(dialog.review, "see") as see:

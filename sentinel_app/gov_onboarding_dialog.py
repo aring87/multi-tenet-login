@@ -25,6 +25,7 @@ class GovOnboardingDialog:
         self.workspace = dict(app.workspace)
         self.reviewed = None
         self.pull_request = None
+        self.applied = False  # True only right after a successful apply, until settings change or a step fails.
         self.window = tk.Toplevel(app.root)
         self.window.title("Onboard GCC High client"); self.window.configure(bg=COLORS["card"])
         body = ttk.Frame(self.window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
@@ -91,6 +92,7 @@ class GovOnboardingDialog:
         self.notice.set(text); self.banner.tone(tone)
 
     def changed(self):
+        self.applied = False
         if self.reviewed is not None:
             self.reviewed = None
             self.say("Settings changed. Preview again before applying.", "warning")
@@ -101,9 +103,10 @@ class GovOnboardingDialog:
         self.apply_button.configure(state="normal" if self.reviewed else "disabled")
         self.pr_button.configure(state="normal" if self.pull_request else "disabled")
         self.close_button.configure(state="normal")
-        # Blue marks the next step: Preview, then Apply reviewed setup; none once applied (open the pull
-        # request next). Only the colour moves; Enter keeps doing nothing in this dialog.
-        lead = self.apply_button if self.reviewed else None if self.pull_request else self.preview_button
+        # Blue marks the next step: Preview, then Apply reviewed setup; none right after an apply (open the pull
+        # request next), and Preview again once settings change or a step fails. Only the colour moves; Enter
+        # keeps doing nothing in this dialog.
+        lead = self.apply_button if self.reviewed else None if self.applied else self.preview_button
         for button in (self.apply_button, self.preview_button):
             button.configure(style="Primary.TButton" if button is lead else "Secondary.TButton")
 
@@ -123,6 +126,7 @@ class GovOnboardingDialog:
             self.show(output)
             match = PR_LINK.search(output)
             if match: self.pull_request = match.group(1)
+            self.applied = apply
             if apply:
                 self.reviewed = None
                 self.say(summary + " Merge it, then run preview for the new target on main.", "success")
@@ -137,7 +141,7 @@ class GovOnboardingDialog:
 
     def failed(self, error):
         """Show the output with the reason at its end in red and scrolled into view, and name it in the banner."""
-        self.reviewed = None
+        self.reviewed = None; self.applied = False
         self.show(error)
         lines = error.split("\n")  # As the text area counts lines.
         # gov_run ends a stopped plan with 'STOPPED: <reason>' and any advice; other errors are all reason.

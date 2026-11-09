@@ -39,10 +39,11 @@ class WorkflowHistoryDialog:
         self.notice = tk.StringVar(value="Loading saved requests…")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
         # Shown between the banner and the buttons while the selected request has run receipts, so the
-        # details keep their room (selected()).
+        # details keep their room (selected()). A fixed two rows (more scroll), so arrowing through requests
+        # with one batch or three doesn't make the list above grow and shrink.
         self.runs_frame, self.runs, _ = kit.table(body, (("batch", "Batch", 60, False), ("run", "Run ID", 105, False),
                                                          ("state", "Last checked result", 465, True),
-                                                         ("checked", "Checked (UTC)", 180, False)), height=1)
+                                                         ("checked", "Checked (UTC)", 180, False)), height=2)
         self.runs_label = ttk.Label(body, text="Runs", style="Section.TLabel")
         frame, self.table, self.empty = kit.table(body, (("mode", "Type", 75, False), ("rule", "Rule", 190, True),
                                                          ("repo", "Library", 180, True), ("clients", "Workspaces", 90, False),
@@ -132,7 +133,6 @@ class WorkflowHistoryDialog:
                     lines.append("No confirmed run ID. Check GitHub Actions before assuming the request failed; do not retry blindly.")
             text = "\n".join(lines)
         count = len(self.runs.get_children())
-        self.runs.configure(height=max(1, min(3, count)))
         if count and not self.runs_frame.winfo_manager():
             self.runs_frame.pack(side="bottom", fill="x", before=self.banner)
             self.runs_label.pack(side="bottom", anchor="w", pady=(px(10), px(6)), before=self.banner)

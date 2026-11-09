@@ -64,7 +64,7 @@ class WorkflowHistoryDialogTests(unittest.TestCase):
     def test_selected_request_shows_targets_inputs_and_original_revision(self):
         self.assertFalse(self.dialog.runs_frame.winfo_manager())  # The details have the room until there are runs.
         self.select();text=self.dialog.detail.get('1.0','end')
-        self.assertTrue(self.dialog.runs_frame.winfo_manager());self.assertEqual(int(self.dialog.runs.cget('height')),1)
+        self.assertTrue(self.dialog.runs_frame.winfo_manager());self.assertEqual(int(self.dialog.runs.cget('height')),2)
         self.assertIn('example-primary',text);self.assertIn('"mode": "preview"',text)
         self.assertIn('a'*40,text);self.assertEqual(len(self.dialog.runs.get_children()),1)
 

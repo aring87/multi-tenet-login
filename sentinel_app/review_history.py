@@ -142,7 +142,9 @@ class ReviewHistoryDialog:
         kit.link_search(self.search_box, self.table)
         self.search.trace_add("write", self.filter)
         self.table.bind("<<TreeviewSelect>>", self.selection_changed)
-        self.table.bind("<Double-1>", lambda event: self.open_selected())
+        # Only a double-click on a row opens it; one on a heading just sorts twice.
+        self.table.bind("<Double-1>", lambda event: self.table.identify_region(event.x, event.y) in ("cell", "tree")
+                        and self.open_selected())
         self.window.bind("<F5>", lambda event: self.refresh())
         kit.place_dialog(self.window, self.app.root, 980, 660, 760, 420)
         kit.modal(self.window, self.app.root, self.close, primary=self.open_button, focus=self.search_box)

@@ -38,9 +38,8 @@ from the taskbar.
    state when it isn't Enabled, and a shortened ID. Workspaces refresh when the
    subscription changes. After sign-in the app picks the subscription and workspace you
    used last for that client (remembered on this PC), or else the default subscription and
-   its first workspace. **Copy details**, **View analytics rules** (the one blue button
-   once you are connected) and, for Azure Government, **Onboard GCC High…** sit right
-   under the lists. **+ Show workspace IDs** opens the tenant, subscription, resource group,
+   its first workspace. **Copy details** and **View analytics rules** (the one blue button
+   once you are connected) sit right under the lists. **+ Show workspace IDs** opens the tenant, subscription, resource group,
    workspace name and workspace ID (the app remembers whether it is open); right-click an
    ID to copy just that one, or use **Copy details** for all of them. **Refresh** beside
    each list asks Azure again (for example after access was just granted), and **Can't see
@@ -122,6 +121,10 @@ GitHub** opens its pull request.
 GCC High tenants live in Azure Government, which commercial Lighthouse can't reach, so each
 one gets its own pair of pipeline app registrations inside the client's tenant.
 
+This is held back until policy allows it: **Onboard GCC High…** and this section appear only
+when `desktop-data/settings.json` has `"gcc_high_onboarding": "on"`. Signing in to a GCC High
+tenant works either way.
+
 1. Activate the client's JIT Global Administrator account in CyberQP. In the client's Entra
    admin center (entra.microsoft.us) turn on **Properties > Access management for Azure
    resources** so the account can grant roles.
@@ -151,7 +154,7 @@ Tab moves through each window in reading order, top to bottom and left to right;
 boxes such as Session activity and this guide are Tab stops too, so the arrow and Page keys
 scroll them. Enter/Space activates a focused sidebar item or option, and the arrow keys move
 within a view switch. Dialogs close with Esc; Enter presses the blue button, except that it
-never starts a deployment or applies GCC High setup. Pages scroll at smaller window sizes,
+never starts a deployment or a setup that changes a client tenant. Pages scroll at smaller window sizes,
 smoothly with a touchpad. The window always fits the screen's work area at any display
 scaling (it opens maximised when the default size doesn't fit), reopens where you left it on
 whichever monitor that was, and remembers whether it was maximised, even when it is closed
@@ -196,7 +199,7 @@ folder can't be written (for example under Program Files).
 - In a search box, **Enter** or **Down** moves to the first result and **Esc** clears the search.
 - In the client list on Connect, type the first letters of a name to choose that client.
 - In a dialog, **Enter** presses the blue button (a focused button presses itself) and **Esc**
-  closes it. Review deployment and Onboard GCC High never start anything from Enter, and
+  closes it. Dialogs that deploy or change a client tenant never start anything from Enter, and
   Enter in a dialog's client list or search box presses nothing.
 - Right-click a text box for Cut, Copy, Paste and Select all, a list row for its copy actions,
   or an ID in a details panel to copy it.

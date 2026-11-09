@@ -114,6 +114,18 @@ def markdown_blocks(source):
     return blocks
 
 
+GCC_HIGH_SECTION = "## Onboard a GCC High client"
+
+
+def without_section(source, heading):
+    """The guide without one '## ' section (its heading up to the next '## ' heading)."""
+    kept, skipping = [], False
+    for line in source.splitlines(keepends=True):
+        if line.startswith("## "): skipping = line.strip() == heading
+        if not skipping: kept.append(line)
+    return "".join(kept)
+
+
 def render_markdown(text, source):
     """Show the guide's Markdown in a Text widget: headings, bullets, **bold**, `code`, code blocks and
     links (web links open in the browser)."""
@@ -333,6 +345,11 @@ class App:
         skipped = [k for k, v in value.items() if not isinstance(v, str)]
         if skipped: self.startup_notes.append("Ignored settings that aren't text: " + ", ".join(skipped) + ".")
         return {k: v for k, v in value.items() if isinstance(v, str)}
+
+    def gcc_high_onboarding(self):
+        """Onboard GCC High… is held back until policy allows it: it shows only when settings.json has
+        "gcc_high_onboarding": "on". Signing in to a GCC High tenant is not affected."""
+        return self.settings.get("gcc_high_onboarding", "").strip().lower() in ("on", "true", "yes", "1")
 
     def save_settings(self):
         value = dict(self.settings)
@@ -562,7 +579,9 @@ class App:
     def open_help(self):
         """The desktop guide, in a window of its own (F1). It works in the packaged exe, where a .md file
         has no program to open it."""
-        return self.show_document("Help & prerequisites", BASE / "docs" / "DESKTOP-START-HERE.md")
+        return self.show_document("Help & prerequisites", BASE / "docs" / "DESKTOP-START-HERE.md",
+                                  edit=None if self.gcc_high_onboarding() else
+                                  (lambda source: without_section(source, GCC_HIGH_SECTION)))
 
     def open_data_folder(self):
         self.open_path(DATA, "Open app data folder")
@@ -574,12 +593,14 @@ class App:
             kit.alert(self.root, title, "Windows couldn't open it. It is here:", details=str(path) + "\n\n" + str(error),
                       tone="warning")
 
-    def show_document(self, title, path, markdown=True, parent=None):
+    def show_document(self, title, path, markdown=True, parent=None, edit=None):
         """A read-only viewer for one of the app's own documents, with Close and Esc. Over another
-        dialog (``parent``), that dialog gets the keyboard back when the viewer closes."""
+        dialog (``parent``), that dialog gets the keyboard back when the viewer closes. ``edit(source)``
+        may leave parts out before it is shown."""
         parent = parent or self.root
         try:
             source = path.read_text(encoding="utf-8")
+            if edit: source = edit(source)
         except OSError as error:
             kit.alert(self.root, title, "The document isn't available in this copy of the app.",
                       details=str(path) + "\n\n" + str(error), tone="warning")
@@ -1379,7 +1400,8 @@ class App:
         if not hasattr(self, "workspace_actions"): return
         for button in self.workspace_actions:
             button.configure(state="normal" if self.workspace and not self.busy else "disabled")
-        gov = bool(self.workspace) and getattr(self.session, "cloud", None) == GOV_CLOUD
+        gov = (bool(self.workspace) and getattr(self.session, "cloud", None) == GOV_CLOUD
+               and self.gcc_high_onboarding())
         if gov and not self.gov_button.winfo_manager():
             self.gov_row.pack(fill="x", pady=(px(10), 0), after=self.workspace_row); self.gov_button.pack(side="left")
         elif not gov and self.gov_button.winfo_manager():
@@ -1769,7 +1791,7 @@ class App:
         self.render_session()
 
     def open_gov_onboarding(self):
-        if self.busy or not self.workspace: return
+        if self.busy or not self.workspace or not self.gcc_high_onboarding(): return
         if "/" not in self.github_repository():
             kit.alert(self.root, "Onboard GCC High client", "Set and save the rule library (organization and repository) "
                       "first. The target pull request is opened there.", tone="info")

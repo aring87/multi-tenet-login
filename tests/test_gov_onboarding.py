@@ -293,6 +293,12 @@ class GovDialogTests(unittest.TestCase):
                 app.sync_connection(); root.update_idletasks()
                 self.assertFalse(app.gov_button.winfo_manager())
                 app.session.cloud = "AzureUSGovernment"
+                # Held back until policy allows it: hidden, and a no-op, unless settings.json turns it on.
+                app.sync_connection(); root.update_idletasks()
+                self.assertFalse(app.gov_button.winfo_manager())
+                with patch.object(ui, "GovOnboardingDialog") as opened:
+                    app.open_gov_onboarding(); opened.assert_not_called()
+                app.settings["gcc_high_onboarding"] = "on"
                 app.sync_connection(); root.update_idletasks()
                 self.assertTrue(app.gov_button.winfo_manager())
                 self.check_dialog(app)
@@ -300,6 +306,27 @@ class GovDialogTests(unittest.TestCase):
                 for timer in root.tk.call("after", "info"): root.after_cancel(timer)
                 root.destroy()
 
+
+    def test_help_leaves_out_gcc_high_onboarding_until_it_is_turned_on(self):
+        from sentinel_app import desktop_app as ui
+        guide = (Path(__file__).resolve().parent.parent / "docs" / "DESKTOP-START-HERE.md").read_text(encoding="utf-8")
+        trimmed = ui.without_section(guide, ui.GCC_HIGH_SECTION)
+        self.assertIn(ui.GCC_HIGH_SECTION, guide)
+        self.assertNotIn(ui.GCC_HIGH_SECTION, trimmed); self.assertNotIn("Onboard GCC High", trimmed)
+        self.assertIn("## Navigation and storage", trimmed)  # The sections after it stay.
+        with tempfile.TemporaryDirectory() as folder, patch.object(ui, "DATA", Path(folder)), \
+                patch.object(ui, "create_handoff", return_value=None):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = ui.App(root)
+                shown = []
+                with patch.object(ui, "render_markdown", lambda text, source: shown.append(source)):
+                    app.open_help().destroy()
+                    app.settings["gcc_high_onboarding"] = "on"; app.open_help().destroy()
+                self.assertNotIn("Onboard GCC High", shown[0]); self.assertIn(ui.GCC_HIGH_SECTION, shown[1])
+            finally:
+                for timer in root.tk.call("after", "info"): root.after_cancel(timer)
+                root.destroy()
 
     def check_dialog(self, app):
         from sentinel_app import gov_onboarding_dialog as dialog_module

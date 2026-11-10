@@ -1,161 +1,223 @@
-## Repository UI development pilot
-
-The desktop app has three sections: **Connect** (Microsoft sign-in and workspace discovery), **Rules** (live workspace rules and the team's rule library) and **Rule builder**. The Sentinel audit export and onboarding screens are not in the desktop app at present; onboarding remains available from the command line. See [pilot setup and limits](docs/REPOSITORY-PILOT.md). Install `requirements.txt` before starting the development app.
-
 # Sentinel Workspace
 
-## Discover workspace details without a tenant ID
+A Windows desktop app for SOC analysts who work in client Microsoft Sentinel workspaces. It
+signs in to a client tenant, finds its Log Analytics workspaces, reads the live analytics
+rules, browses the team's detection library on GitHub, and builds new or changed rules that go
+out only through a teammate's review. Current version: **2.2.0**.
 
-1. Start the desktop app. Azure CLI and Python must be installed; no terminal commands are needed during use. GitHub CLI is only needed for the rule library and for submitting rules for approval.
-2. Use **Open CyberQP** if applicable and activate the client's JIT account there.
-3. Leave the tenant blank (select **Change** beside the saved tenant to edit it). Creating a saved client is optional.
-4. Click **Sign in with Microsoft** (**Sign in to <client>** when a client is chosen). Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one. If sign-in fails, the Sign in card explains why, with **Copy details** for the full message.
-5. The app selects the subscription and workspace you used last for this client, or else the default accessible subscription, and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which shows each subscription's name, its state when it isn't Enabled, and a shortened ID. Selecting another subscription automatically reloads its workspaces.
-6. Select the intended workspace if several are available. Select **+ Show workspace IDs** on the **Workspace** card to see **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**; right-click one to copy it. Workspace ID is the Log Analytics customer GUID, not the ARM resource path. The header names the client and workspace on every page.
-7. Click **Copy details** to copy the displayed values. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
+The app never deploys a rule directly: every change is a pull request in the private detection
+repository, and the repository's pipeline deploys it after review. It never asks for or stores
+passwords; Microsoft and GitHub CLI handle sign-in.
 
-**Cancel sign-in** stays available while Microsoft authentication is pending. If you
-close the browser tab or abandon sign-in, click this button in the app to stop its
-waiting Azure CLI process. Cancelled attempts cannot continue into workspace
-discovery, and the next sign-in uses a fresh app session. A sign-in command times
-out after five minutes. This does not close your browser or cancel deployments.
+## For analysts: install the app
 
-The external browser does not reliably notify Azure CLI when its tab is closed;
-the app therefore provides its own cancel action. Explicit Microsoft user-cancel
-responses are also handled as cancellation, without starting MFA recovery.
-Microsoft's [MSAL callback implementation](https://github.com/AzureAD/microsoft-authentication-library-for-python/blob/dev/msal/oauth2cli/authcode.py)
-waits for an authentication response, rather than tracking browser-tab lifetime.
+Use the packaged app; you do not need Python, Git or this repository.
 
-A sign-in to the Azure portal in your browser does not sign this app in; use **Sign in with Microsoft** to authorize discovery. The app never collects your password. Windows account window remains available for organizations that require broker-based authentication.
+1. Get **Sentinel Workspace 2.2.0.zip** from the team share and extract it somewhere you can
+   write, for example `Documents\Sentinel Workspace` (not Program Files). Keep the
+   `desktop-data` folder next to the exe: it holds the client list and the rule library
+   setting. Upgrading? Replace only `Sentinel Workspace.exe` and keep your `desktop-data`.
+2. Install Azure CLI (2.76 or newer) and GitHub CLI once, then reopen Terminal:
 
-Only resources accessible to the signed-in account are returned. No subscriptions means the account needs appropriate subscription access or the correct directory; no workspaces means check the selected subscription and workspace read access. Discovery lists Log Analytics workspaces and does not assert that Sentinel is enabled on each. Advanced permission/onboarding tools remain separate and require explicit review and apply.
+   ```text
+   winget install -e --id Microsoft.AzureCLI
+   winget install -e --id GitHub.cli
+   ```
 
+3. Double-click **Sentinel Workspace.exe**. If Windows shows *Windows protected your PC*,
+   select **More info**, then **Run anyway**.
 
-A local Windows desktop app for connecting to client Azure tenants, discovering Log Analytics workspaces, reviewing analytics rules and submitting detection rules for approval.
+Inside the app, **F1** opens the full guide ([docs/DESKTOP-START-HERE.md](docs/DESKTOP-START-HERE.md)),
+and **Check this PC** at the foot of the sidebar checks Azure CLI, GitHub CLI, GitHub sign-in
+and the data folder. The step-by-step team procedure is the SOP that comes in the zip.
 
 ## What it does
 
-- Saves client names and tenant IDs/domains in a local dropdown.
-- Opens Microsoft sign-in for an authorized Azure account, including JIT accounts.
-- Discovers accessible subscriptions and Log Analytics workspace details.
-- Lists every analytics rule in the selected workspace, enabled or disabled, with search, state filters, rule details and a ZIP export.
-- Browses clients, rules and assignments in your team's rule library, and opens library rules in the Rule builder.
-- Builds, checks and exports detection rules, and submits them for a teammate's approval as pull requests.
-- Deletes saved client entries without deleting cloud resources.
-- Keeps a recovery copy of unsaved Rule builder work and offers it after a crash; runs as a single copy, with in-app help (F1) and a list of keyboard shortcuts.
-- Command-line onboarding (`py -m sentinel_app.lighthouse_onboarding`) onboards external tenants through Azure Lighthouse. It requires a successful matching preview before Apply.
+- **Connect:** saved clients with their tenant ID or domain; Microsoft sign-in in the browser
+  or with the Windows account window, including JIT accounts; subscriptions and Log Analytics
+  workspaces discovered automatically, with the last workspace remembered per client. The
+  header shows the client and workspace on every page. Azure Government (GCC High) tenants
+  are detected and signed in to automatically.
+- **Rules > Workspace rules:** every analytics rule in the selected workspace, enabled or
+  disabled, with search, state filters, sorting, details beside the list and a ZIP export.
+- **Rules > Rule library:** clients, rules and assignments in the team's detection repository,
+  with assignment, preview and deployment requests that go through review.
+- **Rules > Drift:** what the library says the connected client should have against what is
+  live in its workspace: missing rules, different enabled state or severity, and live rules
+  the library doesn't assign.
+- **Rule builder:** five guided steps (Back/Next), **Run test query** against the connected
+  workspace (read-only, row-capped), a schema check that flags every problem at once, and
+  **Submit for approval**, which opens a ready-for-review pull request. **My submissions**
+  follows each one to merge. Unsaved work is autosaved and offered back after a crash.
+- **Support:** **Check this PC**, **Copy support info** (versions, checks and recent errors,
+  without client data) and an optional notice when a newer version is in a shared folder.
+  Unexpected errors are written to `desktop-data/logs/errors.log`.
+- Plain-language error messages with **Copy details**, keyboard shortcuts (see the guide),
+  one running copy at a time, and a window that fits any screen and display scaling.
 
-The app is independent of any employer, customer, or privileged-access provider. CyberQP is optional; activate access through your own provider if your organization requires it. The app starts with an empty client list and blank GitHub settings.
+Not in the desktop app: Sentinel audit evidence export and commercial client onboarding
+(Lighthouse onboarding is a command-line tool, below). **Onboard GCC High…** is held back
+until policy allows it: it appears only when `desktop-data/settings.json` contains
+`"gcc_high_onboarding": "on"`.
 
-Discovery does not require GitHub or CyberQP. Full onboarding requires a compatible private detection repository and GitHub plan supporting its environment policies.
+## Connect to a client workspace
 
-## Start on Windows
+1. Use **Open CyberQP** if your process needs it and activate the client's JIT account there.
+   Opening CyberQP does not sign the app in.
+2. Choose the client (or **+ New client…**). Its saved tenant shows beneath; select **Change**
+   to edit it, or leave it blank to discover every directory your account can reach.
+3. Select **Sign in to <client>** and complete sign-in and MFA with the client-authorized
+   account (choose **Use another account** if the wrong one is suggested). If sign-in fails,
+   the Sign in card explains why, with **Copy details** for the full message.
+4. Check the **Subscription** and **Log Analytics workspace**. **+ Show workspace IDs** shows
+   the tenant ID, subscription ID, resource group, workspace name and workspace ID (the Log
+   Analytics customer GUID); right-click one to copy it, or use **Copy details** for all.
+   Nothing is deployed or assigned during discovery.
 
-1. Download this repository using **Code > Download ZIP**, then extract it.
-2. Install Python 3.10 or newer with Tkinter, and Azure CLI 2.76 or newer.
-3. Install GitHub CLI if you want full Azure + GitHub onboarding.
-4. Double-click **Start-Sentinel.cmd**.
-5. Select **+ New client** and enter its name; the tenant GUID/domain can be left blank.
-6. Activate JIT access through your organization's normal process, then select **Sign in with Microsoft**.
-7. Workspaces load automatically after sign-in or changing the subscription. Select **↻ Refresh** beside Log Analytics workspace to reload them.
+**Cancel sign-in** stays available while Microsoft is waiting: the browser does not tell Azure
+CLI when its tab is closed, so the app stops its own waiting process. A sign-in times out after
+five minutes. Signing in to the Azure portal in your browser does not sign this app in.
 
-This development app requires PyYAML. Run `py -m pip install -r requirements.txt` before launching it. The desktop uses the installed Azure CLI for Microsoft authentication.
+Only resources the signed-in account can read are listed, and a listed workspace is not proof
+that Sentinel is enabled on it. If a subscription is missing, select **↻ Refresh** beside the
+list, or **Can't see a subscription?** and paste its ID from the Azure portal for a read-only
+report (account, tenant, cloud, subscription state and the Azure error). It grants nothing; share
+its results only with authorized people.
 
-## Build a Windows app (.exe)
+## Run from source
 
-`Build-Exe.cmd` in the repository root builds `dist\Sentinel Workspace.exe` with
-PyInstaller. It first runs `scripts\make_build_assets.py`, which draws the app icon
-(`assets\sentinel-workspace.ico`) and writes the Windows version resource
-(`assets\version-info.txt`) from the same brand module and version number the running app
-uses, so the icon in Explorer, the taskbar and the window title bar match and the file's
-Details tab shows the product name and version. The .exe keeps its data in a `desktop-data`
-folder beside it (or under `%LOCALAPPDATA%\Sentinel Workspace\desktop-data` when that folder
-can't be written). The guide, the templates and the LICENSE are bundled inside it, and it is built
-without UPX compression, which antivirus tools often flag. Azure CLI and GitHub CLI are
-still needed on each PC.
+For maintainers and developers:
 
-## Optional first-time Azure access
+1. Install Python 3.12 (3.10 or newer is the minimum; Tkinter is included with the
+   python.org installer), Azure CLI 2.76 or newer and GitHub CLI.
+2. Clone the repository (`git clone https://github.com/aring87/sentinel-workspace.git`), then
+   in its folder run `py -m pip install -r requirements.txt` (PyYAML and ruamel.yaml).
+3. Double-click **Start-Sentinel.cmd**, or run `py -m sentinel_app`.
 
-Azure access management (elevating a Global Administrator) and Contributor setup are
-onboarding steps and are no longer in the desktop app. Follow
-[the access-management steps](docs/APP-ONBOARDING.md#enable-azure-resource-access-during-first-time-sign-in)
-in Microsoft Entra ID when a client needs them.
+Run from source, the app keeps its data in `desktop-data/` in the repository and starts with
+an empty client list and blank GitHub settings.
 
-## Two setup modes
+## Build the exe and the analyst package
+
+`Build-Exe.cmd` installs PyInstaller and `requirements.txt`, then builds
+`dist\Sentinel Workspace.exe`. It first runs `scripts\make_build_assets.py`, which draws the
+icon (`assets\sentinel-workspace.ico`) and writes the Windows version resource
+(`assets\version-info.txt`) from the app's own brand module and version, so Explorer, the
+taskbar and the file's Details tab match the running app. The guide, the templates and the
+LICENSE are bundled inside the exe, and it is built without UPX compression, which antivirus
+tools often flag. Build from a clean checkout of a commit, so uncommitted work is not bundled.
+
+The exe keeps its data in a `desktop-data` folder beside it, or under
+`%LOCALAPPDATA%\Sentinel Workspace\desktop-data` when that folder can't be written.
+
+To make the analyst package, put these in a folder named `Sentinel Workspace` and zip it:
+
+- the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and the SOP as a PDF;
+- `desktop-data\clients.json`, copied from your own desktop-data folder;
+- `desktop-data\settings.json` holding only the rule library:
+  `{"github_owner": "isi-security", "github_repo": "detection-as-code"}`.
+
+Never include the rest of your `desktop-data` folder: `sessions` holds your Azure sign-in
+sessions, `review-requests` holds private rule content, and `access-history.json` and `runs`
+are your own records. `clients.json` has client names and tenant IDs (no credentials); share it
+only through approved channels.
+
+To have analysts' apps announce a new version, keep the package in one folder on the team share
+with a `latest.json` beside it, for example
+`{"version": "2.2.0", "notes": "Drift view, Run test query and Check this PC."}`. Analysts set
+that folder once in **Check this PC** > **Set update folder…**. The app only reads the file; it
+never downloads or installs anything.
+
+## Command-line onboarding
+
+Onboarding is not part of the desktop app. Two setup modes are available from the command line:
 
 | Mode | Purpose |
 |---|---|
-| Same-tenant registration | Verify existing group roles and pipeline membership, then open the client-target and dropdown PR without Azure changes |
+| Same-tenant registration | Verify existing group roles and pipeline membership, then open the client-target and dropdown pull request without Azure changes |
 | Lighthouse onboarding | Delegate the client subscription to existing managing-tenant groups and open a client-target pull request |
 
-This application repository is separate from your private detection-rule repository. In full onboarding, configure the private repository that contains your existing Sentinel pipeline.
+Lighthouse onboarding is `py -m sentinel_app.lighthouse_onboarding --help`. It uses two
+existing shared GitHub environments, each with an `AZURE_CLIENT_ID` variable, requires a
+successful matching preview before Apply, and does not create the Sentinel workspace,
+connectors, pipeline or analytics rules. See [the current onboarding guide](docs/APP-ONBOARDING.md).
+Azure access management (elevating a Global Administrator) and Contributor setup are
+onboarding steps done in Microsoft Entra ID:
+[the access-management steps](docs/APP-ONBOARDING.md#enable-azure-resource-access-during-first-time-sign-in).
 
-Lighthouse onboarding is a command-line tool (`py -m sentinel_app.lighthouse_onboarding`), not part of the desktop app. It uses two existing shared GitHub environments, each with an AZURE_CLIENT_ID variable. See [the current onboarding guide](docs/APP-ONBOARDING.md). It does not create the Sentinel workspace, connectors, detection pipeline, or analytics rules.
+This application repository is separate from the private detection repository, which holds the
+rules, the client targets and the deployment pipeline.
 
-## Documentation
+## Local data and privacy
 
-- [Desktop guide](docs/DESKTOP-START-HERE.md)
-- [Current onboarding](docs/APP-ONBOARDING.md)
-- [Same-tenant workspace registration](docs/SAME-TENANT-ONBOARDING.md)
-- [Legacy per-client identity onboarding](docs/FULL-ONBOARDING.md)
-- [Project file map](docs/PROJECT-MAP.md)
-- [Detection repository reference uploads](detection-as-code/README.md)
-- [Web-only procedure](docs/PORTAL-ONLY.md)
-- [Permissions-only Git Bash route](docs/GIT-BASH-QUICKSTART.md)
-- [Verification notes](docs/VALIDATION.md)
+Runtime data lives in `desktop-data/`, which Git ignores. Do not commit or share it.
 
-## Public examples
+| Item | Location |
+|---|---|
+| Saved clients | `clients.json` |
+| Settings: rule library (`github_owner`, `github_repo`), `update_folder`, `gcc_high_onboarding`, and the command-line tools' own keys | `settings.json` |
+| Per-client Azure CLI sessions | `sessions/` |
+| Rule drafts and the unsaved-rule recovery copy | `drafts/` |
+| Submissions and saved assignment, preview and deployment requests | `review-requests/`, `assignment-requests/`, `preview-requests/` |
+| Window layout, last workspace per client and view choices | `ui-state.json` |
+| Unexpected errors (kept under 1 MB) | `logs/errors.log` |
 
-Application examples use fictional resource names and placeholder or synthetic identifiers. Reference uploads in `detection-as-code/` must be reviewed and sanitized separately before publication. See [Privacy and publication notes](docs/PRIVACY.md).
+**Remove client…** (in the client **⋯** menu) removes only the saved entry; cloud resources and
+onboarding state are not changed. Signing out of the app's Azure session does not deactivate
+access at your privileged-access provider or sign out other browser or Windows sessions.
 
-## Local data and access
-
-Runtime data lives in desktop-data/, which is excluded from Git:
-- Saved client mappings.
-- Per-session Azure CLI configuration and authentication caches.
-- Onboarding state and generated parameter files.
-- Window layout and the last workspace used for each client (`ui-state.json`), rule drafts and their recovery copy (`drafts/`), and `logs/errors.log` for unexpected errors (capped at 1 MB).
-
-Do not commit or share this folder. The application has no password-entry field. Microsoft manages authentication through its normal broker/browser flow. Signing out of the app's Azure session does not deactivate access at your privileged-access provider or sign out other browser/Windows sessions.
-
-Use an approved onboarding account with the required Azure/Entra permissions. Runtime deployment identities do not receive RBAC administration privileges. Existing and inherited grants remain additive.
-
-**Remove client…** (in the client **⋯** menu) removes only the saved entry and clears the current selection. Cloud resources and onboarding state are not changed.
+The app is independent of any employer, customer or privileged-access provider; CyberQP is
+optional. Examples use fictional names and placeholder identifiers. Reference uploads in
+`detection-as-code/` must be reviewed and sanitized separately before publication; see
+[Privacy and publication notes](docs/PRIVACY.md).
 
 ## Development and checks
 
 ```text
-python -m unittest discover -s tests -p "test_*.py" -v
+py -m unittest discover -s tests -p "test_*.py"
+py scripts\capture_screens.py <folder>
 ```
 
-The tests simulate Azure/GitHub calls and do not contact a live tenant. Desktop tests require Tkinter and a Windows desktop-capable session. GitHub Actions runs the Python tests on Windows.
+The tests fake every Azure and GitHub call and never contact a tenant. Desktop tests need
+Tkinter and a Windows desktop session. GitHub Actions runs them on Windows for every push and
+pull request; layout tests give the app a large virtual screen (`tests/roomy_screen.py`), so
+they pass on the runner's small screen too. `capture_screens.py` drives the app through every
+screen and dialog with sample data, saves a PNG of each, and exits non-zero if any hidden Tk
+error occurs.
 
-Live authentication, tenant policies, API permissions, and a disabled-rule deployment pilot still require validation in an authorized environment. The app is an initial implementation, not a claim of production certification.
+Live sign-in, tenant policies, API permissions and Run test query still need checking in an
+authorized environment. The app is an initial implementation, not a claim of production
+certification.
 
 ## Repository layout
 
 | Location | Purpose |
 |---|---|
-| `Start-Sentinel.cmd` | Start the desktop app on Windows |
-| `sentinel_app/` | Application code, rule builder, Azure onboarding, GitHub previews and deployments |
-| `docs/` | User guides, project map, validation and privacy notes |
+| `Start-Sentinel.cmd` | Start the desktop app from source |
+| `Build-Exe.cmd` | Build `dist\Sentinel Workspace.exe` |
+| `sentinel_app/` | Application code (see the [project map](docs/PROJECT-MAP.md)) |
+| `docs/` | Desktop guide, onboarding guides, project map, validation and privacy notes |
 | `templates/` | Azure deployment templates |
 | `examples/` | Placeholder configuration files |
-| `scripts/` | Optional CLI launchers and workspace maintenance tools |
+| `scripts/` | Build assets, screenshots, CLI launchers and maintenance tools |
 | `tests/` | Offline tests and fixtures |
 | `detection-as-code/` | Sanitized private-repository reference uploads |
-| `desktop-data/` | Your local clients, settings and authentication state; ignored by Git |
+| `desktop-data/` | Your local clients, settings and sessions; ignored by Git |
 
-The launcher stays in the root. From a terminal in this folder, use
-`py -m sentinel_app` instead of `py desktop_app.py`. Saved clients and settings
-remain in the same `desktop-data/` folder. See the [project map](docs/PROJECT-MAP.md)
-for command-line entry points and upgrade steps. The private detection repository
-does not need changes for this reorganization.
+## Documentation
+
+- [Desktop guide](docs/DESKTOP-START-HERE.md) (also the in-app Help, F1)
+- [Repository catalog, rule builder, reviews and deployments](docs/REPOSITORY-PILOT.md)
+- [Current Lighthouse onboarding](docs/APP-ONBOARDING.md)
+- [Same-tenant workspace registration](docs/SAME-TENANT-ONBOARDING.md)
+- [Project file map and command-line entry points](docs/PROJECT-MAP.md)
+- [Verification notes](docs/VALIDATION.md)
+- [Rule schema provenance](docs/RULE-SCHEMA.md)
+- [Privacy and publication](docs/PRIVACY.md)
+- [Detection repository reference uploads](detection-as-code/README.md)
+- Older setup routes: [per-client identity onboarding](docs/FULL-ONBOARDING.md),
+  [permissions-only Git Bash](docs/GIT-BASH-QUICKSTART.md), [Azure portal only](docs/PORTAL-ONLY.md)
 
 ## License
 
 Licensed under the [MIT License](LICENSE).
-
-## Missing subscription troubleshooting
-
-After sign-in, use **↻ Refresh** beside the subscription list to request a fresh list including non-Enabled states. If a subscription is still absent, choose **Can't see a subscription?** and paste its subscription ID from Azure portal. The read-only diagnostic shows the app account, authentication tenant, cloud, subscription state, and workspace details or the Azure error. **Copy results** copies the diagnostic text. This does not grant permissions, change the selected deployment destination, or bypass access checks. Diagnostic results may contain client identifiers; share only with authorized recipients.

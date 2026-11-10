@@ -3,7 +3,7 @@
 A Windows desktop app for SOC analysts who work in client Microsoft Sentinel workspaces. It
 signs in to a client tenant, finds its Log Analytics workspaces, reads the live analytics
 rules, browses the team's detection library on GitHub, and builds new or changed rules that go
-out only through a teammate's review. Current version: **2.2.0**.
+out only through a teammate's review. Current version: **2.3.0**.
 
 The app never deploys a rule directly: every change is a pull request in the private detection
 repository, and the repository's pipeline deploys it after review. It never asks for or stores
@@ -13,7 +13,7 @@ passwords; Microsoft and GitHub CLI handle sign-in.
 
 Use the packaged app; you do not need Python, Git or this repository.
 
-1. Get **Sentinel Workspace 2.2.0.zip** from the team share and extract it somewhere you can
+1. Get **Sentinel Workspace 2.3.0.zip** from the team share and extract it somewhere you can
    write, for example `Documents\Sentinel Workspace` (not Program Files). Keep the
    `desktop-data` folder next to the exe: it holds the client list and the rule library
    setting. Upgrading? Replace only `Sentinel Workspace.exe` and keep your `desktop-data`.
@@ -126,7 +126,7 @@ only through approved channels.
 
 To have analysts' apps announce a new version, keep the package in one folder on the team share
 with a `latest.json` beside it, for example
-`{"version": "2.2.0", "notes": "Drift view, Run test query and Check this PC."}`. Analysts set
+`{"version": "2.3.0", "notes": "KQL check as you type in the Rule builder."}`. Analysts set
 that folder once in **Check this PC** > **Set update folder…**. The app only reads the file; it
 never downloads or installs anything.
 

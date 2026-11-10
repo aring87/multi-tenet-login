@@ -8,12 +8,13 @@ from tkinter import ttk, filedialog
 from pathlib import Path
 
 from . import advice
+from . import kql_check
 from . import query_runner
 from . import rule_drafts as drafts
 from . import rule_schema
 from . import ui_kit as kit
 from .auth_recovery import AuthenticationRequired
-from .desktop_theme import COLORS, FONTS, px
+from .desktop_theme import COLORS, FONTS, TONES, px
 from .gov_onboarding import GOV_CLOUD
 from .lighthouse_onboarding import Stop
 from .rule_review_dialog import ReviewDialog
@@ -32,7 +33,8 @@ AUTOSAVE_MS = 30000  # How often unsaved work is copied to the recovery draft.
 # In drafts/. Not a *.rule-draft.json name, so Open draft file… never lists it as a draft.
 RECOVERY_NAME = ".autosave.rule-recovery.json"
 TACTIC_COLUMNS = 3
-QUERY_LINES = 8
+QUERY_LINES = 7  # One line fewer than it could be: the KQL check line sits under the box.
+KQL_DELAY = 300  # Milliseconds after the last keystroke before the query is checked again.
 MAX_SCHEDULE = 14 * 86400
 # The patterns rule_schema.validate checks inline. That module is a reviewed copy pinned by the hash in
 # docs/RULE-SCHEMA.md, so they are repeated here; test_quick_checks_agree_with_the_full_check catches drift.
@@ -120,6 +122,10 @@ def collect_issues(form):
     if form.get("status") == "retired" and form.get("enabled"): add("Retired rules must be disabled")
     if not text("query"): add("query must be nonempty")
     elif text("query").endswith("|"): add("dangling pipe")
+    else:  # Only what KQL always rejects; the line under the query box shows the warnings too.
+        errors = kql_check.check(form["query"]).errors
+        if errors: found.setdefault("query", str(errors[0]) + (f" ({len(errors) - 1} more under the query box)"
+                                                               if len(errors) > 1 else ""))
     if form.get("kind") != "NRT":
         frequency, period = seconds_or_none(form.get("queryFrequency")), seconds_or_none(form.get("queryPeriod"))
         if frequency is None or not 300 <= frequency <= MAX_SCHEDULE:
@@ -284,7 +290,8 @@ class RuleBuilderPage:
         # The query keeps its natural height, so the schedule below it stays in view at the smallest window size.
         self.textbox(query, "Query (KQL)", "query", QUERY_LINES, label_hint="Runs against the client's workspace after approval",
                      font="mono", expand=False,
-                     placeholder="SigninLogs\n| where ResultType != 0\n| summarize Attempts = count() by UserPrincipalName")
+                     placeholder='SigninLogs\n| where ResultType != "0"\n| summarize Attempts = count() by UserPrincipalName')
+        self.kql_panel(query)
         self.schedule = ttk.Frame(query, style="Card.TFrame"); self.schedule.pack(fill="x")
         row = ttk.Frame(self.schedule, style="Card.TFrame"); row.pack(fill="x")
         row.columnconfigure((0, 1), weight=1, uniform="fields")
@@ -570,7 +577,9 @@ class RuleBuilderPage:
 
     def text_changed(self, text, key):
         if text.edit_modified():
-            text.edit_modified(False); self.changed(key)
+            text.edit_modified(False)
+            if key == "query": self.queue_kql()
+            self.changed(key)
 
     # ------------------------------------------------------------ state
     def form(self):
@@ -604,7 +613,7 @@ class RuleBuilderPage:
 
     def kind_changed(self, *args):
         if self.vars["kind"].get() == "NRT": self.schedule.pack_forget()
-        elif not self.schedule.winfo_manager(): self.schedule.pack(fill="x", after=self.texts["query"].master)
+        elif not self.schedule.winfo_manager(): self.schedule.pack(fill="x", after=self.kql_line)
 
     def render_state(self):
         if self.submitted_url: self.state_pill.set("Submitted", "success")
@@ -624,7 +633,7 @@ class RuleBuilderPage:
             text.delete("1.0", "end"); text.insert("1.0", form[key]); text.edit_modified(False); text.edit_reset()
         self.draft_path = path; self.source = source; self.source_uploaded = False; self.submitted_url = None
         self.saved = self.form(); self.loading = False
-        self.changed(); self.steps.select(0)
+        self.changed(); self.check_kql(); self.steps.select(0)
 
     def can_discard(self):
         return not self.dirty() or kit.confirm(self.app.root, "Discard changes?",
@@ -915,6 +924,51 @@ class RuleBuilderPage:
         elif isinstance(widget, tk.Frame):  # A segmented choice, or the tactic grid.
             widget.configure(highlightbackground=COLORS["danger" if error else "line"], highlightthickness=2 if error else 1)
 
+    # ------------------------------------------------------------ KQL check
+    def kql_panel(self, parent):
+        """A line under the query box from kql_check, updated as the query is typed, with each problem
+        underlined in the query itself (red for what KQL always rejects, amber for likely slips)."""
+        text = self.texts["query"]
+        text.master.pack_configure(pady=(0, px(4)))  # The line belongs to the box above it.
+        self.kql_job = None
+        self.kql_report = None
+        # width=1: the line wraps to the width it is given instead of widening the step.
+        self.kql_line = tk.Label(parent, text="", font=FONTS["small"], fg=COLORS["muted"], bg=COLORS["card"],
+                                 justify="left", anchor="w", bd=0, width=1)
+        self.kql_line.pack(fill="x", after=text.master, pady=(0, px(12)))
+        kit.wrap_to_parent(self.kql_line, minimum=px(160))
+        for severity, tone in (("error", "danger"), ("warning", "warning")):
+            options = dict(underline=True, background=COLORS[tone + "_soft"])
+            try: text.tag_configure("kql-" + severity, underlinefg=COLORS[tone], **options)
+            except tk.TclError: text.tag_configure("kql-" + severity, **options)  # Tk before 8.6.6.
+        text.tag_lower("kql-warning"); text.tag_raise("sel")
+        self.check_kql()
+
+    def queue_kql(self):
+        """Check the query once typing pauses, so each keystroke stays instant."""
+        root = self.app.root
+        if self.kql_job is not None: root.after_cancel(self.kql_job)
+        self.kql_job = root.after(KQL_DELAY, self.check_kql)
+
+    def check_kql(self):
+        """Check the query now: mark each problem in the box and say what was found under it."""
+        self.kql_job = None
+        text = self.texts["query"]
+        query = text.get("1.0", "end-1c")
+        for tag in ("kql-error", "kql-warning"): text.tag_remove(tag, "1.0", "end")
+        if not query.strip():
+            self.kql_report = None
+            self.kql_line.configure(text="The query is checked as you type: quotes, brackets, steps and table names.",
+                                    fg=COLORS["muted"])
+            return None
+        report = self.kql_report = kql_check.check(query)
+        for issue in report.issues:
+            start = f"{issue.line}.{issue.column}"
+            text.tag_add("kql-" + issue.severity, start, f"{start}+{issue.length}c")
+        line, tone = kql_check.summary(report)
+        self.kql_line.configure(text=line, fg=COLORS["muted"] if tone == "neutral" else TONES[tone][0])
+        return report
+
     # ------------------------------------------------------------ test query
     def test_panel(self, parent):
         """Run test query: the draft's KQL, read-only, against the workspace chosen on Connect (query_runner).
@@ -1007,6 +1061,8 @@ class RuleBuilderPage:
         try:
             if reason: raise Stop(reason)
             query_runner.capped_query(query)  # An empty query or a dangling | is explained without asking Azure.
+            errors = kql_check.check(query).errors  # So is anything else KQL always rejects.
+            if errors: raise Stop("Fix the query first. " + str(errors[0]))
         except Stop as error:
             self.test_failed(error, None, query); return
         session, workspace, seconds = self.app.session, dict(self.app.workspace), self.test_seconds()
@@ -1037,6 +1093,8 @@ class RuleBuilderPage:
         if tip and detail: text = tip + "\nLog Analytics: " + detail
         elif problem is None and detail: text = "Log Analytics didn't run the query: " + detail
         else: text = tip or str(error)
+        better = kql_check.suggest_table(kql_check.unresolved_name(detail))
+        if better: text += f"\nDid you mean {better}?"
         self.test_raw = getattr(error, "raw", None) or str(error)
         self.tested, self.test_outcome = (session or self.app.session, query, seconds, None), None
         self.test_pill.set("Didn't run", "danger")

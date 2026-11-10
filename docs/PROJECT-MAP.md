@@ -32,7 +32,7 @@ All the following modules live in `sentinel_app/`:
 | Analytics rule inventory and export | rules_page, rule_export |
 | Repository catalog | repository_catalog, catalog_page |
 | Reviewed client rule assignments | rule_assignments, assignment_dialog |
-| Guided rule builder | rule_builder_page, rule_drafts, rule_schema, query_runner (Run test query) |
+| Guided rule builder | rule_builder_page, rule_drafts, rule_schema, kql_check (the KQL check as you type), query_runner (Run test query) |
 | Drift between the library and the live workspace | rule_drift, drift_page |
 | Support tools: Check this PC, Copy support info, update notice | support_tools, support_dialog |
 | Rule reviews and history | repository_reviews, rule_review_dialog, review_history |

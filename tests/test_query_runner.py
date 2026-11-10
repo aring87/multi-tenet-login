@@ -330,13 +330,47 @@ class TestQueryPageTests(unittest.TestCase):
 
     def test_local_problems_are_explained_without_asking_azure(self):
         session = self.connect()
-        for query, words in (("", "The query is empty"), ("SigninLogs |", "ends with |")):
+        for query, words in (("", "The query is empty"), ("SigninLogs |", "ends with |"),
+                             ('SigninLogs\n| where UserPrincipalName == "open', "Fix the query first. Line 2, column 30: "
+                                                                                "This string isn't closed."),
+                             ("SigninLogs | where (ResultType", "This ( is never closed")):
             with self.subTest(query=query):
                 text = self.page.texts["query"]; text.delete("1.0", "end"); text.insert("1.0", query)
                 work = self.run_now()
                 work.assert_not_called()
                 self.assertIn(words, self.page.test_message.get())
         self.assertEqual(session.calls, [])
+
+    def test_likely_slips_still_run_and_a_missing_table_gets_a_suggestion(self):
+        missing = bad_request("SemanticError", "A semantic error occurred.", "SEM0100",
+                              {"message": "'where' operator: Failed to resolve table or column expression named 'SignLogs'"})
+        session = self.connect(Stop(missing))
+        kit_text = self.page.texts["query"]; kit_text.delete("1.0", "end"); kit_text.insert("1.0", "SignLogs\n| take 5")
+        self.run_now()
+        self.assertEqual(len(session.calls), 2)  # A warning doesn't stop the test: Log Analytics has the last word.
+        self.assertTrue(self.page.test_message.get().endswith(
+            "\nLog Analytics: 'where' operator: Failed to resolve table or column expression named 'SignLogs'"
+            "\nDid you mean SigninLogs?"))
+        self.connect(Stop(SEMANTIC)); self.run_now()  # A column name gets no table suggestion.
+        self.assertNotIn("Did you mean", self.page.test_message.get())
+
+    def test_the_line_under_the_query_box_follows_the_query(self):
+        page, text = self.page, self.page.texts["query"]
+        self.assertEqual(page.kql_line.cget("text"), "No problems found. Reads SyntheticEvents.")
+        text.delete("1.0", "end"); text.insert("1.0", "SignLogs\n| wher x == 1"); self.root.update()
+        self.assertIsNotNone(page.kql_job)  # Typing waits for a pause before checking.
+        page.check_kql()
+        self.assertEqual(page.kql_line.cget("text").splitlines(), [
+            "Line 1, column 1: SignLogs isn't a known table. Did you mean SigninLogs? (Ignore this for a custom table "
+            "or function.)", "Line 2, column 3: KQL has no wher step. Did you mean where?"])
+        self.assertEqual(str(page.kql_line.cget("fg")).lower(), ui.COLORS["warning"].lower())
+        self.assertEqual([str(index) for index in text.tag_ranges("kql-warning")], ["1.0", "1.8", "2.2", "2.6"])
+        text.insert("end", ' | extend a = "open'); page.check_kql()
+        self.assertEqual(str(page.kql_line.cget("fg")).lower(), ui.COLORS["danger"].lower())
+        self.assertEqual([str(index) for index in text.tag_ranges("kql-error")], ["2.27", "2.32"])
+        text.delete("1.0", "end"); page.check_kql()
+        self.assertEqual(text.tag_ranges("kql-warning") + text.tag_ranges("kql-error"), ())
+        self.assertIn("checked as you type", page.kql_line.cget("text"))
 
     def test_shift_enter_in_the_query_box_runs_the_test(self):
         session = self.connect()

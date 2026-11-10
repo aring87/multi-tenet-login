@@ -11,6 +11,7 @@ only the app's own pixels are ever captured, whatever else is on the screen.
 import ctypes
 import json
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,15 +26,17 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 try:
-    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-2))  # System aware, as main() is.
 except (AttributeError, OSError):
     pass
 
 import tkinter as tk  # noqa: E402
 from sentinel_app import desktop_app as ui  # noqa: E402
 from sentinel_app import desktop_backend as backend  # noqa: E402
-from sentinel_app import catalog_page, rule_builder_page  # noqa: E402
+from sentinel_app import catalog_page, query_runner, rule_builder_page  # noqa: E402
 from sentinel_app import ui_kit as kit  # noqa: E402
+from sentinel_app import advice  # noqa: E402
+from sentinel_app import support_tools as support  # noqa: E402
 from sentinel_app.repository_catalog import catalog  # noqa: E402
 from sentinel_app.gov_onboarding import GOV_CLOUD  # noqa: E402
 from sentinel_app.gov_onboarding_dialog import GovOnboardingDialog  # noqa: E402
@@ -42,7 +45,7 @@ from sentinel_app.assignment_dialog import AssignmentDialog  # noqa: E402
 from sentinel_app.preview_dialog import PreviewDialog  # noqa: E402
 from sentinel_app.workflow_history_dialog import WorkflowHistoryDialog  # noqa: E402
 from sentinel_app.review_history import ReviewHistoryDialog  # noqa: E402
-from test_desktop import WORKSPACE, TENANT, SUB  # noqa: E402
+from test_desktop import WORKSPACE, TENANT, SUB, WS  # noqa: E402
 from test_rule_drafts import valid_form  # noqa: E402
 
 user32, gdi32, dwm = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.dwmapi
@@ -144,21 +147,27 @@ RULES = [rule("r1", "Brute force against Entra ID accounts", True, "High"),
 
 
 def library():
-    rules = {"brute-force": ("Brute force against Entra ID accounts", "High", True),
-             "impossible-travel": ("Impossible travel sign-in", "Medium", True),
-             "inbox-forwarding": ("Suspicious inbox forwarding rule", "High", False)}
+    # The IDs match the sample workspace rules (RULES), so Drift has something to compare: acme's
+    # target is the connected workspace and raises one rule's severity; MFA fatigue isn't deployed yet.
+    rules = {"brute-force": ("r1", "Brute force against Entra ID accounts", "High", True),
+             "impossible-travel": ("r2", "Impossible travel sign-in", "Medium", True),
+             "inbox-forwarding": ("r7", "Suspicious inbox forwarding rule", "High", False),
+             "mfa-fatigue": ("44444444-1111-4111-8111-111111111111", "MFA fatigue push notifications", "Medium", True)}
     files = {}
-    for index, (slug, (name, severity, enabled)) in enumerate(rules.items(), start=1):
+    for slug, (rule_id, name, severity, enabled) in rules.items():
         files["rules/sentinel/" + slug + ".yml"] = json.dumps(dict(
-            id=f"{index}{index}{index}{index}{index}{index}{index}{index}-1111-4111-8111-111111111111",
-            name=name, severity=severity, enabled=enabled)).encode()
-    for client, workspace, enabled, assigned in (("acme", "acme-primary", True, ["brute-force", "impossible-travel"]),
-                                                 ("bluestone", "bluestone-sentinel", True, ["brute-force"]),
-                                                 ("fabrikam", "fabrikam-law", False, ["inbox-forwarding", "brute-force"]),
-                                                 ("northwind", "northwind-prod", True, [])):
-        target = dict(version=1, target=client + "-primary", client=client, enabled=enabled,
-                      azure=dict(workspace_name=workspace),
-                      rules=[dict(path="rules/sentinel/" + slug + ".yml") for slug in assigned])
+            id=rule_id, name=name, severity=severity, enabled=enabled)).encode()
+    acme = [dict(path="rules/sentinel/brute-force.yml"),
+            dict(path="rules/sentinel/impossible-travel.yml", overrides=dict(severity="High")),
+            dict(path="rules/sentinel/mfa-fatigue.yml")]
+    for client, azure, enabled, assigned in (
+            ("acme", dict(workspace_name=WORKSPACE["workspace_name"], workspace_id=WS), True, acme),
+            ("bluestone", dict(workspace_name="bluestone-sentinel"), True, ["brute-force"]),
+            ("fabrikam", dict(workspace_name="fabrikam-law"), False, ["inbox-forwarding", "brute-force"]),
+            ("northwind", dict(workspace_name="northwind-prod"), True, [])):
+        target = dict(version=1, target=client + "-primary", client=client, enabled=enabled, azure=azure,
+                      rules=[item if isinstance(item, dict) else dict(path="rules/sentinel/" + item + ".yml")
+                             for item in assigned])
         files["clients/" + client + "/workspace.yml"] = json.dumps(target).encode()
     snapshot = catalog(files, "isi-security/detection-as-code / main", "9f3c2a1", identity="aring")
     snapshot.update(repository="isi-security/detection-as-code", private=True, can_push=True,
@@ -173,8 +182,45 @@ class Session:
     account = {"user": {"name": "analyst@example.com"}}
 
 
+TEST_COLUMNS = ["TimeGenerated", "UserPrincipalName", "IPAddress", "ResultType", "Attempts"]
+TEST_SYNTAX_ERROR = ('ERROR: Bad Request({"error":{"message":"The request had some invalid properties","code":'
+                     '"BadArgumentError","innererror":{"code":"SyntaxError","message":"A recognition error occurred '
+                     'in the query.","innererror":{"code":"SYN0002","message":"Query could not be parsed at \'wher\' '
+                     'on line [2,2]","line":2,"pos":2,"token":"wher"}}}})')
+
+
+def test_rows():
+    people = ["adele.vance", "alex.wilber", "diego.siciliani", "grady.archie", "isaiah.langer", "megan.bowen"]
+    return [["2026-11-09T%02d:%02d:00Z" % (8 + index // 4, (index * 13) % 60), people[index % 6] + "@contoso.com",
+             "203.0.113.%d" % (20 + index * 7), "50126", str(24 + index * 3)] for index in range(12)]
+
+
 def fail_github(self, repository, progress=None):
     raise RuntimeError("GitHub read failed (HTTP 404): repository not found or no access.")
+
+
+# Check this PC and Copy support info: the tools' answers, so Azure CLI and GitHub CLI never run, and an
+# update folder that is never opened.
+SHARE = "\\\\fileserver\\SOC\\Sentinel Workspace"
+LATEST = dict(version="2.2.0", notes="Check this PC and Copy support info in the sidebar.")
+TOOL_ANSWERS = {("version", "--output", "json"): (0, '{"azure-cli": "2.79.0"}', ""),
+                ("--version",): (0, "gh version 2.63.0 (2024-11-27)\n", ""),
+                ("auth", "status", "--hostname", "github.com"):
+                    (1, "", "You are not logged into any GitHub hosts. To log in, run: gh auth login\n")}
+TOOLS = {"az": "C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\wbin\\az.cmd", "gh": "C:\\Program Files\\GitHub CLI\\gh.exe"}
+SAMPLE_ERRORS = """2026-11-08T09:12:03  Sentinel Workspace 2.1.0
+Traceback (most recent call last):
+  File "sentinel_app\\desktop_app.py", line 1281, in dispatch
+    data()
+  File "sentinel_app\\rules_page.py", line 210, in loaded
+    self.render()
+KeyError: 'Brute force against Entra ID accounts'
+"""
+
+
+def answer_tool(args, timeout, env=None):
+    code, out, err = TOOL_ANSWERS[tuple(args[1:])]
+    return subprocess.CompletedProcess(args, code, out, err)
 
 
 def main():
@@ -204,7 +250,7 @@ def main():
     app.signin_active = True; app.signin_cancel = threading.Event(); app.signin_handoff = object()
     app.cancel_signin_button.configure(state="normal"); app.signin_button.configure(state="normal")
     app.signin_panel.pack(fill="x", pady=(ui.px(12), 0), after=app.signin_main)
-    app.set_busy(True); app.status.set("Waiting for Microsoft sign-in…"); app.render_session()
+    app.set_busy(True, immediate=True); app.status.set("Waiting for Microsoft sign-in…"); app.render_session()
     app.log("Waiting for Microsoft sign-in…"); app.log("Sign-in window check: msedge.exe — Sign in to your account (sign-in window)")
     shot(root, "02-connect-signing-in")
     app.set_busy(False); app.finish_signin()
@@ -217,16 +263,17 @@ def main():
     app.wsbox.configure(values=[r["workspace_name"] + "  ·  " + r["resource_group"] for r in app.workspaces]); app.wsbox.current(0)
     app.workspace = dict(WORKSPACE)
     app.identity.set("Signed in: analyst@example.com\n" + app.workspace_rows(dict(tenantId=TENANT, id=SUB), app.workspace))
-    app.github_pill.set("Signed in", "success"); app.github_status.set("Signed in to GitHub as aring.")
+    app.github_pill.set("GitHub: aring", "success"); app.github_status.set("Signed in to GitHub as aring.")
     app.log("Signed in. Found 2 subscriptions."); app.log("Loading workspaces…")
     app.log("Found 2 workspaces in this subscription. Selected law-example-sentinel.")
     shot(root, "03-connect-connected")
     session.cloud = GOV_CLOUD; app.sync_connection()
-    app.status.set("Couldn't finish: AADSTS50076: Due to a configuration change made by your administrator, you must use "
-                   "multi-factor authentication.")
-    app.activity_badge.set("Stopped", "danger")
+    mfa = ("AADSTS50076: Due to a configuration change made by your administrator, or because you moved to a new "
+           "location, you must use multi-factor authentication to access the resource.")
+    app.status.set("Couldn't finish: " + advice.first_sentence(advice.friendly(mfa)))
+    app.activity_badge.set("Stopped", "danger"); app.show_signin_error(mfa, advice.lookup(mfa))
     shot(root, "04-connect-gcc-high-error")
-    app.status.set("Ready."); app.activity_badge.set("Ready", "success")
+    app.status.set("Ready."); app.activity_badge.set("Ready", "success"); app.hide_signin_error()
 
     # ---- Dialogs reached from Connect
     dialog = GovOnboardingDialog(app); shot(dialog.window, "05-dialog-gcc-high-empty")
@@ -240,13 +287,18 @@ def main():
     dialog.reviewed = dialog.config(); dialog.controls()
     dialog.say("GCC High onboarding plan ready. Nothing changed. Review the plan, then select Apply reviewed setup.", "success")
     shot(dialog.window, "06-dialog-gcc-high-previewed")
-    dialog.say("Stopped. The reason is at the end of the plan below.", "danger"); shot(dialog.window, "07-dialog-gcc-high-error")
+    dialog.failed(dialog.review.get("1.0", "end-1c").replace("\n\nNothing changed.", "") +
+                  "\nSTOPPED: Role assignment failed: AuthorizationFailed. The signed-in account can't assign roles on "
+                  "rg-example-sentinel.\nAsk the client's administrator for Owner or User Access Administrator, then "
+                  "select Preview again.")
+    dialog.controls(); shot(dialog.window, "07-dialog-gcc-high-error")
     dialog.window.destroy(); session.cloud = "AzureCloud"; app.sync_connection()
 
     form = kit.FormDialog(root, "New client", "Clients are saved on this PC only. They never contain credentials.",
                           [("name", "Client name", "", "Shown in the client list."),
                            ("tenant", "Tenant ID or verified domain", "", "Optional. Leave blank to discover after sign-in.")],
-                          submit="Add client", validate=lambda v: (_ for _ in ()).throw(ValueError("Enter a client name.")))
+                          submit="Add client",
+                          validate=lambda v: (_ for _ in ()).throw(kit.FieldError("name", "Enter a client name.")))
     shot(form.window, "08-dialog-new-client"); form.submit(); shot(form.window, "09-dialog-new-client-error"); form.window.destroy()
     app.open_about(); about = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
     shot(about, "10-dialog-about"); about.destroy()
@@ -255,21 +307,17 @@ def main():
     app.show_page("rules"); app.rule_view.set("workspace"); root.update()
     page = app.rules_page; page.reset(); shot(root, "11-rules-empty")
     page.summary.set("Loading rules from law-example-sentinel…"); page.empty.show("Loading rules from law-example-sentinel…", busy=True)
-    app.set_busy(True); app.status.set("Reading analytics rules…"); shot(root, "12-rules-loading"); app.set_busy(False)
+    app.set_busy(True, immediate=True); app.status.set("Reading analytics rules…"); shot(root, "12-rules-loading")
+    app.set_busy(False)
     page.rows = RULES; page.collection = dict(records=RULES, status="collected")
     page.loaded_session = session; page.loaded_workspace = dict(WORKSPACE)
-    page.build_cache(); page.render()
-    enabled = sum(v[1] == "Enabled" for v, _ in page.cache); disabled = sum(v[1] == "Disabled" for v, _ in page.cache)
-    for key, value in (("total", len(RULES)), ("enabled", enabled), ("disabled", disabled), ("unspecified", len(RULES) - enabled - disabled)):
-        page.tiles[key].set(str(value))
-    page.summary.set("10 rules from law-example-sentinel"); page.sync()
-    page.tree.selection_set("0"); page.selected(); root.update()
+    page.build_cache(); page.render(); page.label_filters()
+    page.summary.set("10 rules from law-example-sentinel"); page.sync(); root.update()
     shot(root, "13-rules-populated")
-    app.scroll_into_view(page.detail_card.frame); shot(root, "14-rules-detail")
-    app.page_canvases[1].yview_moveto(0)
-    page.notice.set("Couldn't read all the analytics rules: AuthorizationFailed: the client does not have authorization to "
-                    "perform action 'Microsoft.SecurityInsights/alertRules/read'")
-    page.banner.pack(fill="x", pady=(0, ui.px(12)), before=page.summary_label)
+    first = page.tree.get_children()[0]
+    page.tree.selection_set(first); page.tree.focus(first); page.selected(); root.update(); shot(root, "14-rules-detail")
+    page.show_notice(advice.friendly("AuthorizationFailed: the client does not have authorization to perform action "
+                                     "'Microsoft.SecurityInsights/alertRules/read'", workspace="law-example-sentinel"))
     page.summary.set("Some rules couldn't be read. 10 rules from law-example-sentinel.")
     shot(root, "15-rules-error"); page.banner.pack_forget()
     page.search.set("zzz"); shot(root, "16-rules-no-match"); page.search.set("")
@@ -279,49 +327,102 @@ def main():
     for _ in range(50):
         settle(root, 100)
         if not app.busy: break
-    cat.mode.set("GitHub repository"); cat.snapshot = None; cat.render(); cat.note.set("Select Refresh library to load this source.")
+    cat.mode.set("GitHub repository"); cat.invalidate(); cat.show_source(False)  # Saved, not read yet: folded.
     app.status.set("Ready."); app.activity_badge.set("Ready", "success"); shot(root, "17-library-empty")
-    cat.snapshot = library(); cat.render()
-    cat.note.set("Loaded from isi-security/detection-as-code today at 14:20 as aring. Select Refresh library to get the latest.")
+    snapshot = library(); cat.snapshot = snapshot; cat.view.set("Clients"); cat.render()
+    cat.loaded(snapshot, "isi-security/detection-as-code")
     cat.tree.selection_set("0"); cat.selected(); root.update(); shot(root, "18-library-clients")
     cat.view.set("Rules"); root.update(); cat.tree.selection_set("0"); cat.selected(); root.update(); shot(root, "19-library-rules")
-    cat.note.set("The rule library is unavailable: GitHub read failed (HTTP 404): repository not found or no access.")
-    cat.empty.show("The rule library couldn't be read. Check the source, then select Refresh library.", ("Refresh library", cat.load))
-    shot(root, "20-library-error"); cat.render()
+    cat.snapshot = None; cat.render()
+    cat.failed("GitHub read failed (HTTP 404): repository not found or no access.")
+    shot(root, "20-library-error")
+    cat.hide_error(); cat.snapshot = snapshot; cat.render(); cat.loaded(snapshot, "isi-security/detection-as-code")
     row = cat.visible[0]
     assign = AssignmentDialog(app, cat.snapshot, row); shot(assign.window, "21-dialog-assign"); assign.window.destroy()
     preview = PreviewDialog(app, cat.snapshot, row); shot(preview.window, "22-dialog-preview"); preview.window.destroy()
     history = WorkflowHistoryDialog(app); settle(root, 800); shot(history.window, "23-dialog-history"); history.window.destroy()
 
+    # ---- Rules: drift between the library's acme target and the workspace rules read above
+    app.rule_view.set("drift"); root.update(); drift = app.drift_page
+    different = next(iid for iid in drift.tree.get_children() if drift.entries[int(iid)]["kind"] == "different")
+    drift.tree.selection_set(different); drift.tree.focus(different); drift.selected(); root.update()
+    shot(root, "39-rules-drift")
+
     # ---- Rule builder
     app.show_page("builder"); root.update(); builder = app.rule_builder
-    builder.github_label.configure(text="Signed in to GitHub as aring"); builder.github_bar.pack_forget()
+    builder.github_checked("aring", None)
     shot(root, "24-builder-new")
     builder.load_form(valid_form()); builder.vars["name"].set("Brute force against Entra ID accounts")
     shot(root, "25-builder-basics-filled")
     builder.steps.select(1); root.update(); shot(root, "26-builder-query")
+    # Run test query, answered here with sample rows and a sample syntax error (no Azure call).
+    query = builder.texts["query"].get("1.0", "end-1c")
+    builder.test_passed(dict(columns=TEST_COLUMNS, rows=test_rows(), more=False, partial=None, elapsed=1.84,
+                             seconds=query_runner.test_window("Scheduled", builder.vars["queryPeriod"].get()),
+                             workspace_name=WORKSPACE["workspace_name"]), session, query)
+    root.update(); shot(root, "45-builder-test-query")
+    builder.test_failed(query_runner.failure(TEST_SYNTAX_ERROR), dict(WORKSPACE), query, session)
+    root.update(); shot(root, "46-builder-test-query-error")
+    builder.clear_test(); app.root.update(); app.page_canvases[2].yview_moveto(0)
+    app.status.set("Ready."); app.activity_badge.set("Ready", "success")  # Not the test's flash.
     builder.steps.select(2); root.update(); shot(root, "27-builder-mitre")
     builder.vars["name"].set(""); builder.validate(); root.update(); shot(root, "28-builder-error")
     builder.vars["name"].set("Brute force against Entra ID accounts"); builder.validate(); root.update()
     shot(root, "29-builder-review-checked")
-    builder.show_github_bar("You're not signed in to GitHub, so rules can't be submitted yet. You can still write and check rules.",
-                            "Sign in to GitHub", lambda: None)
-    shot(root, "30-builder-github-bar"); builder.github_bar.pack_forget()
+    builder.github_checked(None, "GitHub read failed. Run gh auth login")  # Not signed in: the toolbar says so.
+    shot(root, "30-builder-github-bar"); builder.github_checked("aring", None)
     review = ReviewDialog(builder); shot(review.window, "31-dialog-submit"); review.window.destroy()
     submissions = ReviewHistoryDialog(builder); settle(root, 800); shot(submissions.window, "32-dialog-my-submissions")
     submissions.window.destroy()
 
+    # ---- Help, a failed task, and the offer to restore unsaved builder work
+    help_window = app.open_help(); shot(help_window, "36-dialog-help"); help_window.destroy()
+    raw = "AuthorizationFailed: the client does not have authorization to perform action 'Microsoft.SecurityInsights/alertRules/read'"
+    alert = kit.MessageDialog(root, "Couldn't read analytics rules", advice.friendly(raw, workspace="law-example-sentinel"),
+                              details=raw, tone="danger")
+    shot(alert.window, "37-dialog-task-error"); alert.window.destroy()
+    restore = kit.MessageDialog(root, "Restore unsaved rule?", "Sentinel Workspace closed before your changes to "
+                                "“Brute force against Entra ID accounts” were saved. Restore the copy kept on "
+                                "02 Nov 2026 at 14:20?", tone="info", icon="help", ok="Restore", cancel="Discard")
+    shot(restore.window, "38-dialog-restore"); restore.window.destroy()
+
+    # ---- Support tools: the update notice on Connect, Check this PC and Copy support info
+    with patch.object(support, "_run", answer_tool), patch.object(support.shutil, "which", TOOLS.get), \
+         patch.object(support, "read_latest", lambda folder: dict(LATEST)), tempfile.TemporaryDirectory() as logs:
+        app.settings["update_folder"] = SHARE
+        app.show_page("connect"); app.update_checked(SHARE, dict(LATEST), None); settle(root)
+        shot(root, "41-connect-update-notice")
+        with patch.object(threading.Thread, "start", lambda thread: None):  # Caught while it checks.
+            check = app.open_check_pc()
+        shot(check.window, "42-dialog-check-pc-checking")
+        support.run_checks(data, SHARE, report=check.show); check.finished()
+        shot(check.window, "43-dialog-check-pc-results")
+        logged, app.error_log = app.error_log, Path(logs) / "errors.log"
+        app.error_log.write_text(SAMPLE_ERRORS, encoding="utf-8")
+        info = app.support_info_dialog(app.support_info([check.checks[key] for key, _ in support.CHECKS]), check.window)
+        shot(info.window, "44-dialog-support-info"); info.window.destroy(); check.window.destroy()
+        app.error_log = logged
+        del app.settings["update_folder"]; app.check_for_update()
+
     # ---- A large window (the shots above are at the smallest size the app allows)
+    app.toggle_ids(True)  # The workspace IDs, opened.
     root.geometry("1700x1100+20+10"); app.show_page("connect"); settle(root, 500); shot(root, "33-connect-wide")
     app.show_page("rules"); app.rule_view.set("workspace"); settle(root, 500); shot(root, "34-rules-wide")
+    app.rule_view.set("drift"); settle(root, 500); shot(root, "40-rules-drift-wide")
     app.show_page("builder"); settle(root, 500); shot(root, "35-builder-wide")
 
     for timer in root.tk.call("after", "info"):
         root.tk.call("after", "cancel", timer)
     root.destroy()
+    # A failing Tk callback only shows as 'Something went wrong' in a shot; print it here too.
+    log = data / "logs" / "errors.log"
+    errors = log.read_text(encoding="utf-8") if log.exists() else ""
     for p in patches: p.stop()
     temp.cleanup()
     print("Saved to", shots.folder.resolve())
+    if errors:
+        print("Unexpected errors during the capture:", errors, sep=chr(10), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

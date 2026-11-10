@@ -120,30 +120,37 @@ class ReviewHistoryDialog:
         self.banner = kit.Banner(body, self.notice); self.banner.pack(fill="x", pady=(0, px(12)))
         self.search = tk.StringVar()
         self.search_box = ttk.Entry(body, textvariable=self.search); self.search_box.pack(fill="x", pady=(0, px(10)))
-        kit.placeholder(self.search_box, self.search, "Search by rule, library or request ID")
+        kit.placeholder(self.search_box, self.search, "Search by rule, library or request ID", search=True)
         # Bottom-anchored controls are packed first so they always have room; the list takes what remains.
-        self.actions, buttons = kit.action_row(body, primary=("View changes", self.open_selected),
-                                               secondary=(("Open in GitHub", self.open_github), ("Refresh", self.refresh),
-                                                          ("Open from file…", self.open_file)),
-                                               close=("Close", self.close))
+        self.actions, buttons = kit.action_row(body, primary=("View changes", self.open_selected), close=("Close", self.close),
+                                               aux=(("Open in GitHub", self.open_github), ("Refresh", self.refresh),
+                                                    ("Open from file…", self.open_file)))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.open_button, self.github_button, self.refresh_button, self.file_button, self.close_button = buttons
+        self.open_button, self.close_button, self.github_button, self.refresh_button, self.file_button = buttons
         self.detail = tk.StringVar(value="Select a submission to see its details.")
-        kit.wrap_to_parent(ttk.Label(body, textvariable=self.detail, style="Hint.TLabel", justify="left", width=1),
-                           minimum=px(200)).pack(side="bottom", fill="x", pady=(px(10), 0))
+        detail_label = kit.wrap_to_parent(ttk.Label(body, textvariable=self.detail, style="Hint.TLabel", justify="left",
+                                                    width=1), minimum=px(200))
+        detail_label.pack(side="bottom", fill="x", pady=(px(10), 0))
         frame, self.table, self.empty = kit.table(body, (("name", "Rule", 250, True), ("repository", "Library", 170, False),
                                                         ("status", "Status", 300, True), ("modified", "Last updated", 125, False)),
-                                                  height=5)
+                                                  height=5, sort=self.order)
         frame.pack(fill="both", expand=True)
+        detail_label.lift(); self.actions.lift()  # Packed first to keep their room; Tab reaches them last.
         self.table.tag_configure("quiet", foreground=COLORS["muted"])
         kit.tooltip(self.refresh_button, "Read the saved submissions again and ask GitHub for their status (F5)")
-        self.search.trace_add("write", lambda *args: self.render())
+        # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.
+        self.filter = kit.debounce(self.window, 150, self.render)
+        for key in ("<Down>", "<Return>"): self.search_box.bind(key, lambda event: self.filter.flush(), add="+")
+        kit.link_search(self.search_box, self.table)
+        self.search.trace_add("write", self.filter)
         self.table.bind("<<TreeviewSelect>>", self.selection_changed)
-        self.table.bind("<Double-1>", lambda event: self.open_selected())
+        # Only a double-click on a row opens it; one on a heading just sorts twice.
+        self.table.bind("<Double-1>", lambda event: self.table.identify_region(event.x, event.y) in ("cell", "tree")
+                        and self.open_selected())
         self.window.bind("<F5>", lambda event: self.refresh())
         kit.place_dialog(self.window, self.app.root, 980, 660, 760, 420)
         kit.modal(self.window, self.app.root, self.close, primary=self.open_button, focus=self.search_box)
-        self.refresh()
+        self.set_enabled(True); self.refresh()
 
     def say(self, text, tone="info"):
         self.notice.set(text); self.banner.tone(tone)
@@ -162,6 +169,8 @@ class ReviewHistoryDialog:
         self.search_box.configure(state="normal" if enabled else "disabled")
         self.open_button.configure(state="normal" if enabled and row else "disabled")
         self.github_button.configure(state="normal" if enabled and row and row.get("pull_request") else "disabled")
+        # View changes leads only while a submission is selected; otherwise no button is blue.
+        kit.promote(self.window, *((self.open_button,) if enabled and row else (None, self.open_button)))
 
     def refresh(self):
         if self.app.busy: return
@@ -197,7 +206,19 @@ class ReviewHistoryDialog:
                                     self.close_button, self.search_box),
                           say=self.say, page="builder", progress=self.progress, after=lambda: self.set_enabled(True))
 
+    def order(self, key=None, descending=False):
+        """Sort the shown rows by a column (a heading click), or re-apply the current order after
+        render. Status sorts by its words, not the mark in front of them."""
+        if key is None:
+            if not self.table.sort_state: return
+            key, descending = self.table.sort_state
+        items = sorted(self.table.get_children(""), key=lambda item: kit.sort_value(self.visible[item][key]),
+                       reverse=descending)
+        for index, item in enumerate(items): self.table.move(item, "", index)
+        self.table.restripe()
+
     def render(self):
+        self.filter.cancel()
         self.table.delete(*self.table.get_children()); self.visible = {}
         term = self.search.get().strip().casefold()
         for index, row in enumerate(self.rows):
@@ -207,6 +228,7 @@ class ReviewHistoryDialog:
             status = STATUS_MARKS.get(row["status"], "•") + "  " + row["status"]
             self.table.insert("", "end", iid=item, values=(row["name"], row["repository"], status, row["modified"]),
                               tags=("quiet",) if row["status"] == "Closed without merging" else ())
+        self.order()
         if self.visible: self.empty.hide()
         elif self.rows: self.empty.show("No submissions match your search.", ("Clear search", lambda: self.search.set("")))
         else: self.empty.show("No submissions yet. Use Submit for approval in the Rule builder to send your first rule.")

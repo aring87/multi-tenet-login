@@ -11,48 +11,14 @@ from tkinter import ttk
 import webbrowser
 
 from . import ui_kit as kit
+from .advice import FRIENDLY, friendly  # noqa: F401  (FRIENDLY kept for older imports)
 from .desktop_theme import COLORS, FONTS, px
 from .repository_reviews import ReviewService, diff
 from .rule_drafts import validated_yaml
+from .rules_page import CopyValues
 
 STAGES = ("Check", "Submit", "Teammate approves", "Deployed")
 PULL_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)")
-
-# Plain-language guidance for the review errors analysts meet most often.
-# The original message is always kept in Session activity for engineers.
-FRIENDLY = (
-    ("already exists or its source is stale",
-     "This rule's file is already in the library, or the library changed since you opened the rule. "
-     "Use Edit existing rule in the Rule builder to start from the latest version."),
-    ("rule ID already exists",
-     "This rule is already in the library. Use Edit existing rule in the Rule builder to change it instead of adding a copy."),
-    ("original repository rule is missing",
-     "The rule you started from is no longer at that location in the library. Use Edit existing rule to open it again."),
-    ("needs write access",
-     "Your GitHub account can view the rule library but cannot submit to it. Ask a repository admin for write access."),
-    ("catalog is incomplete or invalid",
-     "Submissions are paused because some library files have problems. Ask an engineer to check "
-     "Rules > Rule library > Library issues."),
-    ("no file changes to submit",
-     "Nothing has changed compared with the library version of this rule."),
-    ("repository changed after preview",
-     "Someone updated the library while you were reviewing. Select Check again, then submit."),
-    ("private detection repository",
-     "That repository is not the private rule library. Check the repository under Where it will be saved."),
-    ("GitHub read failed", "Couldn't read the rule library with your GitHub account. Check that you are signed in "
-     "(Connect > Rule library > Sign in to GitHub) and have access to the repository."),
-    ("GitHub request failed", "GitHub did not accept the request. Check that you are signed in "
-     "(Connect > Rule library > Sign in to GitHub) and have write access to the repository."),
-    ("GitHub CLI is not installed", "GitHub CLI is not installed on this PC. Ask your administrator to install it."),
-    ("timed out", "GitHub took too long to answer. Check your connection, then try again."),
-)
-
-
-def friendly(message):
-    for needle, advice in FRIENDLY:
-        if needle.casefold() in message.casefold():
-            return advice
-    return message
 
 
 def pull_reference(url):
@@ -100,14 +66,14 @@ class ReviewDialog:
 
         self.notice = tk.StringVar()
         self.banner = kit.Banner(body, self.notice); self.banner.pack(fill="x", pady=(0, px(14)))
-        self.summary = kit.KeyValues(body, key_width=16); self.summary.pack(fill="x")
+        self.summary = CopyValues(body, key_width=16, copied=lambda key: self.app.flash(key + " copied."))
+        self.summary.pack(fill="x")
 
         self.actions, buttons = kit.action_row(body, primary=("Submit for approval", self.submit),
-                                               secondary=(("Check", self.prepare), ("Open in GitHub", self.open_link)),
-                                               close=("Close", self.close))
+                                               secondary=(("Check", self.prepare),), close=("Close", self.close),
+                                               aux=(("Open in GitHub", self.open_link),))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.submit_button, self.prepare_button, self.link_button, self.close_button = buttons
-        self.submit_button.configure(state="disabled"); self.link_button.configure(state="disabled")
+        self.submit_button, self.prepare_button, self.close_button, self.link_button = buttons
 
         where = ttk.Frame(body, style="Card.TFrame"); where.pack(side="bottom", fill="x", pady=(px(10), 0))
         self.where_body = ttk.Frame(where, style="Card.TFrame", padding=(0, px(8), 0, 0))
@@ -120,21 +86,23 @@ class ReviewDialog:
             entry = ttk.Entry(self.where_body, textvariable=variable); entry.pack(fill="x", pady=(0, px(10)))
             self.controls.append(entry)
 
-        kit.section_label(body, "Why is this changing?").pack_configure(pady=(px(14), px(4)))
-        ttk.Label(body, text="Your teammate reads this when approving. One or two sentences is enough.",
-                  style="Hint.TLabel").pack(anchor="w", pady=(0, px(6)))
+        # The hint and the legend sit beside their headings, so the comparison keeps its room in a
+        # window clamped to a small screen (150% on 1080p).
+        why = kit.section_label(body, "Why is this changing?"); why.pack_configure(pady=(px(14), px(6)))
+        ttk.Label(why, text="Your teammate reads this when approving. One or two sentences is enough.",
+                  style="Hint.TLabel").pack(side="right", padx=(px(12), 0))
         frame, self.reason = kit.text_area(body, 3, font="body")
         frame.pack(fill="x")
         self.controls.append(self.reason)
         if record and record.get("note"): kit.set_text(self.reason, record["note"])
 
-        kit.section_label(body, "What will change").pack_configure(pady=(px(14), px(6)))
-        legend = ttk.Frame(body, style="Card.TFrame"); legend.pack(fill="x", pady=(0, px(6)))
-        for text, color in (("Added lines", COLORS["success"]), ("Removed lines", COLORS["danger"])):
-            tk.Label(legend, text="■ " + text, font=FONTS["small"], bg=COLORS["card"], fg=color).pack(side="left", padx=(0, px(14)))
+        legend = kit.section_label(body, "What will change"); legend.pack_configure(pady=(px(14), px(6)))
+        for text, color in (("Removed lines", COLORS["danger"]), ("Added lines", COLORS["success"])):
+            tk.Label(legend, text="■ " + text, font=FONTS["small"], bg=COLORS["card"], fg=color).pack(side="right", padx=(px(14), 0))
         frame, self.text = kit.text_area(body, 14, readonly=True, wrap="none",
                                          placeholder="The comparison with the rule library appears here after Check.")
         frame.pack(fill="both", expand=True)
+        where.lift(); self.actions.lift()  # Packed first to keep their room; Tab reaches them last, as they read.
         for tag, fg, bg in (("added", COLORS["success"], COLORS["success_soft"]),
                             ("removed", COLORS["danger"], COLORS["danger_soft"]),
                             ("meta", COLORS["muted"], None), ("hunk", COLORS["accent"], None)):
@@ -142,12 +110,12 @@ class ReviewDialog:
 
         self.locked = record is not None
         self.repository.trace_add("write", self.invalidate); self.path.trace_add("write", self.invalidate)
-        kit.place_dialog(window, self.app.root, 900, 780, 720, 560)
+        kit.place_dialog(window, self.app.root, 900, 780, 720, 620)
         kit.modal(window, self.app.root, self.close, primary=self.prepare_button, focus=self.reason)
         if record:
             self.render()
         else:
-            self.stage(0)
+            self.refresh_controls(); self.stage(0)
             self.say("Select Check to compare this rule with the rule library. Nothing is sent until you submit.")
             self.summary.set(self.summary_rows())
             if auto: window.after(50, self.prepare)
@@ -184,8 +152,7 @@ class ReviewDialog:
         self.window.destroy()
 
     def invalidate(self, *args):
-        self.record = None; self.submit_button.configure(state="disabled"); self.link_button.configure(state="disabled")
-        self.prepare_button.configure(text="Check")
+        self.record = None; self.refresh_controls()
         self.show("")
         self.summary.set(self.summary_rows()); self.stage(0)
         self.say("Destination changed. Select Check to compare again.")
@@ -205,9 +172,13 @@ class ReviewDialog:
         for widget in self.controls: widget.configure(state="disabled" if self.locked else "normal")
         self.prepare_button.configure(state="disabled" if self.locked else "normal",
                                       text="Check again" if self.record else "Check")
-        self.submit_button.configure(state="normal" if self.record and not self.record.get("pull_request") else "disabled")
+        submittable = bool(self.record and not self.record.get("pull_request"))
+        self.submit_button.configure(state="normal" if submittable else "disabled")
         self.link_button.configure(state="normal" if self.record and self.record.get("pull_request") else "disabled")
         self.close_button.configure(state="normal")
+        # The blue button is the next step: Check, then Submit for approval; none once submitted.
+        lead = self.submit_button if submittable else None if self.locked else self.prepare_button
+        kit.promote(self.window, lead, *(b for b in (self.submit_button, self.prepare_button) if b is not lead))
 
     def run(self, title, task, done):
         def on_error(error):

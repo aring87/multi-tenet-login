@@ -137,11 +137,14 @@ class Session:
     def authentication_tenant(self):
         return (self.account or {}).get("tenantId") or self.login_tenant
 
-    def az(self, *args):
+    def az(self, *args, timeout=None):
+        """Run Azure CLI and return its JSON. ``timeout`` (seconds) replaces execute's default for a
+        read that should give up sooner, such as a test query."""
         signing_in = bool(args and args[0] == "login")
         # Azure CLI emits its claims-challenge recovery command as a warning.
         flags = ["--output", "json"]
-        result = self.execute(self.az_exe, [*args, *flags])
+        extra = {} if timeout is None else {"timeout": timeout}
+        result = self.execute(self.az_exe, [*args, *flags], **extra)
         details = result.stderr.strip()
         if signing_in:
             self.login_diagnostics = details
@@ -185,10 +188,8 @@ class Session:
                 require(accounts, "Azure did not return a tenant account. Sign in to the client tenant again.")
                 self.log("Signed in without visible subscriptions. Review Azure access management to continue.")
                 return []
-            raise Stop("Sign-in returned no accessible Azure subscriptions. This can mean the wrong "
-                       "account/tenant, incomplete tenant authentication, or missing Azure access. "
-                       "Enter the client tenant ID and sign in again. If sign-in succeeded, use "
-                       "Check missing subscription with its ID from Azure portal.\n" + self.login_diagnostics)
+            # Kept short: the Sign in card shows the first line, and advice.py says what to do next.
+            raise Stop("Sign-in returned no accessible Azure subscriptions.\n" + self.login_diagnostics)
         return subscriptions
 
     def prepare_cloud(self, tenant_hint=""):

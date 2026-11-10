@@ -223,6 +223,24 @@ delegation is per subscription, so a second workspace in the same subscription
 needs no new delegation — the app will report the existing assignment and
 create only the new target file.
 
+## Client slug and workspace label length
+
+Onboarding uses `<client-slug>-<workspace-label>` as its target. The combined
+value, including the separating hyphen, supports up to 64 characters. Each
+component allows up to 62 characters, leaving room for a hyphen and a one-character
+other component. Names use lowercase letters, digits and single hyphens, starting
+and ending with a letter or digit.
+
+Azure deployment names also allow 64 characters. Existing short deployment names
+are preserved. When `lighthouse-onboard-` plus the target exceeds that limit, the
+app uses a readable shortened target plus a stable hash suffix for the Azure
+deployment name only. The complete target stays in repository manifests, client
+paths and local state. For example, the 49-character target
+`explosive-countermeasures-international-workspace` is now accepted unchanged.
+This does not verify any independent naming restrictions in your detection pipeline.
+
+---
+
 ## If something fails mid-apply
 
 State lives in `desktop-data/runs/<target>/onboarding.state.json`. Correct the

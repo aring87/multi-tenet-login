@@ -5,13 +5,14 @@ from tkinter import ttk
 import webbrowser
 
 from . import ui_kit as kit
+from .assignment_dialog import ClientPicker
 from .desktop_theme import COLORS, px
 from .preview_workflow import PreviewService, eligible_clients, WORKFLOW
 from .deployment_workflow import preview_ready
 from .deployment_dialog import DeploymentDialog
 
 
-class PreviewDialog:
+class PreviewDialog(ClientPicker):
     def __init__(self, app, snapshot, rule):
         self.app, self.snapshot, self.rule = app, copy.deepcopy(snapshot), copy.deepcopy(rule)
         self.service = PreviewService()
@@ -29,42 +30,44 @@ class PreviewDialog:
                                      justify="left", width=1), minimum=px(200)).pack(fill="x", pady=(px(2), px(14)))
         self.search = tk.StringVar()
         self.search_box = ttk.Entry(body, textvariable=self.search); self.search_box.pack(fill="x")
-        kit.placeholder(self.search_box, self.search, "Search clients or workspaces")
+        kit.placeholder(self.search_box, self.search, "Search clients or workspaces", search=True)
         bar = ttk.Frame(body, style="Card.TFrame"); bar.pack(fill="x", pady=px(8))
         self.all_button = ttk.Button(bar, text="Select all eligible", command=self.select_all, style="Small.Secondary.TButton")
         self.clear_button = ttk.Button(bar, text="Clear selection", command=self.clear, style="Small.Secondary.TButton")
         self.all_button.pack(side="left"); self.clear_button.pack(side="left", padx=px(8))
         self.count = tk.StringVar(); ttk.Label(bar, textvariable=self.count, style="Hint.TLabel").pack(side="left", padx=(px(8), 0))
-        # Bottom-anchored controls are packed first so they always have room; the lists share what remains.
-        self.actions, buttons = kit.action_row(body, primary=("Start previews", self.start),
-                                               secondary=(("Check", self.prepare), ("Deploy…", self.open_deployment),
-                                                          ("Refresh status", self.refresh_status), ("Open GitHub", self.open_run)),
-                                               close=("Close", self.close))
+        # Bottom-anchored controls are packed first so they always have room; the Check result takes what remains.
+        # The steps read right to left towards Close, as in every dialog: [Deploy…] [Start previews] [Check] [Close].
+        self.actions, buttons = kit.action_row(body, primary=("Deploy…", self.open_deployment),
+                                               secondary=(("Start previews", self.start), ("Check", self.prepare)),
+                                               close=("Close", self.close),
+                                               aux=(("Refresh status", self.refresh_status), ("Open in GitHub", self.open_run)))
         self.actions.pack(side="bottom", fill="x", pady=(px(14), 0))
-        self.start_button, self.prepare_button, self.deploy_button, self.status_button, self.open_button, self.close_button = buttons
-        for button in (self.start_button, self.deploy_button, self.status_button): button.configure(state="disabled")
-        runs_frame, self.runs, self.runs_empty = kit.table(body, (("batch", "Batch", 60, False), ("run", "GitHub run", 120, False),
-                                                                  ("state", "Last checked state", 600, True)), height=3)
-        runs_frame.pack(side="bottom", fill="x")
-        ttk.Label(body, text="Preview runs", style="Section.TLabel").pack(side="bottom", anchor="w", pady=(px(10), px(6)))
+        self.deploy_button, self.start_button, self.prepare_button, self.close_button, self.status_button, self.open_button = buttons
         self.notice = tk.StringVar(value="Choose clients, then select Check. No GitHub run starts until you select Start previews.")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
-        frame, self.clients, self.empty = kit.table(body, (("selected", "Selected", 70, False), ("client", "Client", 160, True),
-                                                           ("workspace", "Workspace", 150, True), ("target", "Target", 225, True),
-                                                           ("reason", "Availability", 180, False)), height=6)
-        frame.pack(fill="both", expand=True)
-        self.clients.bind("<Button-1>", self.clicked)
-        self.clients.bind("<space>", self.toggle_focused)
-        kit.wrap_to_parent(ttk.Label(body, text="Select a row or press Space to pick it. Only enabled targets that already have "
-                                                "this rule can be previewed.", style="Hint.TLabel", justify="left", width=1),
-                           minimum=px(200)).pack(fill="x", pady=px(8))
+        # Shown between the banner and the buttons once there are runs (render_runs).
+        self.runs_frame, self.runs, _ = kit.table(body, (("batch", "Batch", 60, False), ("run", "GitHub run", 120, False),
+                                                         ("state", "Last checked state", 600, True)), height=1)
+        self.runs_label = ttk.Label(body, text="Preview runs", style="Section.TLabel")
+        frame, self.clients, self.empty = kit.table(body, (("client", "Client", 170, True), ("workspace", "Workspace", 170, True),
+                                                           ("target", "Target", 235, True), ("reason", "Availability", 180, False)),
+                                                    height=max(3, min(6, len(self.snapshot["clients"]))), check=True)
+        frame.pack(fill="x")
+        self.pickable()
         review_frame, self.review = kit.text_area(body, 6, readonly=True,
                                                   placeholder="Select Check to see the exact workspaces and workflow runs before anything starts.")
-        review_frame.pack(fill="both", expand=True)
-        self.search.trace_add("write", lambda *args: self.render_clients())
+        review_frame.pack(fill="both", expand=True, pady=(px(12), 0))
+        # Packed first to keep their room at the bottom; Tab reaches them after the list, as they read.
+        self.runs_label.lift(); self.runs_frame.lift(); self.banner.lift(); self.actions.lift()
+        # Filter once typing pauses; Down or Enter in the search box filters now, then moves into the list.
+        self.filter = kit.debounce(self.window, 150, self.render_clients)
+        for key in ("<Down>", "<Return>"): self.search_box.bind(key, lambda event: self.filter.flush(), add="+")
+        kit.link_search(self.search_box, self.clients)
+        self.search.trace_add("write", self.filter)
         kit.place_dialog(self.window, app.root, 1000, 760, 850, 680)
         kit.modal(self.window, app.root, self.close, primary=self.prepare_button, focus=self.search_box)
-        self.render_clients(); self.render_runs()
+        self.render_clients(); self.render_runs(); self.controls()
 
     def say(self, text, tone="info"):
         self.notice.set(text); self.banner.tone(tone)
@@ -75,47 +78,37 @@ class PreviewDialog:
         self.window.destroy()
 
     def render_clients(self):
+        self.filter.cancel()
         self.clients.delete(*self.clients.get_children()); self.visible = {}
         term = self.search.get().strip().casefold()
         for i, client in enumerate(self.snapshot["clients"]):
             if term and term not in " ".join((client["name"], client["workspace"], client["target"])).casefold(): continue
             target = client["target"]; self.visible[str(i)] = target
             reason = "Ready" if target in self.eligible else "Target disabled" if not client["raw"]["enabled"] else "Rule not assigned"
-            self.clients.insert("", "end", iid=str(i), values=("Yes" if target in self.selected else "", client["name"],
-                                                              client["workspace"], target, reason),
+            self.clients.insert("", "end", iid=str(i), image=self.box(target),
+                                values=(client["name"], client["workspace"], target, reason),
                                 tags=() if target in self.eligible else ("muted",))
         if self.visible: self.empty.hide()
         elif self.snapshot["clients"]: self.empty.show("No clients match your search.", ("Clear search", lambda: self.search.set("")))
         else: self.empty.show("The rule library has no client workspaces yet.")
-        self.count.set(str(len(self.selected)) + " selected of " + str(len(self.eligible)) + " eligible")
+        self.paint()
+
+    def selectable(self, target):
+        return target in self.eligible
+
+    def count_text(self):
+        return str(len(self.selected)) + " selected of " + str(len(self.eligible)) + " eligible"
 
     def invalidate(self):
         self.record = None; self.deployment_record = None
-        self.start_button.configure(state="disabled"); self.deploy_button.configure(state="disabled")
         self.show_review(""); self.say("Selection changed — select Check again before starting previews.")
-        self.render_clients(); self.render_runs()
-
-    def toggle(self, item):
-        if self.app.busy or self.locked: return
-        target = self.visible.get(item)
-        if target not in self.eligible: return
-        if target in self.selected: self.selected.remove(target)
-        else: self.selected.add(target)
-        self.invalidate()
-        if self.clients.exists(item): self.clients.focus(item); self.clients.selection_set(item)
-
-    def clicked(self, event):
-        item = self.clients.identify_row(event.y)
-        if item: self.toggle(item); return "break"
-
-    def toggle_focused(self, event):
-        self.toggle(self.clients.focus()); return "break"
+        self.render_runs(); self.controls()
 
     def select_all(self):
-        if not self.app.busy and not self.locked: self.selected = set(self.eligible); self.invalidate()
+        if self.can_pick(): self.selected = set(self.eligible); self.changed(self.visible)
 
     def clear(self):
-        if not self.app.busy and not self.locked: self.selected.clear(); self.invalidate()
+        if self.can_pick(): self.selected.clear(); self.changed(self.visible)
 
     def show_review(self, text):
         kit.set_text(self.review, text)
@@ -124,10 +117,16 @@ class PreviewDialog:
         for widget in (self.search_box, self.all_button, self.clear_button, self.prepare_button):
             widget.configure(state="disabled" if self.locked else "normal")
         self.prepare_button.configure(text="Check again" if self.record else "Check")
-        self.start_button.configure(state="normal" if self.record and not self.locked else "disabled")
+        startable, deployable = bool(self.record and not self.locked), bool(self.deployment_record or preview_ready(self.record))
+        self.start_button.configure(state="normal" if startable else "disabled")
         self.status_button.configure(state="normal" if self.record and any(r.get("run_id") for r in self.record["results"]) else "disabled")
-        self.deploy_button.configure(state="normal" if self.deployment_record or preview_ready(self.record) else "disabled")
+        self.deploy_button.configure(state="normal" if deployable else "disabled")
         self.open_button.configure(state="normal"); self.close_button.configure(state="normal")
+        # The blue button is the next step: Check, Start previews, then Deploy… once every preview has
+        # succeeded. While the runs are going, none leads: Refresh status (at the left) is next.
+        lead = (self.deploy_button if deployable else self.start_button if startable else
+                None if self.locked else self.prepare_button)
+        kit.promote(self.window, lead, *(b for b in (self.start_button, self.prepare_button, self.deploy_button) if b is not lead))
 
     def work(self, title, task, done):
         def after():
@@ -165,18 +164,23 @@ class PreviewDialog:
                                          + str(self.folder) + ".", "success"))
 
     def render_runs(self):
+        """List the preview runs above the buttons, once there are any; until then the Check result has the room."""
         self.runs.delete(*self.runs.get_children())
         results = self.record["results"] if self.record else []
         for i, result in enumerate(results):
             self.runs.insert("", "end", iid=str(i), values=(i + 1, result.get("run_id", "Unknown"), result["state"]))
-        if results: self.runs_empty.hide()
-        else: self.runs_empty.show("No preview runs yet.")
+        self.runs.configure(height=max(1, min(3, len(results))))
+        if results and not self.runs_frame.winfo_manager():
+            self.runs_frame.pack(side="bottom", fill="x", before=self.banner)
+            self.runs_label.pack(side="bottom", anchor="w", pady=(px(10), px(6)), before=self.banner)
+        elif not results:
+            self.runs_frame.pack_forget(); self.runs_label.pack_forget()
 
     def refresh_status(self):
         if self.app.busy or not self.record: return
         self.work("Reading the preview run status from GitHub…", lambda: self.service.refresh(self.record, self.folder),
                   lambda value: self.say("Status refreshed. Deploy becomes available once every preview succeeds at the checked "
-                                         "revision. Open GitHub to inspect the preview artifacts."))
+                                         "revision. Open in GitHub to inspect the preview artifacts."))
 
     def open_run(self):
         if self.app.busy: return

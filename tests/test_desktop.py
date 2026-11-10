@@ -112,7 +112,7 @@ class DesktopTests(unittest.TestCase):
         session=MagicMock();session.env={};session.account={}
         session.login.return_value=[dict(id=SUB,tenantId=TENANT,name="Example",isDefault=True)]
         session.discover.return_value=[WORKSPACE]
-        def work(title,task,done):
+        def work(title,task,done,**kw):
             done(task())
         with patch.object(ui,"Session",return_value=session),patch.object(app,"work",side_effect=work):
             app.login()
@@ -154,15 +154,15 @@ class DesktopTests(unittest.TestCase):
     def test_invalid_tenant_stops_before_session_or_login(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=ui.App(root);app.vars["tenant"].set("azure.portal.com")
-        with patch.object(ui.messagebox,"showerror") as error,patch.object(ui,"Session") as session:
+        with patch.object(ui.kit,"alert") as error,patch.object(ui,"Session") as session:
             app.login()
             session.assert_not_called()
-            self.assertIn("Directory (tenant) ID",error.call_args.args[1])
+            self.assertIn("Directory (tenant) ID",error.call_args.args[2])
 
     def test_invalid_tenant_not_saved(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.vars["tenant"].set("portal.azure.com")
-        with patch.object(ui.messagebox,"showerror"):
+        with patch.object(ui.kit,"alert"):
             app.save_client()
         self.assertFalse(app.clientfile.exists())
 
@@ -194,7 +194,7 @@ class DesktopTests(unittest.TestCase):
         old=backend.Session(self.data/"old");old.az_exe="fake"
         app.session=old
         new=MagicMock();new.env={}
-        with patch.object(old,"az",side_effect=Stop("There are no active accounts.")),patch.object(ui,"Session",return_value=new),patch.object(app,"work",side_effect=lambda title,task,done:task()):
+        with patch.object(old,"az",side_effect=Stop("There are no active accounts.")),patch.object(ui,"Session",return_value=new),patch.object(app,"work",side_effect=lambda title,task,done,**kw:task()):
             app.login()
         new.login.assert_called_once_with(TENANT)
         self.assertEqual(new.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"],"false")
@@ -311,7 +311,7 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         before=copy.deepcopy(app.clients)
-        with patch.object(ui.messagebox,"askyesno",return_value=False):
+        with patch.object(ui.kit,"confirm",return_value=False):
             app.delete_client()
         self.assertEqual(app.clients,before)
         self.assertFalse(app.clientfile.exists())
@@ -325,8 +325,10 @@ class DesktopTests(unittest.TestCase):
         state=retained/"onboarding.state.json"
         state.write_text('{"keep":true}')
         app.session=FakeSession()
-        with patch.object(ui.messagebox,"askyesno",return_value=True):
+        with patch.object(ui.kit,"confirm",return_value=True) as confirm:
             app.delete_client()
+        # Removing is the red button, and the keyboard starts on Cancel.
+        self.assertEqual(confirm.call_args.kwargs,dict(ok="Remove",destructive=True))
         self.assertEqual(json.loads(app.clientfile.read_text()),[])
         self.assertEqual(app.clients,[])
         self.assertEqual(app.vars["client_name"].get(),"")
@@ -339,7 +341,7 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root)
         app.clients.append({"name":"Second client","slug":"second-client","tenant":TENANT})
-        with patch.object(ui.messagebox,"askyesno",return_value=True):
+        with patch.object(ui.kit,"confirm",return_value=True):
             app.delete_client()
         self.assertEqual(app.vars["client_name"].get(),"Second client")
         self.assertEqual(app.vars["tenant"].get(),TENANT)
@@ -347,7 +349,7 @@ class DesktopTests(unittest.TestCase):
     def test_delete_blocked_during_running_operation(self):
         root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
         app=self.make_app(root);app.busy=True
-        with patch.object(ui.messagebox,"askyesno") as prompt:
+        with patch.object(ui.kit,"confirm") as prompt:
             app.delete_client();prompt.assert_not_called()
         self.assertEqual(len(app.clients),1)
 
@@ -399,6 +401,19 @@ class DesktopTests(unittest.TestCase):
             app.add_client()
         self.assertEqual(json.loads(app.clientfile.read_text()),
                          [{"name":"Fabrikam Inc","tenant":"fabrikam.onmicrosoft.com"}])
+    def test_new_client_dialog_flags_a_missing_name_on_the_field(self):
+        root=tk.Tk();root.withdraw();self.addCleanup(self.close_root,root)
+        app=ui.App(root)
+        def show(dialog):
+            dialog.vars["tenant"].set("fabrikam.onmicrosoft.com");dialog.submit()
+            self.assertIsNone(dialog.result)
+            self.assertEqual(dialog.hints["name"].cget("text"),"Enter a client name.")
+            self.assertEqual(str(dialog.entries["name"].cget("style")),"Error.TEntry")
+            self.assertEqual(dialog.error.get(),"")
+            dialog.window.destroy();return dialog.result
+        with patch.object(ui.kit.FormDialog,"show",show):
+            app.add_client()
+        self.assertFalse(app.clientfile.exists())
 
 if __name__=="__main__":unittest.main(verbosity=2)
 

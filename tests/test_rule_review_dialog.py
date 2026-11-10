@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from sentinel_app import desktop_app as ui
 from sentinel_app import rule_drafts as drafts
+from sentinel_app.desktop_theme import px
 from sentinel_app.rule_review_dialog import ReviewDialog
 from test_rule_drafts import valid_form
 from test_repository_reviews import FakeGitHub, REPO, NEW
@@ -48,6 +49,14 @@ class ReviewDialogTests(unittest.TestCase):
         self.assertEqual(str(self.dialog.submit_button.cget("state")), "disabled")
         self.assertEqual(str(self.dialog.link_button.cget("state")), "normal")
 
+    def test_a_moved_library_rule_opens_where_it_will_be_saved(self):
+        self.assertFalse(self.dialog.where_body.winfo_manager())
+        error = "The original repository rule is missing or the destination changed. Start a new draft for a new rule."
+        with patch.object(self.app, "work", side_effect=lambda title, task, done, **kw: done((None, error))):
+            self.dialog.prepare()
+        self.assertTrue(self.dialog.where_body.winfo_manager())
+        self.assertIn("Where it will be saved", self.dialog.notice.get())
+
     def test_destination_change_invalidates_prepared_review(self):
         with patch.object(self.app, "work", side_effect=self.work): self.dialog.prepare()
         self.dialog.path.set("rules/sentinel/other.yml")
@@ -81,8 +90,34 @@ class ReviewDialogTests(unittest.TestCase):
         self.builder.vars["name"].set("Changed elsewhere")
         self.assertEqual(self.dialog.form, before)
 
+    def test_blue_button_is_check_then_submit_and_open_in_github_sits_left(self):
+        style = lambda button: str(button.cget("style"))
+        self.assertEqual((style(self.dialog.prepare_button), style(self.dialog.submit_button)),
+                         ("Primary.TButton", "Secondary.TButton"))
+        self.assertEqual((style(self.dialog.link_button), self.dialog.link_button.pack_info()["side"]), ("Ghost.TButton", "left"))
+        with patch.object(self.app, "work", side_effect=self.work): self.dialog.prepare()
+        self.assertEqual((style(self.dialog.prepare_button), style(self.dialog.submit_button)),
+                         ("Secondary.TButton", "Primary.TButton"))
+        self.assertIs(self.dialog.window._enter_target, self.dialog.submit_button)
+        self.dialog.path.set("rules/sentinel/other.yml")  # A changed destination needs a new Check.
+        self.assertIs(self.dialog.window._enter_target, self.dialog.prepare_button)
+        with patch.object(self.app, "work", side_effect=self.work): self.dialog.prepare()
+        self.dialog.reason.insert("1.0", "Covers the new sign-in table.")
+        with patch.object(self.app, "work", side_effect=self.work): self.dialog.submit()
+        self.assertIsNone(self.dialog.window._enter_target)
+        self.assertEqual(style(self.dialog.submit_button), "Secondary.TButton")
+
+    def test_diff_keeps_room_when_the_window_is_clamped(self):
+        # 150% on a 1080p screen leaves about 640 of the 780 (96-DPI) pixels asked for.
+        with patch.object(self.app, "work", side_effect=self.work): self.dialog.prepare()
+        self.root.deiconify(); self.dialog.window.deiconify()
+        self.dialog.window.geometry(f"{px(900)}x{px(640)}"); self.root.update()
+        line = self.dialog.text.tk.call("font", "metrics", self.dialog.text.cget("font"), "-linespace")
+        self.assertGreaterEqual(self.dialog.text.winfo_height(), 4 * line)
+        self.assertTrue(self.dialog.submit_button.winfo_ismapped())
+
     def test_review_buttons_fit_minimum_dialog_width(self):
-        self.dialog.window.geometry("720x580"); self.root.update()
+        self.dialog.window.geometry("720x620"); self.root.update()
         edge = self.dialog.window.winfo_rootx() + self.dialog.window.winfo_width()
         for button in (self.dialog.prepare_button, self.dialog.submit_button,
                        self.dialog.link_button, self.dialog.close_button):

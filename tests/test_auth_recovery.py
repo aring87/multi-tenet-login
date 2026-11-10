@@ -165,19 +165,19 @@ class AuthenticationUITests(unittest.TestCase):
 
     def test_accepting_reauthentication_only_starts_signin(self):
         self.app.workspace = WORKSPACE
-        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "confirm", return_value=True), patch.object(self.app, "login") as login:
             self.app.recover_authentication(self.error)
         login.assert_called_once_with(recovery=self.error)
         self.assertEqual(self.app.vars["tenant"].get(), TENANT)
 
     def test_declining_does_not_open_signin(self):
-        with patch.object(ui.messagebox, "askyesno", return_value=False), patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "confirm", return_value=False), patch.object(self.app, "login") as login:
             self.app.recover_authentication(self.error)
         login.assert_not_called()
 
     def test_repeated_challenge_stops_instead_of_prompt_loop(self):
         self.app.auth_recovery_attempts.add((TENANT, "arm", "Browser", False))
-        with patch.object(ui.messagebox, "showerror") as show, patch.object(ui.messagebox, "askyesno") as ask, patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "alert") as show, patch.object(ui.kit, "confirm") as ask, patch.object(self.app, "login") as login:
             self.app.recover_authentication(self.error)
         show.assert_called_once(); ask.assert_not_called(); login.assert_not_called()
 
@@ -185,25 +185,25 @@ class AuthenticationUITests(unittest.TestCase):
         self.app.auth_recovery_attempts.add((TENANT, "arm", "Browser", False))
         encoded = base64.b64encode(b'{"access_token":{"amr":{"values":["mfa"]}}}').decode()
         error = AuthenticationRequired(MFA + " --claims-challenge " + encoded, TENANT)
-        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "confirm", return_value=True), patch.object(self.app, "login") as login:
             self.app.recover_authentication(error)
         login.assert_called_once_with(recovery=error)
         # A different payload must not create an endless series of prompts.
         changed = base64.b64encode(b'{"access_token":{"amr":{"essential":true,"values":["mfa"]}}}').decode()
-        with patch.object(ui.messagebox, "showerror") as show, patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "alert") as show, patch.object(self.app, "login") as login:
             self.app.recover_authentication(AuthenticationRequired(MFA + " --claims-challenge " + changed, TENANT))
         show.assert_called_once(); login.assert_not_called()
 
     def test_broker_failure_offers_browser_and_changes_method_only_when_accepted(self):
         error = AuthenticationRequired("SubError: basic_action V2Error: " + MFA + " Status_InteractionRequired", TENANT)
         self.app.vars["login_method"].set("Windows account window")
-        with patch.object(ui.messagebox, "askyesno", return_value=False), patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "confirm", return_value=False), patch.object(self.app, "login") as login:
             self.app.recover_authentication(error)
         self.assertEqual(self.app.vars["login_method"].get(), "Windows account window")
         login.assert_not_called()
-        with patch.object(ui.messagebox, "askyesno", return_value=True) as ask, patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "confirm", return_value=True) as ask, patch.object(self.app, "login") as login:
             self.app.recover_authentication(error)
-        self.assertIn("browser", ask.call_args.args[1])
+        self.assertIn("browser", ask.call_args.args[2])
         self.assertEqual(self.app.vars["login_method"].get(), "Browser")
         login.assert_called_once_with(recovery=error)
 
@@ -218,7 +218,7 @@ class AuthenticationUITests(unittest.TestCase):
         old.logout.assert_called_once()
 
     def test_unknown_tenant_must_be_supplied_not_guessed(self):
-        with patch.object(ui.messagebox, "askyesno", return_value=True), patch.object(ui.kit.FormDialog, "show", return_value=None), patch.object(self.app, "login") as login:
+        with patch.object(ui.kit, "confirm", return_value=True), patch.object(ui.kit.FormDialog, "show", return_value=None), patch.object(self.app, "login") as login:
             self.app.recover_authentication(AuthenticationRequired(MFA))
         login.assert_not_called()
 
@@ -226,7 +226,7 @@ class AuthenticationUITests(unittest.TestCase):
         task = MagicMock(side_effect=self.error)
         def start(thread): thread.run()
         with patch.object(ui.threading.Thread, "start", start): self.app.work("synthetic write", task)
-        with patch.object(self.app, "recover_authentication") as recover, patch.object(ui.messagebox, "showerror") as show:
+        with patch.object(self.app, "recover_authentication") as recover, patch.object(ui.kit, "alert") as show:
             self.app.poll()
         task.assert_called_once(); recover.assert_called_once_with(self.error); show.assert_not_called()
 

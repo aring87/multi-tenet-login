@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import uuid
 
@@ -16,6 +17,14 @@ BOOL_FIELDS = ("enabled", "createIncident")
 LIST_FIELDS = ("tactics", "techniques", "subTechniques")
 EDITED_FIELDS = set(TEXT_FIELDS + BOOL_FIELDS + LIST_FIELDS + ("id", "description", "query"))
 SCHEDULE_FIELDS = {"queryFrequency", "queryPeriod", "triggerOperator", "triggerThreshold"}
+
+
+def tactic_name(value):
+    """A MITRE tactic as MITRE ATT&CK and the Sentinel portal write it: 'CommandAndControl' ->
+    'Command and Control'. A value that isn't a known tactic is shown as it is."""
+    text = str(value)
+    if text not in rule_schema.TACTICS: return text
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", text).replace(" And ", " and ")
 
 
 def new_form():

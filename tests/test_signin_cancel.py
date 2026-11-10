@@ -130,7 +130,7 @@ class SignInCancelUITests(unittest.TestCase):
         self.app.cancel_signin_button.invoke()
         with self.assertRaises(SignInCancelled) as caught:task()
         self.app.events.put(("done", (done, None, caught.exception)))
-        with patch.object(ui.messagebox, "showerror") as error, patch.object(self.app, "recover_authentication") as recover:
+        with patch.object(ui.kit, "alert") as error, patch.object(self.app, "recover_authentication") as recover:
             self.app.poll()
         self.assertFalse(self.app.busy); self.assertFalse(self.app.signin_active)
         self.assertIs(self.app.session, self.session); self.assertFalse(self.app.session.signed_in)
@@ -172,7 +172,7 @@ class SignInCancelUITests(unittest.TestCase):
         with self.assertRaises(AuthenticationRequired):task()
         self.app.cancel_signin()
         self.app.events.put(("done", (done, None, problem)))
-        with patch.object(self.app, "recover_authentication") as recover, patch.object(ui.messagebox, "showerror") as error:
+        with patch.object(self.app, "recover_authentication") as recover, patch.object(ui.kit, "alert") as error:
             self.app.poll()
         recover.assert_not_called(); error.assert_not_called()
         self.assertFalse(self.app.busy); self.assertIn("cancelled", self.app.status.get())

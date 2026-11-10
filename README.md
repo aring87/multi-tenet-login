@@ -9,9 +9,9 @@ The desktop app has three sections: **Connect** (Microsoft sign-in and workspace
 1. Start the desktop app. Azure CLI and Python must be installed; no terminal commands are needed during use. GitHub CLI is only needed for the rule library and for submitting rules for approval.
 2. Use **Open CyberQP** if applicable and activate the client's JIT account there.
 3. Leave the tenant blank (select **Change** beside the saved tenant to edit it). Creating a saved client is optional.
-4. Click **Sign in with Microsoft**. Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one.
-5. The app automatically selects the default accessible subscription and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which includes the tenant ID. Selecting another subscription automatically reloads its workspaces.
-6. Select the intended workspace if several are available. The **Workspace** card shows **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**. Workspace ID is the Log Analytics customer GUID, not the ARM resource path.
+4. Click **Sign in with Microsoft** (**Sign in to <client>** when a client is chosen). Complete Microsoft browser authentication and MFA using the authorized client account. Use another account in the Microsoft prompt if your browser suggests the wrong one. If sign-in fails, the Sign in card explains why, with **Copy details** for the full message.
+5. The app selects the subscription and workspace you used last for this client, or else the default accessible subscription, and loads its Log Analytics workspaces. Review the **Subscription** dropdown, which shows each subscription's name, its state when it isn't Enabled, and a shortened ID. Selecting another subscription automatically reloads its workspaces.
+6. Select the intended workspace if several are available. Select **+ Show workspace IDs** on the **Workspace** card to see **Tenant ID, Subscription ID, Resource group, Workspace name, and Workspace ID**; right-click one to copy it. Workspace ID is the Log Analytics customer GUID, not the ARM resource path. The header names the client and workspace on every page.
 7. Click **Copy details** to copy the displayed values. Nothing is deployed or assigned during discovery. Saved client profiles are optional and remain local.
 
 **Cancel sign-in** stays available while Microsoft authentication is pending. If you
@@ -31,7 +31,7 @@ A sign-in to the Azure portal in your browser does not sign this app in; use **S
 Only resources accessible to the signed-in account are returned. No subscriptions means the account needs appropriate subscription access or the correct directory; no workspaces means check the selected subscription and workspace read access. Discovery lists Log Analytics workspaces and does not assert that Sentinel is enabled on each. Advanced permission/onboarding tools remain separate and require explicit review and apply.
 
 
-A local Windows desktop app for connecting to client Azure tenants, discovering Log Analytics workspaces, and preparing Microsoft Sentinel deployment permissions.
+A local Windows desktop app for connecting to client Azure tenants, discovering Log Analytics workspaces, reviewing analytics rules and submitting detection rules for approval.
 
 ## What it does
 
@@ -42,6 +42,7 @@ A local Windows desktop app for connecting to client Azure tenants, discovering 
 - Browses clients, rules and assignments in your team's rule library, and opens library rules in the Rule builder.
 - Builds, checks and exports detection rules, and submits them for a teammate's approval as pull requests.
 - Deletes saved client entries without deleting cloud resources.
+- Keeps a recovery copy of unsaved Rule builder work and offers it after a crash; runs as a single copy, with in-app help (F1) and a list of keyboard shortcuts.
 - Command-line onboarding (`py -m sentinel_app.lighthouse_onboarding`) onboards external tenants through Azure Lighthouse. It requires a successful matching preview before Apply.
 
 The app is independent of any employer, customer, or privileged-access provider. CyberQP is optional; activate access through your own provider if your organization requires it. The app starts with an empty client list and blank GitHub settings.
@@ -56,9 +57,22 @@ Discovery does not require GitHub or CyberQP. Full onboarding requires a compati
 4. Double-click **Start-Sentinel.cmd**.
 5. Select **+ New client** and enter its name; the tenant GUID/domain can be left blank.
 6. Activate JIT access through your organization's normal process, then select **Sign in with Microsoft**.
-7. Workspaces load automatically after sign-in or changing the subscription. Use **Refresh workspaces** to reload them.
+7. Workspaces load automatically after sign-in or changing the subscription. Select **↻ Refresh** beside Log Analytics workspace to reload them.
 
 This development app requires PyYAML. Run `py -m pip install -r requirements.txt` before launching it. The desktop uses the installed Azure CLI for Microsoft authentication.
+
+## Build a Windows app (.exe)
+
+`Build-Exe.cmd` in the repository root builds `dist\Sentinel Workspace.exe` with
+PyInstaller. It first runs `scripts\make_build_assets.py`, which draws the app icon
+(`assets\sentinel-workspace.ico`) and writes the Windows version resource
+(`assets\version-info.txt`) from the same brand module and version number the running app
+uses, so the icon in Explorer, the taskbar and the window title bar match and the file's
+Details tab shows the product name and version. The .exe keeps its data in a `desktop-data`
+folder beside it (or under `%LOCALAPPDATA%\Sentinel Workspace\desktop-data` when that folder
+can't be written). The guide, the templates and the LICENSE are bundled inside it, and it is built
+without UPX compression, which antivirus tools often flag. Azure CLI and GitHub CLI are
+still needed on each PC.
 
 ## Optional first-time Azure access
 
@@ -76,7 +90,7 @@ in Microsoft Entra ID when a client needs them.
 
 This application repository is separate from your private detection-rule repository. In full onboarding, configure the private repository that contains your existing Sentinel pipeline.
 
-Desktop Lighthouse onboarding uses two existing shared GitHub environments, each with an AZURE_CLIENT_ID variable. See [the current onboarding guide](docs/APP-ONBOARDING.md). It does not create the Sentinel workspace, connectors, detection pipeline, or analytics rules.
+Lighthouse onboarding is a command-line tool (`py -m sentinel_app.lighthouse_onboarding`), not part of the desktop app. It uses two existing shared GitHub environments, each with an AZURE_CLIENT_ID variable. See [the current onboarding guide](docs/APP-ONBOARDING.md). It does not create the Sentinel workspace, connectors, detection pipeline, or analytics rules.
 
 ## Documentation
 
@@ -100,12 +114,13 @@ Runtime data lives in desktop-data/, which is excluded from Git:
 - Saved client mappings.
 - Per-session Azure CLI configuration and authentication caches.
 - Onboarding state and generated parameter files.
+- Window layout and the last workspace used for each client (`ui-state.json`), rule drafts and their recovery copy (`drafts/`), and `logs/errors.log` for unexpected errors (capped at 1 MB).
 
 Do not commit or share this folder. The application has no password-entry field. Microsoft manages authentication through its normal broker/browser flow. Signing out of the app's Azure session does not deactivate access at your privileged-access provider or sign out other browser/Windows sessions.
 
 Use an approved onboarding account with the required Azure/Entra permissions. Runtime deployment identities do not receive RBAC administration privileges. Existing and inherited grants remain additive.
 
-Delete client removes only the saved mapping and invalidates the current selection/preview. Cloud resources and onboarding state are retained.
+**Remove client…** (in the client **⋯** menu) removes only the saved entry and clears the current selection. Cloud resources and onboarding state are not changed.
 
 ## Development and checks
 

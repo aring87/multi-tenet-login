@@ -293,6 +293,12 @@ class GovDialogTests(unittest.TestCase):
                 app.sync_connection(); root.update_idletasks()
                 self.assertFalse(app.gov_button.winfo_manager())
                 app.session.cloud = "AzureUSGovernment"
+                # Held back until policy allows it: hidden, and a no-op, unless settings.json turns it on.
+                app.sync_connection(); root.update_idletasks()
+                self.assertFalse(app.gov_button.winfo_manager())
+                with patch.object(ui, "GovOnboardingDialog") as opened:
+                    app.open_gov_onboarding(); opened.assert_not_called()
+                app.settings["gcc_high_onboarding"] = "on"
                 app.sync_connection(); root.update_idletasks()
                 self.assertTrue(app.gov_button.winfo_manager())
                 self.check_dialog(app)
@@ -300,6 +306,27 @@ class GovDialogTests(unittest.TestCase):
                 for timer in root.tk.call("after", "info"): root.after_cancel(timer)
                 root.destroy()
 
+
+    def test_help_leaves_out_gcc_high_onboarding_until_it_is_turned_on(self):
+        from sentinel_app import desktop_app as ui
+        guide = (Path(__file__).resolve().parent.parent / "docs" / "DESKTOP-START-HERE.md").read_text(encoding="utf-8")
+        trimmed = ui.without_section(guide, ui.GCC_HIGH_SECTION)
+        self.assertIn(ui.GCC_HIGH_SECTION, guide)
+        self.assertNotIn(ui.GCC_HIGH_SECTION, trimmed); self.assertNotIn("Onboard GCC High", trimmed)
+        self.assertIn("## Navigation and storage", trimmed)  # The sections after it stay.
+        with tempfile.TemporaryDirectory() as folder, patch.object(ui, "DATA", Path(folder)), \
+                patch.object(ui, "create_handoff", return_value=None):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = ui.App(root)
+                shown = []
+                with patch.object(ui, "render_markdown", lambda text, source: shown.append(source)):
+                    app.open_help().destroy()
+                    app.settings["gcc_high_onboarding"] = "on"; app.open_help().destroy()
+                self.assertNotIn("Onboard GCC High", shown[0]); self.assertIn(ui.GCC_HIGH_SECTION, shown[1])
+            finally:
+                for timer in root.tk.call("after", "info"): root.after_cancel(timer)
+                root.destroy()
 
     def check_dialog(self, app):
         from sentinel_app import gov_onboarding_dialog as dialog_module
@@ -312,7 +339,11 @@ class GovDialogTests(unittest.TestCase):
         with patch.object(dialog_module, "gov_run", side_effect=lambda s, c, a: outputs[1 if a else 0]) as run:
             dialog = dialog_module.GovOnboardingDialog(app)
             self.assertEqual(str(dialog.apply_button.cget("state")), "disabled")
+            style = lambda button: str(button.cget("style"))
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Primary.TButton", "Secondary.TButton"))
+            self.assertEqual(dialog.window.bind("<Return>"), "")  # Only the colour moves; Enter still does nothing.
             dialog.preview()
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Secondary.TButton", "Primary.TButton"))
             config = run.call_args.args[1]
             self.assertEqual(config["target"] if "target" in config else config["client"] + "-" + config["workspace_label"],
                              "aosense-workspace-gcch")
@@ -322,6 +353,29 @@ class GovDialogTests(unittest.TestCase):
             dialog.vars["label"].set("workspace-gcch"); dialog.preview(); dialog.apply()
             self.assertTrue(run.call_args.args[2])
             self.assertEqual(dialog.pull_request, "https://github.com/isi-security/detection-as-code/pull/7")
+            self.assertEqual(dialog.window.bind("<Return>"), "")
+            # Right after an apply nothing is blue (open the pull request next); new settings bring Preview back.
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Secondary.TButton", "Secondary.TButton"))
+            dialog.vars["label"].set("workspace-gcch2")
+            self.assertEqual((style(dialog.preview_button), style(dialog.apply_button)), ("Primary.TButton", "Secondary.TButton"))
+            dialog.vars["label"].set("workspace-gcch"); dialog.preview(); dialog.apply()
+            self.assertEqual(style(dialog.preview_button), "Secondary.TButton")
+            dialog.failed("STOPPED: Preview failed."); dialog.controls()  # As run_in_dialog's after= does.
+            self.assertEqual((style(dialog.preview_button), str(dialog.pr_button.cget("state"))), ("Primary.TButton", "normal"))
+            dialog.close()
+            dialog = dialog_module.GovOnboardingDialog(app)
+            with patch.object(dialog.review, "see") as see:
+                dialog.failed("READ-ONLY PLAN\nApp registration: create\nSTOPPED: Role assignment failed: AuthorizationFailed.\n"
+                              "Changes may be partial.")
+            see.assert_called_once_with("end")
+            self.assertEqual(dialog.notice.get(), "Stopped: Role assignment failed: AuthorizationFailed. "
+                                                  "The details are at the end of the plan above.")
+            self.assertEqual(str(dialog.review.tag_ranges("danger")[0]), "3.0")
+            self.assertEqual(str(dialog.preview_button.cget("style")), "Primary.TButton")
+            dialog.failed("Sign in to the client's GCC High tenant first.")
+            self.assertEqual(dialog.notice.get(), "Stopped: Sign in to the client's GCC High tenant first. "
+                                                  "The details are at the end of the plan above.")
+            self.assertEqual(str(dialog.review.tag_ranges("danger")[0]), "1.0")
             dialog.close()
 
 

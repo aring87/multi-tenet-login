@@ -228,27 +228,32 @@ class BuilderGuidanceTests(AppTestCase):
     def check(self, **changes):
         form = valid_form(); form.update(changes)
         builder = self.app.rule_builder; builder.load_form(form)
-        with patch("sentinel_app.rule_builder_page.messagebox.showerror") as dialog:
+        with patch("sentinel_app.rule_builder_page.kit.alert") as dialog:
             self.assertIsNone(builder.validate())
         dialog.assert_not_called()
         return builder
 
     def test_failed_check_opens_the_step_and_marks_the_field(self):
         builder = self.check(description="Too short")
-        self.assertEqual(builder.steps.index("current"), 0); self.assertEqual(builder.flagged, "description")
+        self.assertEqual(builder.steps.index("current"), 0); self.assertEqual(list(builder.flagged), ["description"])
         self.assertIn("Description (step 1, Basics)", builder.note.get())
         self.assertTrue(builder.widgets["description"].master.error)
+        self.assertEqual(builder.stepper.status, {0: ("error", "1 issue")})
         builder = self.check(queryFrequency="PT1M")
-        self.assertEqual(builder.steps.index("current"), 1); self.assertEqual(builder.flagged, "queryFrequency")
+        self.assertEqual(builder.steps.index("current"), 1); self.assertEqual(list(builder.flagged), ["queryFrequency"])
         self.assertEqual(str(builder.widgets["queryFrequency"].cget("style")), "Error.TSpinbox")
         self.assertIn("5 minutes", builder.note.get())
         builder.vars["queryFrequency"].set("PT1H")
-        self.assertIsNone(builder.flagged)
+        self.assertEqual(builder.flagged, {}); self.assertEqual(builder.stepper.status, {})
         self.assertEqual(str(builder.widgets["queryFrequency"].cget("style")), "TSpinbox")
         builder = self.check(queryFrequency="PT1H", queryPeriod="PT5M")
-        self.assertEqual(builder.flagged, "queryPeriod")
+        self.assertEqual(list(builder.flagged), ["queryPeriod"])
         builder = self.check(subTechniques="T1562.004", techniques="T1003")
-        self.assertEqual(builder.steps.index("current"), 2); self.assertEqual(builder.flagged, "techniques")
+        self.assertEqual(builder.steps.index("current"), 2); self.assertEqual(list(builder.flagged), ["techniques"])
+        # Problems only the full check finds are still pointed out next to their field.
+        builder = self.check(advanced="query: duplicated\n")
+        self.assertEqual(builder.steps.index("current"), 3); self.assertEqual(list(builder.flagged), ["advanced"])
+        self.assertIn("Additional rule properties (step 4, Advanced)", builder.note.get())
         self.assertEqual(locate(valid_form(), "Something new"), (None, "Something new"))
 
     def test_github_signin_is_checked_when_the_builder_opens(self):
@@ -257,20 +262,31 @@ class BuilderGuidanceTests(AppTestCase):
             self.app.show_page("builder"); self.root.update()
         check.assert_called_once_with()
         builder.check_github()
-        self.assertTrue(builder.github_bar.winfo_manager())
+        pill = lambda widget: widget.cget("text").replace("●", "").strip()
+        self.assertEqual(pill(builder.github_pill), "Rule library not set")
+        self.assertTrue(builder.github_action.winfo_manager())
         self.assertEqual(builder.github_action.cget("text"), "Go to Connect")
         self.app.vars["github_owner"].set("example"); self.app.vars["github_repo"].set("detections")
         with patch("sentinel_app.rule_builder_page.threading.Thread", SyncThread):
-            builder.github_probe = lambda: (_ for _ in ()).throw(RuntimeError("GitHub read failed. Run gh auth login"))
-            builder.check_github(force=True); self.app.poll()
-            self.assertEqual(builder.github_action.cget("text"), "Sign in to GitHub")
-            builder.github_probe = lambda: (_ for _ in ()).throw(RuntimeError("GitHub CLI is not installed."))
-            builder.check_github(force=True); self.app.poll()
-            self.assertIn("isn't installed", builder.github_message.get())
+            for error, text, tone, action, words in (
+                    ("GitHub read failed. Run gh auth login", "GitHub: not signed in", "warning", "Sign in to GitHub", "not signed in"),
+                    ("GitHub CLI is not installed.", "GitHub CLI missing", "danger", "Help & prerequisites", "isn't installed"),
+                    ("connection timed out", "GitHub: can't reach", "warning", "Check again", "Couldn't reach")):
+                builder.github_probe = lambda error=error: (_ for _ in ()).throw(RuntimeError(error))
+                builder.check_github(force=True); self.app.poll()
+                self.assertEqual((pill(builder.github_pill), builder.github_pill.tone), (text, tone))
+                self.assertEqual((pill(self.app.github_pill), self.app.github_pill.tone), (text, tone))  # Connect agrees.
+                self.assertEqual(builder.github_action.cget("text"), action)
+                self.assertIn(words, builder.github_message.get())  # The full explanation is the pill's tooltip.
+                self.assertEqual(builder.github_pill.tooltip_text, builder.github_message.get())
             builder.github_probe = lambda: "analyst"
             builder.check_github(force=True); self.app.poll()
-        self.assertFalse(builder.github_bar.winfo_manager())
-        self.assertEqual(builder.github_label.cget("text"), "Signed in to GitHub as analyst")
+        self.assertFalse(builder.github_action.winfo_manager())
+        self.assertEqual(pill(builder.github_pill), "GitHub: analyst"); self.assertEqual(pill(self.app.github_pill), "GitHub: analyst")
+        self.assertIn("example/detections", builder.github_message.get())
+        # The status lives in the toolbar, so the builder shows a single banner above the form.
+        page = builder.layout.master
+        self.assertEqual([w for w in page.winfo_children() if isinstance(w, ui.kit.Banner)], [builder.banner])
         with patch.object(builder, "github_probe", side_effect=AssertionError("cached")): builder.check_github()
 
 

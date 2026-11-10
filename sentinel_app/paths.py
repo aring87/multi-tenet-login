@@ -14,7 +14,12 @@ def _data_folder(base):
         probe.write_text("", encoding="utf-8"); probe.unlink()
         return folder
     except OSError:
-        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Sentinel Workspace" / "desktop-data"
+        fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Sentinel Workspace" / "desktop-data"
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)  # Its parent doesn't exist on a fresh PC.
+        except OSError:
+            pass  # Left for the app's start-up handler to explain.
+        return fallback
 
 
 if getattr(sys, "frozen", False):

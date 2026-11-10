@@ -8,7 +8,7 @@ chooses **Same-tenant workspace registration** automatically.
 
 1. Sign in to the managing tenant and select the actual subscription and workspace.
 2. Enter the client slug and workspace label. Keep one folder per client, for example
-   client `413`, label `workspace-gcc` produces `clients/413/413-workspace-gcc.yml`.
+   client `xyz`, label `workspace-gcc` produces `clients/xyz/xyz-workspace-gcc.yml`.
 3. Select **Preview setup**. The app checks the destination, security groups,
    pipeline applications' group membership, shared environments, existing role
    assignments and repository catalog.

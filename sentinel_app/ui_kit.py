@@ -191,6 +191,28 @@ def install_edit_menu(root):
     return menu
 
 
+def show_edit_menu(widget, event, first=()):
+    """The right-click edit menu for one Entry, Combobox or Text with entries of its own above Cut:
+    ``first`` is (label, command) pairs. Bind it to <Button-3> on the widget and return 'break', so
+    the shared menu from install_edit_menu doesn't open as well."""
+    try: widget.focus_set()
+    except tk.TclError: pass
+    previous = getattr(widget, "_kit_own_menu", None)
+    if previous is not None: previous.destroy()
+    menu = widget._kit_own_menu = popup_menu(widget)
+    for label, command in first: menu.add_command(label=label, command=command)
+    if first: menu.add_separator()
+    editable, selected = _editable(widget), _has_selection(widget)
+    for label, name, enabled in (("Cut", "<<Cut>>", editable and selected), ("Copy", "<<Copy>>", selected),
+                                 ("Paste", "<<Paste>>", editable)):
+        menu.add_command(label=label, command=lambda n=name: widget.event_generate(n),
+                         state="normal" if enabled else "disabled")
+    menu.add_separator()
+    menu.add_command(label="Select all", command=lambda: widget.event_generate("<<SelectAll>>"))
+    _show_menu(menu, event)
+    return menu
+
+
 def icon_label(parent, name, background, foreground=None, font="icon"):
     """A glyph from the Windows icon font, or nothing when it is unavailable."""
     if not FONTS.get(font) or name not in ICONS:

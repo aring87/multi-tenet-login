@@ -45,8 +45,10 @@ and the data folder. The step-by-step team procedure is the SOP that comes in th
 - **Rules > Drift:** what the library says the connected client should have against what is
   live in its workspace: missing rules, different enabled state or severity, and live rules
   the library doesn't assign.
-- **Rule builder:** five guided steps (Back/Next), a KQL check as you type (unclosed quotes
-  and brackets, misspelt steps and tables, with the line and column), **Run test query**
+- **Rule builder:** five guided steps (Back/Next), a Query box that colours KQL in a choice of
+  themes and completes steps, tables, columns and functions as you type, a KQL check as you
+  type (unclosed quotes and brackets, misspelt steps, tables, functions and operators, with the
+  line and column, and one click to put the suggested spelling in), **Run test query**
   against the connected workspace (read-only, row-capped), a schema check that flags every
   problem at once, and
   **Submit for approval**, which opens a ready-for-review pull request. **My submissions**

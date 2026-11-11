@@ -367,6 +367,14 @@ def main():
     # The KQL check under the query box, with a misspelt table and step.
     kit.set_text(builder.texts["query"], 'SignLogs\n| wher ResultType != "0"\n| summarize Attempts = count() by UserPrincipalName')
     builder.check_kql(); root.update(); shot(root, "47-builder-kql-check")
+    # The completion list while a column is typed, and the Query box in another theme.
+    box = builder.texts["query"]
+    kit.set_text(box, 'SigninLogs\n| where ResultType != "0"\n| where Us'); builder.check_kql()
+    box.focus_force(); root.update()  # The list closes when the box loses the keyboard: let the focus settle first.
+    box.mark_set("insert", "end-1c"); builder.editor.suggest(); root.update()
+    shot(root, "48-builder-kql-complete"); builder.editor.hide()
+    builder.set_kql_theme("Midnight"); kit.set_text(box, query); builder.check_kql(); root.update()
+    shot(root, "49-builder-kql-midnight"); builder.set_kql_theme("Daylight")
     kit.set_text(builder.texts["query"], query); builder.check_kql(); builder.clear_test()
     app.status.set("Ready."); app.activity_badge.set("Ready", "success")  # Not the test's flash.
     builder.steps.select(2); root.update(); shot(root, "27-builder-mitre")

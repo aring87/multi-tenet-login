@@ -75,6 +75,80 @@ class KqlCheckTests(unittest.TestCase):
                           "Line 1, column 27: KQL uses and / or, not ||."])
         self.assertEqual(messages("T | summarize n = count() | extend x = 1 | where n == 1"), [])
 
+    def test_operators_spelt_as_words_are_checked_between_two_values_in_where(self):
+        self.assertEqual(messages('T | where Name contians "a" AND Other !Has "b" or Third startwith "c"'),
+                         ["Line 1, column 16: KQL has no contians operator. Did you mean contains?",
+                          "Line 1, column 29: KQL operators are lowercase: write and.",
+                          "Line 1, column 40: KQL operators are lowercase: write has.",
+                          "Line 1, column 57: KQL has no startwith operator. Did you mean startswith?"])
+        # A step misspelt is read as the one meant, so the slips inside it show in the same pass.
+        self.assertEqual([issue.fix for issue in kql.check('T | wher a contians "b" && c = 1').issues],
+                         ["where", "contains", "and", "=="])
+        # Names where a value goes, and words between values outside where, are the analyst's own.
+        for query in ('T | where name has "x" and other startswith "y" and contents == 1',
+                      'T | where matched == true and likes > 2 and has_any_flag',
+                      'T | parse Message with * "user=" contain " " *', "T | project contians, startwith",
+                      'T | extend x = iff(a, "b", "c") | sort by contians desc'):
+            with self.subTest(query=query):
+                self.assertEqual(messages(query), [])
+
+    def test_functions_a_letter_off_or_in_capitals_point_at_the_one_meant(self):
+        self.assertEqual(messages("T | extend a = tostrng(x), b = ToLower(y)\n| summarize dcont(a), Count() by bin(t, 1h)"),
+                         ["Line 1, column 16: KQL has no tostrng function. Did you mean tostring? "
+                          "(Ignore this for a function of your own.)",
+                          "Line 1, column 32: KQL functions are lowercase: write tolower.",
+                          "Line 2, column 13: KQL has no dcont function. Did you mean dcount? "
+                          "(Ignore this for a function of your own.)",
+                          "Line 2, column 23: KQL functions are lowercase: write count."])
+        # The analyst's own functions, parsers, plugins and anything not close to a built-in are left alone.
+        for query in ("T | extend x = GetUsers(1), y = my_helper(a), z = Enrich(b)", "T | invoke _MyParser(x)",
+                      "let tostrng = (a:string) { a }; T | extend x = tostrng(y)", "T | extend x = a.tostrng(1)",
+                      "T | evaluate my_plugin(x)", "T | extend x = notempty(a), y = agg(b)",
+                      "T | partition by Account ( top 1 by x )"):
+            with self.subTest(query=query):
+                self.assertEqual(messages(query), [])
+
+    def test_most_warnings_carry_the_spelling_they_suggest(self):
+        fixes = lambda query: [(issue.column, issue.length, issue.fix) for issue in kql.check(query).issues]
+        self.assertEqual(fixes("SignLogs | take 1"), [(0, 8, "SigninLogs")])
+        self.assertEqual(fixes("signinlogs | Take 1 | sumarize count()"),
+                         [(0, 10, "SigninLogs"), (13, 4, "take"), (22, 8, "summarize")])
+        self.assertEqual(fixes("T | where a = 1 && b"), [(12, 1, "=="), (16, 2, "and")])
+        # and / or get the spaces && and || were written without.
+        self.assertEqual(fixes('T | where a=="x"||b=="y"&& c'), [(16, 2, " or "), (24, 2, " and")])
+        report = kql.check('T | frobnicate | where a == "open')  # Nothing to suggest for these.
+        self.assertEqual([issue.fix for issue in report.issues], [None, None])
+        self.assertEqual(report.fixes, [])
+        self.assertEqual(len(kql.check("T | wher a | Take 1").fixes), 2)
+
+    def test_the_report_keeps_what_the_walk_learned(self):
+        query = "let n = 5;\nSigninLogs // all\n| mv-expand x\n| join (AuditLogs) on y\n| take n"
+        report = kql.check(query)
+        self.assertEqual(report.text, query)
+        self.assertEqual([query[start:end] for start, end in report.comments], ["// all"])
+        self.assertEqual(report.lets, {"n"})
+        self.assertEqual([(kind, query[start:end]) for kind, start, end in report.marks],
+                         [("step", "let"), ("table", "SigninLogs"), ("step", "mv-expand"), ("step", "join"),
+                          ("table", "AuditLogs"), ("step", "take")])
+        self.assertEqual("".join(token.text for token in report.tokens), "".join(query.replace("// all", "").split()))
+        self.assertEqual(kql.check("a\r\nb").text, "a\nb")
+
+    def test_a_table_alone_in_a_joins_brackets_and_steps_inside_a_steps_brackets_are_read(self):
+        self.assertEqual(kql.check("SigninLogs | lookup (IdentityInfo) on a | join kind=inner (AuditLogs) on b").tables,
+                         ["SigninLogs", "IdentityInfo", "AuditLogs"])
+        self.assertEqual(messages("union (SignLogs), (AuditLogs)"),
+                         ["Line 1, column 8: SignLogs isn't a known table. Did you mean SigninLogs? "
+                          "(Ignore this for a custom table or function.)"])
+        self.assertEqual(kql.check("T | where x in (SignLogs) | extend y = (AuditLog)").tables, ["T"])  # Values, not tables.
+        # mv-apply, fork and partition hold steps with no | before the first one.
+        query = "T | mv-apply p on (where p.a = 1 | mv-expand p) | fork (summarize count()) (take 1) | partition by A (top 1 by B)"
+        report = kql.check(query)
+        self.assertEqual([query[start:end] for kind, start, end in report.marks if kind == "step"],
+                         ["mv-apply", "where", "mv-expand", "fork", "summarize", "take", "partition", "top"])
+        self.assertEqual([str(issue) for issue in report.issues],
+                         ["Line 1, column 30: Use == to compare in where (= names a column)."])
+        self.assertEqual(messages("T | where (take > 1) | extend x = (count)"), [])  # Brackets of any other step.
+
     def test_what_kql_always_rejects_is_an_error_with_its_place(self):
         cases = {
             'T | where a == "open': ['Line 1, column 16: This string isn\'t closed. Add the closing " on the same line.'],

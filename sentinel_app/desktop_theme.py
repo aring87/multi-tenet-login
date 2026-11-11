@@ -35,6 +35,37 @@ TONES = dict(neutral=("#475569", "#F1F5F9"), info=(COLORS["accent"], COLORS["acc
              warning=(COLORS["warning"], COLORS["warning_soft"]),
              danger=(COLORS["danger"], COLORS["danger_soft"]))
 
+# Colour schemes for the Rule builder's Query box (kql_editor), the first being the default. Each has
+# the box's own colours, one colour per part of a query (kql_assist.KINDS, plus column for the
+# completion list), the marks the KQL check draws and the completion list's surface. Every text colour
+# is AA (4.5:1) on its background and readable (3:1) on a mark; test_kql_editor checks.
+KQL_THEMES = {
+    "Daylight": dict(  # The app's own card: ink on white, with the accent blue for the steps.
+        background=COLORS["card"], ink=COLORS["ink"], muted=COLORS["muted"], caret=COLORS["ink"],
+        selection=COLORS["accent_line"], selection_inactive=COLORS["line"], thumb=COLORS["line"],
+        thumb_active=COLORS["line_strong"],
+        comment="#64748B", string="#15803D", number="#C2410C", step="#1D4ED8", keyword="#7C3AED",
+        function="#0E7490", table="#BE185D", variable="#9D174D", operator="#475569", column=COLORS["ink"],
+        error=COLORS["danger"], error_soft=COLORS["danger_soft"], warning=COLORS["warning"],
+        warning_soft=COLORS["warning_soft"],
+        popup=COLORS["card"], popup_line=COLORS["line_strong"], popup_selected=COLORS["selection"]),
+    "Midnight": dict(  # The sidebar's navy, with cool blues and mint.
+        background="#0B1526", ink="#E2E8F0", muted="#8593AA", caret="#F8FAFC",
+        selection="#1E3A5F", selection_inactive="#1B2940", thumb="#27385A", thumb_active="#3A4F7A",
+        comment="#7B8BA5", string="#86EFAC", number="#FDBA74", step="#60A5FA", keyword="#C4B5FD",
+        function="#5EEAD4", table="#F9A8D4", variable="#FBCFE8", operator="#94A3B8", column="#E2E8F0",
+        error="#F87171", error_soft="#4C1D24", warning="#FBBF24", warning_soft="#45310B",
+        popup="#111E36", popup_line="#2B3D61", popup_selected="#1E3A5F"),
+    "Neon": dict(  # Deep indigo with hot pink steps, cyan functions and lime strings.
+        background="#1A1033", ink="#F5F3FF", muted="#9D95C4", caret="#F5F3FF",
+        selection="#3B2A6B", selection_inactive="#2A1D4F", thumb="#3B2A6B", thumb_active="#54408F",
+        comment="#8E86B5", string="#A3E635", number="#FDE047", step="#F472B6", keyword="#C084FC",
+        function="#22D3EE", table="#FB923C", variable="#FDBA74", operator="#A5B4FC", column="#F5F3FF",
+        error="#FB7185", error_soft="#4A1530", warning="#FACC15", warning_soft="#3F3212",
+        popup="#221544", popup_line="#43317A", popup_selected="#3B2A6B"),
+}
+KQL_THEME = "Daylight"
+
 # Layout spacing scale, in 96-DPI pixels; always wrap in px().
 SPACE = dict(xs=4, sm=8, md=12, lg=16, xl=24, page=32)
 

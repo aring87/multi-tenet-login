@@ -14,8 +14,9 @@ from . import rule_drafts as drafts
 from . import rule_schema
 from . import ui_kit as kit
 from .auth_recovery import AuthenticationRequired
-from .desktop_theme import COLORS, FONTS, TONES, px
+from .desktop_theme import COLORS, FONTS, KQL_THEMES, TONES, px
 from .gov_onboarding import GOV_CLOUD
+from .kql_editor import KqlEditor, fix_label
 from .lighthouse_onboarding import Stop
 from .rule_review_dialog import ReviewDialog
 from .repository_catalog import GitHubReader
@@ -613,7 +614,7 @@ class RuleBuilderPage:
 
     def kind_changed(self, *args):
         if self.vars["kind"].get() == "NRT": self.schedule.pack_forget()
-        elif not self.schedule.winfo_manager(): self.schedule.pack(fill="x", after=self.kql_line)
+        elif not self.schedule.winfo_manager(): self.schedule.pack(fill="x", after=self.kql_row)
 
     def render_state(self):
         if self.submitted_url: self.state_pill.set("Submitted", "success")
@@ -926,48 +927,80 @@ class RuleBuilderPage:
 
     # ------------------------------------------------------------ KQL check
     def kql_panel(self, parent):
-        """A line under the query box from kql_check, updated as the query is typed, with each problem
-        underlined in the query itself (red for what KQL always rejects, amber for likely slips)."""
+        """Make the query box an editor (kql_editor: colours, completions while typing) with a line under
+        it from kql_check, updated as the query is typed. Each problem is underlined in the query itself
+        (red for what KQL always rejects, amber for likely slips); beside the line, a link puts in the
+        spellings the check suggests, and another chooses the box's colours."""
         text = self.texts["query"]
         text.master.pack_configure(pady=(0, px(4)))  # The line belongs to the box above it.
         self.kql_job = None
         self.kql_report = None
+        self.editor = KqlEditor(text, self.app.ui_state.get("kql_theme"))
+        self.editor.changed = self.check_kql
+        card = COLORS["card"]
+        row = self.kql_row = tk.Frame(parent, bg=card, bd=0)
+        # The links' focus rings make the row 2px taller than its line of text; the gap under it gives them back.
+        row.pack(fill="x", after=text.master, pady=(0, px(12) - 2))
+        row.columnconfigure(0, weight=1)
         # width=1: the line wraps to the width it is given instead of widening the step.
-        self.kql_line = tk.Label(parent, text="", font=FONTS["small"], fg=COLORS["muted"], bg=COLORS["card"],
+        self.kql_line = tk.Label(row, text="", font=FONTS["small"], fg=COLORS["muted"], bg=card,
                                  justify="left", anchor="w", bd=0, width=1)
-        self.kql_line.pack(fill="x", after=text.master, pady=(0, px(12)))
+        self.kql_line.grid(row=0, column=0, sticky="new")
         kit.wrap_to_parent(self.kql_line, minimum=px(160))
-        for severity, tone in (("error", "danger"), ("warning", "warning")):
-            options = dict(underline=True, background=COLORS[tone + "_soft"])
-            try: text.tag_configure("kql-" + severity, underlinefg=COLORS[tone], **options)
-            except tk.TclError: text.tag_configure("kql-" + severity, **options)  # Tk before 8.6.6.
-        text.tag_lower("kql-warning"); text.tag_raise("sel")
+        tools = tk.Frame(row, bg=card, bd=0); tools.grid(row=0, column=1, sticky="ne", padx=(px(12), 0))
+        self.kql_fix = kit.link(tools, "", self.fix_kql, COLORS["accent"], COLORS["accent_hover"], card)  # Packed when needed.
+        kit.tooltip(self.kql_fix, "Puts in the spelling the check suggests (Ctrl+. does the one at the caret). "
+                                  "Ctrl+Z undoes it.")
+        self.kql_theme = kit.link(tools, "", self.show_kql_themes, COLORS["muted"], COLORS["ink"], card)
+        self.kql_theme.pack(side="right")
+        kit.tooltip(self.kql_theme, "Choose the Query box's theme")
+        self.kql_theme_var = tk.StringVar(value=self.editor.theme)
+        self.kql_theme.configure(text="Theme: " + self.editor.theme)
         self.check_kql()
 
     def queue_kql(self):
-        """Check the query once typing pauses, so each keystroke stays instant."""
+        """Colour the query at once, and check it once typing pauses, so each keystroke stays instant."""
         root = self.app.root
+        self.editor.paint()
         if self.kql_job is not None: root.after_cancel(self.kql_job)
         self.kql_job = root.after(KQL_DELAY, self.check_kql)
 
     def check_kql(self):
-        """Check the query now: mark each problem in the box and say what was found under it."""
+        """Check the query now: colour it, mark each problem in the box and say what was found under it."""
+        if self.kql_job is not None: self.app.root.after_cancel(self.kql_job)
         self.kql_job = None
-        text = self.texts["query"]
-        query = text.get("1.0", "end-1c")
-        for tag in ("kql-error", "kql-warning"): text.tag_remove(tag, "1.0", "end")
-        if not query.strip():
-            self.kql_report = None
-            self.kql_line.configure(text="The query is checked as you type: quotes, brackets, steps and table names.",
-                                    fg=COLORS["muted"])
-            return None
-        report = self.kql_report = kql_check.check(query)
-        for issue in report.issues:
-            start = f"{issue.line}.{issue.column}"
-            text.tag_add("kql-" + issue.severity, start, f"{start}+{issue.length}c")
-        line, tone = kql_check.summary(report)
+        report = self.kql_report = self.editor.check()
+        if report is None:
+            line, tone = "The query is checked as you type: quotes, brackets, steps and table names.", "neutral"
+        else:
+            line, tone = kql_check.summary(report)
         self.kql_line.configure(text=line, fg=COLORS["muted"] if tone == "neutral" else TONES[tone][0])
+        fixes = self.editor.fixes()
+        self.kql_fix.configure(text=fix_label(fixes))
+        if fixes and not self.kql_fix.winfo_manager(): self.kql_fix.pack(side="left", padx=(0, px(14)))
+        elif not fixes: self.kql_fix.pack_forget()
         return report
+
+    def fix_kql(self):
+        """Put in every spelling the check suggests (the link under the query box)."""
+        if not self.app.busy and self.editor.apply(self.editor.fixes()): self.texts["query"].focus_set()
+
+    def show_kql_themes(self):
+        """The colour schemes, as a menu under the link."""
+        menu = self.kql_theme_menu = kit.popup_menu(self.app.root)
+        for name in KQL_THEMES:
+            menu.add_radiobutton(label=name, value=name, variable=self.kql_theme_var,
+                                 command=lambda n=name: self.set_kql_theme(n))
+        link = self.kql_theme
+        try: menu.tk_popup(link.winfo_rootx(), link.winfo_rooty() + link.winfo_height())
+        finally: menu.grab_release()
+
+    def set_kql_theme(self, name):
+        """Draw the query box in the colour scheme ``name`` and remember it (ui-state kql_theme)."""
+        self.editor.set_theme(name)
+        self.kql_theme_var.set(self.editor.theme)
+        self.kql_theme.configure(text="Theme: " + self.editor.theme)
+        self.app.ui_state["kql_theme"] = self.editor.theme
 
     # ------------------------------------------------------------ test query
     def test_panel(self, parent):

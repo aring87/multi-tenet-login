@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from sentinel_app.repository_reviews import ReviewService, ReviewError, load_request, diff
+from sentinel_app.repository_reviews import ReviewService, ReviewError, load_request, diff, fingerprint
 from sentinel_app.repository_catalog import CatalogError
 from sentinel_app import rule_drafts as drafts
 from test_rule_drafts import valid_form
@@ -226,3 +226,78 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ReviewError, "outside the reviewed diff"):
             self.service.submit(record, self.folder)
         self.assertFalse(self.remote.refs); self.assertFalse(self.remote.pulls)
+
+
+WORKFLOW = ".github/workflows/sentinel.yml"
+
+
+def workflow_text(names):
+    """A deploy workflow with the repository's three generated rule dropdowns, CRLF like the real files."""
+    def block(default):
+        return ("        # BEGIN GENERATED RULE OPTIONS\n        options:\n" +
+                "".join('          - "' + value + '"\n' for value in [default, *names]) +
+                "        # END GENERATED RULE OPTIONS\n")
+    text = ("on:\n  workflow_dispatch:\n    inputs:\n      rule_path:\n        type: choice\n" + block("All selected rules") +
+            "      rule_2:\n        type: choice\n" + block("No additional rule") +
+            "      rule_3:\n        type: choice\n" + block("No additional rule") + "jobs: {}\n")
+    return text.replace("\n", "\r\n")
+
+
+class RuleDropdownTests(unittest.TestCase):
+    """A new rule's pull request regenerates the deploy workflows' rule dropdowns, so the repository CI passes."""
+    def setUp(self):
+        self.remote = FakeGitHub(); self.service = ReviewService(self.remote)
+        self.remote.files[WORKFLOW] = workflow_text(["example"]).encode()
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name)
+
+    def new(self, path=NEW):
+        return self.service.prepare(REPO, path, drafts.validated_yaml(valid_form())[0])
+
+    def test_new_rule_commit_carries_the_regenerated_dropdowns(self):
+        record = self.new()
+        self.assertEqual(record["plan"]["extra_files"],
+                         [{"path": WORKFLOW, "mode": "100644", "content": workflow_text(["example", "new-rule"])}])
+        self.service.submit(record, self.folder)
+        tree, _, _, pull = [call[2] for call in self.remote.writes()]
+        self.assertEqual([entry["path"] for entry in tree["tree"]], [NEW, WORKFLOW])
+        self.assertIn("\r\n", tree["tree"][1]["content"])    # the workflow keeps its CRLF line endings
+        self.assertIn("rule dropdowns are regenerated", pull["body"])
+
+    def test_names_sort_a_to_z_ignoring_case(self):
+        record = self.new("rules/sentinel/identity/Account-change.yml")
+        self.assertIn('"All selected rules"\r\n          - "Account-change"\r\n          - "example"',
+                      record["plan"]["extra_files"][0]["content"])
+
+    def test_editing_an_existing_rule_changes_no_workflow(self):
+        form = copy.deepcopy(self.remote.original); form["name"] = "Updated synthetic detection"
+        record = self.service.prepare(REPO, EXISTING, drafts.validated_yaml(form)[0], form["allow_missing_mitre"],
+                                      {"repository": REPO, "revision": self.remote.head, "path": EXISTING})
+        self.assertNotIn("extra_files", record["plan"])
+
+    def test_a_repository_without_dropdowns_is_unchanged(self):
+        self.remote.files[WORKFLOW] = b"on: push\r\njobs: {}\r\n"
+        self.assertNotIn("extra_files", self.new()["plan"])
+
+    def test_file_name_already_used_in_another_folder_is_refused(self):
+        with self.assertRaisesRegex(ReviewError, "already uses the file name example"):
+            self.new("rules/sentinel/identity/example.yml")
+        self.assertFalse(self.remote.writes())
+
+    def test_saved_request_with_edited_workflow_is_not_published(self):
+        record = self.new()
+        record["plan"]["extra_files"][0]["content"] += "  injected: true\r\n"
+        record["fingerprint"] = fingerprint(record["plan"])
+        with self.assertRaisesRegex(ReviewError, "deploy lists in this request"): self.service.submit(record, self.folder)
+        self.assertFalse(self.remote.writes())
+
+    def test_saved_request_cannot_name_other_files(self):
+        record = self.new()
+        record["plan"]["extra_files"][0]["path"] = ".github/workflows/ci.yml"
+        with self.assertRaisesRegex(ReviewError, "other than the rule"): load_request_from(record, self.folder)
+
+
+def load_request_from(record, folder):
+    record["fingerprint"] = fingerprint(record["plan"])
+    path = folder / "x.review.json"; path.write_text(json.dumps(record), encoding="utf-8")
+    return load_request(path)

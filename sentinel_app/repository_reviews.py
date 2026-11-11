@@ -1,4 +1,5 @@
 """Reviewed single-rule pull requests. No writes to a default branch or Azure."""
+import base64
 import difflib
 import hashlib
 import json
@@ -70,6 +71,44 @@ def save_request(folder, record):
     return path
 
 
+# The detection repository's deploy workflows list every rule in static dropdowns, and its CI fails a
+# pull request whose dropdowns don't match the rule library. Mirror scripts/sync_target_choices.py
+# there, so a new rule's pull request carries the regenerated lists in the same commit.
+RULE_WORKFLOWS = (".github/workflows/sentinel.yml", ".github/workflows/sentinel-multi-workspace.yml")
+RULE_BEGIN = "        # BEGIN GENERATED RULE OPTIONS\n"
+RULE_END = "        # END GENERATED RULE OPTIONS\n"
+RULE_DEFAULTS = ("All selected rules", "No additional rule")   # rule_path's default, then rule_2/rule_3's
+
+
+def rule_option_names(paths):
+    """Rule dropdown entries: each library file's name without folder or extension, A-Z."""
+    names = {}
+    for path in sorted(paths):
+        if not path.startswith("rules/sentinel/") or not path.endswith((".yml", ".yaml")): continue
+        name = path.rsplit("/", 1)[1].rsplit(".", 1)[0]
+        require(name not in names, "Another rule already uses the file name " + name + " (" + names.get(name, "") +
+                "). Choose a different file name.")
+        names[name] = path
+    return sorted(names, key=lambda value: (value.casefold(), value))
+
+
+def regenerate_rule_options(raw, names):
+    """Rewrite a workflow's generated rule-options blocks, keeping its line endings. No blocks: unchanged."""
+    newline = "\r\n" if "\r\n" in raw else "\n"
+    text = raw.replace("\r\n", "\n")
+    count = text.count(RULE_BEGIN)
+    if count == 0: return raw
+    require(text.count(RULE_END) == count, "A deploy workflow's rule list is malformed. Ask the repository owner to fix it.")
+    parts, remaining = [], text
+    for index in range(count):
+        start = remaining.index(RULE_BEGIN); finish = remaining.index(RULE_END, start) + len(RULE_END)
+        options = [RULE_DEFAULTS[0] if index == 0 else RULE_DEFAULTS[1], *names]
+        parts += [remaining[:start], RULE_BEGIN + "        options:\n" +
+                  "".join("          - " + json.dumps(value) + "\n" for value in options) + RULE_END]
+        remaining = remaining[finish:]
+    return ("".join(parts) + remaining).replace("\n", newline)
+
+
 def check_record(record):
     require(isinstance(record, dict) and record.get("version") == 1, "Unsupported review request.")
     plan = record.get("plan")
@@ -84,6 +123,11 @@ def check_record(record):
     if record.get("commit_sha") is not None:
         require(re.fullmatch(r"[0-9a-f]{40}", record["commit_sha"]), "Invalid saved commit revision.")
     require(isinstance(plan["allow_missing_mitre"], bool), "Invalid migration option.")
+    extras = plan.get("extra_files", [])
+    require(isinstance(extras, list) and len({e.get("path") for e in extras if isinstance(e, dict)}) == len(extras)
+            and all(e.get("path") in RULE_WORKFLOWS and e.get("mode") in ("100644", "100755")
+                    and isinstance(e.get("content"), str) for e in extras),
+            "Review request changes files other than the rule and its deploy lists.")
     rule_schema.validate(parse_yaml(plan["content"].encode()), plan["allow_missing_mitre"])
     return plan
 
@@ -127,6 +171,7 @@ class ReviewService:
             require(other["path"] == path or other["id"].lower() != rule["id"].lower(),
                     "This rule ID already exists at " + other["path"] + ". Start a new draft for a distinct rule.")
         require(before != content, "There are no file changes to submit.")
+        extras = self.dropdown_updates("repos/" + repository, entries, path)
         impact = []
         for client in snapshot["clients"]:
             for assignment in client["assignments"]:
@@ -143,6 +188,7 @@ class ReviewService:
                     tree_sha=snapshot["tree_sha"], path=path, content=content, before=before,
                     mode=entry["mode"] if entry else "100644", name=rule["name"], impact=impact,
                     allow_missing_mitre=allow_missing_mitre, warnings=warnings)
+        if extras: plan["extra_files"] = extras   # Only when needed, so other plans keep their fingerprint.
         require(plan["repository_id"] is not None, "GitHub did not identify the repository.")
         return dict(version=1, plan=plan, fingerprint=fingerprint(plan), commit_sha=None, pull_request=None)
 
@@ -151,8 +197,35 @@ class ReviewService:
     def save_record(folder, record):
         return save_request(folder, record)
 
+    def dropdown_updates(self, prefix, entries, path):
+        """The deploy workflows with their rule dropdowns regenerated to include ``path``; only those that change.
+
+        ``entries`` maps each repository path to its Git tree entry at the reviewed base commit.
+        """
+        names = rule_option_names({p for p, e in entries.items() if e.get("type") == "blob"} | {path})
+        updates = []
+        for workflow in RULE_WORKFLOWS:
+            entry = entries.get(workflow)
+            if not entry or entry.get("type") != "blob" or entry.get("mode") not in ("100644", "100755"): continue
+            blob = self.request("GET", prefix + "/git/blobs/" + entry["sha"])
+            require(blob.get("encoding") == "base64", "GitHub returned an unsupported blob encoding.")
+            raw = base64.b64decode(blob["content"]).decode("utf-8")
+            new = regenerate_rule_options(raw, names)
+            if new != raw: updates.append({"path": workflow, "mode": entry["mode"], "content": new})
+        return updates
+
+    def verify_dropdowns(self, prefix, plan):
+        """Rebuild the deploy lists from the reviewed base; a saved request can't carry other workflow edits."""
+        if not plan.get("extra_files"): return
+        tree = self.request("GET", prefix + "/git/trees/" + plan["tree_sha"] + "?recursive=1")
+        require(not tree.get("truncated"), "GitHub returned an incomplete file tree. Prepare a fresh review.")
+        expected = self.dropdown_updates(prefix, {e["path"]: e for e in tree["tree"]}, plan["path"])
+        require(expected == plan["extra_files"], "The deploy lists in this request don't match the repository. Prepare a fresh review.")
+
     def tree_entries(self, plan):
-        return [{"path": plan["path"], "mode": plan["mode"], "type": "blob", "content": plan["content"]}]
+        return [{"path": plan["path"], "mode": plan["mode"], "type": "blob", "content": plan["content"]},
+                *({"path": e["path"], "mode": e["mode"], "type": "blob", "content": e["content"]}
+                  for e in plan.get("extra_files", []))]
 
     def branch_name(self, plan):
         return "codex/rule-" + plan["request_id"]
@@ -166,6 +239,9 @@ class ReviewService:
                 "Validated with the application's reviewed rule schema. Live KQL, repository checks, "
                 "and deployment approval remain required.\n\n"
                 "Existing target references: " + str(len(plan["impact"])) + ". No client manifests are changed.\n\n"
+                + ("The deploy workflows' rule dropdowns are regenerated to list the new rule (" +
+                   ", ".join("`" + e["path"] + "`" for e in plan.get("extra_files", [])) + ").\n\n"
+                   if plan.get("extra_files") else "")
                 + ("Warnings: " + "; ".join(plan["warnings"]) + "\n\n" if plan["warnings"] else "")
                 + "Review request: `" + plan["request_id"] + "`\nBase commit: `" + plan["base_sha"] + "`")
 
@@ -192,6 +268,7 @@ class ReviewService:
         require(metadata.get("permissions", {}).get("push") is True, "GitHub write access is no longer available.")
         require(identity == plan["identity"], "GitHub account changed. Prepare a new review with the current account.")
         require(metadata["default_branch"] == plan["base_branch"], "Default branch changed. Prepare a new review.")
+        self.verify_dropdowns(prefix, plan)
         branch = self.branch_name(plan)
         refs = self.request("GET", prefix + "/git/matching-refs/heads/" + quote(branch, safe=""))
         matches = [ref for ref in refs if ref["ref"] == "refs/heads/" + branch]

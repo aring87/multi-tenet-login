@@ -132,9 +132,27 @@ what KQL always rejects (a quote or bracket left open, a `|` with nothing before
 it); **Check rule** and **Run test query** stop on these. Amber marks likely slips that
 don't stop anything: a step KQL doesn't have (`| wher`, with the one you probably meant),
 a step in capitals, `=` instead of `==` in `where`, `&&` or `||` instead of `and` / `or`,
-and a table name a letter or two off a common one (`SignLogs`: did you mean `SigninLogs`?).
-Custom tables, functions and watchlists are never flagged. The check reads only the query's
-shape; Run test query, below, is the real test.
+a table name a letter or two off a common one (`SignLogs`: did you mean `SigninLogs`?), and
+a built-in function or `where` operator a letter or two off or in capitals (`tostrng(`,
+`contians`, `AND`). Custom tables, your own functions and watchlists are never flagged. The
+check reads only the query's shape; Run test query, below, is the real test.
+
+When the check knows the spelling it suggests, a link beside the line puts it in: **Change to
+where** for one slip, **Fix all 3** for several. You can also right-click an underlined word
+and choose **Change to…**, or press **Ctrl+.** with the caret on it. **Ctrl+Z** undoes it.
+
+The Query box colours each part of the query as you type: steps, tables, functions, operators,
+text in quotes, numbers and comments. **Theme**, at the right under the box, switches between
+Daylight, Midnight and Neon; the app remembers your choice on this PC.
+
+While you type, a list offers what fits at the caret: steps after a `|`, tables where a query
+starts or joins, and elsewhere the common columns of the tables the query reads, names the
+query already uses, functions and operators. Typing a name's initials finds it too (`upn` for
+`UserPrincipalName`). **Up** and **Down** choose, **Tab** inserts and **Esc** closes the list;
+**Ctrl+Space** opens it anywhere. **Enter** inserts only after you chose with the arrows, or
+to finish a step you are typing after a `|`; otherwise it starts a new line as usual. The
+columns are the usual ones for well-known tables, not your workspace's own schema, so a
+custom column appears in the list once you have typed it in the query.
 
 **Run test query**, under the schedule on Query & schedule, runs the draft's query read-only
 against the workspace chosen on Connect and shows how many rows came back, how long it took
@@ -288,6 +306,8 @@ folder can't be written (for example under Program Files).
 - **Ctrl+Page Down** and **Ctrl+Page Up** move to the next and previous Rule builder step.
 - In the Query box, **Tab** indents, **Ctrl+Tab** moves on and **Shift+Enter** runs the test
   query, as in Log Analytics; in other text boxes **Tab** moves on.
+- Also in the Query box: **Ctrl+Space** opens the list of completions (**Up**/**Down** choose,
+  **Tab** inserts, **Esc** closes), and **Ctrl+.** puts in the suggested spelling at the caret.
 - In the Rules page lists, the arrow keys move the selection and **Enter** opens the selected
   rule (Workspace rules and Drift: moves into its details; Rule library: opens it in the Rule
   builder);

@@ -272,7 +272,7 @@ class App:
             return {}
         if not isinstance(value, dict): return {}
         def usable(key, item):
-            if key in ("rule_view", "library_view", "geometry", "client"): return isinstance(item, str)
+            if key in ("rule_view", "library_view", "geometry", "client", "kql_theme"): return isinstance(item, str)
             if key in ("rules_split", "library_split", "drift_split"):
                 return isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)
             if key == "last_workspace": return isinstance(item, dict)

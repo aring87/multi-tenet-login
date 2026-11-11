@@ -27,7 +27,7 @@ All the following modules live in `sentinel_app/`:
 
 | Area | Modules |
 |---|---|
-| Desktop shell, design system, brand mark and sign-in UI | desktop_app, desktop_theme, ui_kit, brand, signin_window, signin_process |
+| Desktop shell, design system, brand mark and sign-in UI | desktop_app, desktop_theme, ui_kit, brand, org_logo (optional organization logo), signin_window, signin_process |
 | Plain-language advice for common errors | advice |
 | Analytics rule inventory and export | rules_page, rule_export |
 | Repository catalog | repository_catalog, catalog_page |
@@ -67,7 +67,8 @@ is [scripts/Rename-Workspace-v2.cmd](../scripts/Rename-Workspace-v2.cmd).
 `py scripts\make_build_assets.py` regenerates the icon and version resource in `assets/`
 (Build-Exe.cmd runs it for you), and `py scripts\capture_screens.py <folder>` drives the
 desktop app through every screen and dialog with sample data and saves a PNG of each, for
-design reviews and documentation.
+design reviews and documentation. `py scripts\make_logo_sizes.py <logo.png> <folder>` makes the
+optional sidebar logo set (`logo-<height>.png`) from one large PNG.
 
 ## Upgrading an existing checkout
 

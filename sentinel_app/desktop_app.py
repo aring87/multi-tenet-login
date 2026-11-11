@@ -20,6 +20,7 @@ from . import __version__
 from .desktop_theme import configure_theme, COLORS, FONTS, TONES, px
 from . import advice
 from . import brand
+from . import org_logo
 from . import ui_kit as kit
 from .ui_kit import work_area, window_frame, on_a_monitor  # Window placement, shared with dialogs.
 from .auth_recovery import AuthenticationRequired, SignInCancelled
@@ -545,6 +546,10 @@ class App:
                             focus_color=c["sidebar_accent"])
             item.pack(fill="x", pady=(px(6), 0))
             kit.tooltip(item, tip)
+        # The organization's own logo under the links, when desktop-data/branding has one (org_logo).
+        self.org_logo = org_logo.image(self.root, DATA / org_logo.FOLDER, px(org_logo.HEIGHT), max_width=px(204))
+        if self.org_logo is not None:
+            tk.Label(footer, image=self.org_logo, bg=c["sidebar"], bd=0).pack(anchor="w", pady=(px(18), 0))
         session = tk.Frame(side, bg=c["sidebar_hover"], bd=0, highlightthickness=1,
                            highlightbackground=c["sidebar_line"], highlightcolor=c["sidebar_line"])
         session.pack(side="bottom", fill="x", padx=px(14), pady=(0, px(14)))

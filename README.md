@@ -117,7 +117,11 @@ To make the analyst package, put these in a folder named `Sentinel Workspace` an
 - the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and the SOP as a PDF;
 - `desktop-data\clients.json`, copied from your own desktop-data folder;
 - `desktop-data\settings.json` holding only the rule library:
-  `{"github_owner": "isi-security", "github_repo": "detection-as-code"}`.
+  `{"github_owner": "isi-security", "github_repo": "detection-as-code"}`;
+- optionally, your organization's logo for the foot of the sidebar, made from one large PNG
+  (use the version for dark backgrounds, usually white):
+  `py scripts\make_logo_sizes.py <logo.png> "Sentinel Workspace\desktop-data\branding"`.
+  The app shows the size that matches each display's scaling; without the folder it shows no logo.
 
 Never include the rest of your `desktop-data` folder: `sessions` holds your Azure sign-in
 sessions, `review-requests` holds private rule content, and `access-history.json` and `runs`
@@ -162,6 +166,7 @@ Runtime data lives in `desktop-data/`, which Git ignores. Do not commit or share
 | Rule drafts and the unsaved-rule recovery copy | `drafts/` |
 | Submissions and saved assignment, preview and deployment requests | `review-requests/`, `assignment-requests/`, `preview-requests/` |
 | Window layout, last workspace per client and view choices | `ui-state.json` |
+| Organization logo for the sidebar (optional) | `branding/logo-<height>.png` |
 | Unexpected errors (kept under 1 MB) | `logs/errors.log` |
 
 **Remove client…** (in the client **⋯** menu) removes only the saved entry; cloud resources and

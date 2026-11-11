@@ -156,6 +156,15 @@ class RuleBuilderPageTests(unittest.TestCase):
             # The full check's first complaint is about a field the quick checks flagged too.
             self.assertIn(locate(form, str(raised.exception))[0], flagged, changes)
 
+    def test_queries_kql_always_rejects_are_flagged_but_likely_slips_are_not(self):
+        form = valid_form(); form.update(query='SigninLogs\n| where (a == "b"')
+        self.assertEqual(collect_issues(form), [("query", "Line 2, column 9: This ( is never closed. Add ).")])
+        form.update(query='SigninLogs | where (a == "b')
+        self.assertEqual(dict(collect_issues(form))["query"],
+                         "Line 1, column 20: This ( is never closed. Add ). (1 more under the query box)")
+        form.update(query="SignLogs | wher a = 1 && b")  # Warnings only: the analyst may mean it (a custom table).
+        self.assertEqual(collect_issues(form), [])
+
     def test_check_flags_every_problem_at_once_and_marks_the_steps(self):
         page = self.page; status = page.stepper.status
         form = valid_form(); form.update(name="", owner="Not Valid", query="SigninLogs |", tactics="DefenseEvasion, Bogus")
@@ -293,7 +302,7 @@ class RuleBuilderPageTests(unittest.TestCase):
                     self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(),
                                          canvas.winfo_rooty() + canvas.winfo_height(), key)
         self.assertEqual(self.page.toolbar_right.grid_info()["row"], 0)  # Signed in, it fits on one row
-        self.assertEqual(int(query.cget("height")), 8)  # and the query box is its full height again.
+        self.assertEqual(int(query.cget("height")), rule_builder.QUERY_LINES)  # and the query box is its full height again.
 
 
 class RecoveryDraftTests(unittest.TestCase):

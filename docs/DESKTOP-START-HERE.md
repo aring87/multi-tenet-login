@@ -126,6 +126,16 @@ before you save, the next start offers to restore it: **Restore** opens it as un
 **Discard** deletes it, and Esc (or closing the question) keeps it for the next start unless
 you start new work first. Saving the draft or closing the app normally removes the copy.
 
+The query is checked on this PC as you type, and the line under the Query box says what it
+found, with the line and column; each problem is also underlined in the query. Red marks
+what KQL always rejects (a quote or bracket left open, a `|` with nothing before or after
+it); **Check rule** and **Run test query** stop on these. Amber marks likely slips that
+don't stop anything: a step KQL doesn't have (`| wher`, with the one you probably meant),
+a step in capitals, `=` instead of `==` in `where`, `&&` or `||` instead of `and` / `or`,
+and a table name a letter or two off a common one (`SignLogs`: did you mean `SigninLogs`?).
+Custom tables, functions and watchlists are never flagged. The check reads only the query's
+shape; Run test query, below, is the real test.
+
 **Run test query**, under the schedule on Query & schedule, runs the draft's query read-only
 against the workspace chosen on Connect and shows how many rows came back, how long it took
 and the first 50 rows (point at a shortened value to see it in full; Ctrl+C copies the
@@ -134,7 +144,8 @@ which have no Look back, use the last day), and the line beside the button says 
 period it will use. A query Log Analytics can't run, a missing permission (Log Analytics
 Reader or Microsoft Sentinel Reader on the workspace's resource group) or a query that takes
 longer than 2 minutes is explained in plain words under the button, with Log Analytics' own
-reason and **Copy details**. Changing the query or Look back marks the results **Out of
+reason and **Copy details**; when Log Analytics can't find a table that is a letter or two
+off a common one, it also names the one you probably meant. Changing the query or Look back marks the results **Out of
 date** until you run the test again; a new rule, or signing out, removes them. The button is
 greyed, with the reason beside it, until you are signed in with a workspace chosen, and for
 Azure Government (GCC High) workspaces. Results are only shown, never saved, and nothing in

@@ -4,10 +4,11 @@ The app includes a repository catalog, local rule authoring, and reviewed client
 
 ## Start the development copy
 
-Run these commands from the development repository in Git Bash:
+Run these commands in Git Bash from your clone of the repository
+(`git clone https://github.com/aring87/sentinel-workspace.git`):
 
 ```bash
-cd /g/multi-tenet-tool/multi-tenet-login
+cd sentinel-workspace
 py -m pip install -r requirements.txt
 py -m sentinel_app
 ```

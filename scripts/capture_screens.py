@@ -126,7 +126,7 @@ def rule(name, display, enabled, severity, kind="Scheduled", **props):
     base = dict(displayName=display, enabled=enabled, severity=severity,
                 description="Detects " + display.lower() + " across sign-in and audit telemetry, correlating the actor, "
                             "the target resource and the originating IP so the analyst can triage quickly.",
-                query="SigninLogs\n| where ResultType != 0\n| summarize Attempts = count() by UserPrincipalName, IPAddress\n| where Attempts > 20",
+                query='SigninLogs\n| where ResultType != "0"\n| summarize Attempts = count() by UserPrincipalName, IPAddress\n| where Attempts > 20',
                 queryFrequency="PT1H", queryPeriod="PT4H", triggerOperator="GreaterThan", triggerThreshold=0,
                 tactics=["InitialAccess", "CredentialAccess"], techniques=["T1110", "T1078"],
                 lastModifiedUtc="2026-10-28T14:12:00Z")
@@ -364,6 +364,10 @@ def main():
     builder.test_failed(query_runner.failure(TEST_SYNTAX_ERROR), dict(WORKSPACE), query, session)
     root.update(); shot(root, "46-builder-test-query-error")
     builder.clear_test(); app.root.update(); app.page_canvases[2].yview_moveto(0)
+    # The KQL check under the query box, with a misspelt table and step.
+    kit.set_text(builder.texts["query"], 'SignLogs\n| wher ResultType != "0"\n| summarize Attempts = count() by UserPrincipalName')
+    builder.check_kql(); root.update(); shot(root, "47-builder-kql-check")
+    kit.set_text(builder.texts["query"], query); builder.check_kql(); builder.clear_test()
     app.status.set("Ready."); app.activity_badge.set("Ready", "success")  # Not the test's flash.
     builder.steps.select(2); root.update(); shot(root, "27-builder-mitre")
     builder.vars["name"].set(""); builder.validate(); root.update(); shot(root, "28-builder-error")

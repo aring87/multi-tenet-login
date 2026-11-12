@@ -318,17 +318,34 @@ class CatalogPage:
         if self.app.rule_builder.edit_rule(row["raw"], source=source):
             self.app.show_page("builder")
 
+    def preview_problem(self):
+        """Why a preview can't start from the loaded library, as (text, action, tone), or None.
+        Drift asks too, before it opens the same dialog."""
+        if not self.snapshot.get("repository") or not self.snapshot.get("private"):
+            return ("Previews need the library from your team's private GitHub repository. Choose GitHub as the source, "
+                    "then select Refresh library.", ("Change source…", lambda: self.show_source(True)), "info")
+        if self.snapshot["issues"]:
+            return ("Fix the library issues before starting a preview.", ("Library issues", self.issues), "warning")
+        return None
+
+    def assign_problem(self):
+        """Why the loaded library can't take an assignment, as (text, action, tone), or None."""
+        if not self.snapshot.get("repository") or not self.snapshot.get("private") or not self.snapshot.get("can_push"):
+            return ("Assigning rules needs the library from your team's private GitHub repository, with write access. "
+                    "Choose GitHub as the source, then select Refresh library.",
+                    ("Change source…", lambda: self.show_source(True)), "info")
+        if self.snapshot["issues"]:
+            return ("Fix the library issues before assigning rules.", ("Library issues", self.issues), "warning")
+        return None
+
     def preview_selected(self):
         if self.app.busy: return
         row = self.selected_rule()
         if row is None:
             self.say("Choose Rules, then select the rule to preview."); return
-        if not self.snapshot.get("repository") or not self.snapshot.get("private"):
-            self.say("Previews need the library from your team's private GitHub repository. Choose GitHub as the source, "
-                     "then select Refresh library.", ("Change source…", lambda: self.show_source(True)))
-            return
-        if self.snapshot["issues"]:
-            self.say("Fix the library issues before starting a preview.", ("Library issues", self.issues), "warning"); return
+        problem = self.preview_problem()
+        if problem:
+            self.say(*problem); return
         self.note.set(""); PreviewDialog(self.app, self.snapshot, row)
 
     def open_workflow_history(self):
@@ -339,12 +356,9 @@ class CatalogPage:
         row = self.selected_rule()
         if row is None:
             self.say("Choose Rules, then select the rule to assign."); return
-        if not self.snapshot.get("repository") or not self.snapshot.get("private") or not self.snapshot.get("can_push"):
-            self.say("Assigning rules needs the library from your team's private GitHub repository, with write access. "
-                     "Choose GitHub as the source, then select Refresh library.", ("Change source…", lambda: self.show_source(True)))
-            return
-        if self.snapshot["issues"]:
-            self.say("Fix the library issues before assigning rules.", ("Library issues", self.issues), "warning"); return
+        problem = self.assign_problem()
+        if problem:
+            self.say(*problem); return
         self.note.set(""); AssignmentDialog(self.app, self.snapshot, row)
 
     def open_assignment_review(self):
@@ -402,7 +416,10 @@ class CatalogPage:
         row = self.visible[int(iid)]
         copy_path = ("Copy file path", lambda: self.copy_text(row["path"], "File path"))
         if self.view.get() == "Rules":
-            return [("Edit in Rule builder", self.edit_selected, not self.app.busy), None,
+            idle = not self.app.busy
+            return [("Edit in Rule builder", self.edit_selected, idle),
+                    ("Assign to clients…", self.assign_selected, idle),
+                    ("Preview and deploy…", self.preview_selected, idle), None,
                     ("Copy name", lambda: self.copy_text(row["name"], "Rule name")),
                     ("Copy rule ID", lambda: self.copy_text(row.get("id", ""), "Rule ID"), bool(row.get("id"))),
                     copy_path]

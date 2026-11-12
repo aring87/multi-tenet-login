@@ -347,6 +347,17 @@ def main():
     different = next(iid for iid in drift.tree.get_children() if drift.entries[int(iid)]["kind"] == "different")
     drift.tree.selection_set(different); drift.tree.focus(different); drift.selected(); root.update()
     shot(root, "39-rules-drift")
+    # A library rule live here but not assigned to acme: Assign to this client…, and the dialog it opens.
+    unassigned = next((iid for iid in drift.tree.get_children()
+                       if drift.entries[int(iid)]["kind"] == "live_only" and drift.entries[int(iid)]["rule"]), None)
+    if unassigned is not None:
+        drift.tree.selection_set(unassigned); drift.tree.focus(unassigned); drift.selected(); root.update()
+        shot(root, "39b-rules-drift-assign")
+        opened = []
+        with patch("sentinel_app.drift_page.AssignmentDialog",
+                   side_effect=lambda *args, **kwargs: opened.append(AssignmentDialog(*args, **kwargs))):
+            drift.action_button.invoke()  # As the button opens it: this client ticked, at the rule's live state.
+        shot(opened[0].window, "39c-drift-assign-dialog"); opened[0].window.destroy()
 
     # ---- Rule builder
     app.show_page("builder"); root.update(); builder = app.rule_builder

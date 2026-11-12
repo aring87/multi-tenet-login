@@ -59,7 +59,8 @@ Nothing in the app changes a live rule directly.
   with assignment, preview and deployment requests that go through review.
 - **Rules > Drift:** what the library says the connected client should have against what is
   live in its workspace: missing rules, different enabled state or severity, and live rules
-  the library doesn't assign.
+  the library doesn't assign. A drifted rule offers **Assign to this client…** or **Preview
+  and deploy…** for the connected client, through the same reviewed dialogs as the Rule library.
 - **Rule builder:** five guided steps (Back/Next), a Query box that colours KQL in a choice of
   themes and completes steps, tables, columns and functions as you type, a KQL check as you
   type (unclosed quotes and brackets, misspelt steps, tables, functions and operators, with the

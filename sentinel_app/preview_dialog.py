@@ -5,7 +5,7 @@ from tkinter import ttk
 import webbrowser
 
 from . import ui_kit as kit
-from .assignment_dialog import ClientPicker
+from .assignment_dialog import ClientPicker, reveal
 from .desktop_theme import COLORS, px
 from .preview_workflow import PreviewService, eligible_clients, WORKFLOW
 from .deployment_workflow import preview_ready
@@ -13,14 +13,16 @@ from .deployment_dialog import DeploymentDialog
 
 
 class PreviewDialog(ClientPicker):
-    def __init__(self, app, snapshot, rule):
+    def __init__(self, app, snapshot, rule, preselect=()):
+        """``preselect`` ticks those targets to start with, where they are eligible: Drift opens the
+        dialog for its own client."""
         self.app, self.snapshot, self.rule = app, copy.deepcopy(snapshot), copy.deepcopy(rule)
         self.service = PreviewService()
         self.folder = app.rule_builder.data_dir / "preview-requests"
         self.record, self.locked = None, False
         self.deployment_record = None
-        self.selected, self.visible = set(), {}
         self.eligible = {c["target"] for c in eligible_clients(snapshot, rule["path"])}
+        self.selected, self.visible = set(preselect) & self.eligible, {}
         self.window = tk.Toplevel(app.root)
         self.window.title("Preview and deploy for clients"); self.window.configure(bg=COLORS["card"])
         body = ttk.Frame(self.window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
@@ -67,7 +69,7 @@ class PreviewDialog(ClientPicker):
         self.search.trace_add("write", self.filter)
         kit.place_dialog(self.window, app.root, 1000, 760, 850, 680)
         kit.modal(self.window, app.root, self.close, primary=self.prepare_button, focus=self.search_box)
-        self.render_clients(); self.render_runs(); self.controls()
+        self.render_clients(); reveal(self.clients, self.visible, self.selected); self.render_runs(); self.controls()
 
     def say(self, text, tone="info"):
         self.notice.set(text); self.banner.tone(tone)

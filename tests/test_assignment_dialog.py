@@ -36,6 +36,19 @@ class AssignmentDialogTests(unittest.TestCase):
         with patch.object(self.app, 'work', side_effect=self.work): self.dialog.prepare()
         self.assertIsNotNone(self.dialog.record, self.dialog.notice.get())
 
+    def test_preselected_client_and_rule_state_from_drift(self):
+        self.dialog.window.destroy()
+        target = self.snapshot['clients'][0]['target']
+        self.dialog = AssignmentDialog(self.app, self.snapshot, self.snapshot['rules'][0],
+                                       preselect=(target, 'not-in-the-library'), enabled=True)
+        self.assertEqual(self.dialog.selected, {target})  # Only targets the library has.
+        self.assertEqual(self.dialog.enabled.get(), 'Enabled')
+        self.assertEqual(self.dialog.count.get(), '1 selected')
+        self.assertIsNone(self.dialog.record)  # Ticked, not yet checked: Check still comes first.
+        self.dialog.window.destroy()
+        self.dialog = AssignmentDialog(self.app, self.snapshot, self.snapshot['rules'][0])
+        self.assertEqual((self.dialog.selected, self.dialog.enabled.get()), (set(), 'Disabled'))  # As from the library.
+
     def test_search_selects_visible_targets_and_keeps_hidden_selection(self):
         self.dialog.search.set('413'); self.dialog.select_shown()
         self.assertEqual(self.dialog.selected, {'413-workspace-commercial'})

@@ -262,12 +262,16 @@ class CatalogPageTests(unittest.TestCase):
         with patch.object(page.menu, "tk_popup"): page.library_menu()
         self.assertEqual(labels()[0], "Library issues (2)"); self.assertEqual(page.menu.entrycget(0, "state"), "normal")
 
-    def test_row_menu_offers_copy_and_edit(self):
+    def test_row_menu_offers_copy_edit_assign_and_preview(self):
         page = self.page; page.snapshot = library(); page.render()
         menu = page.tree.build_menu("0")
         labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) == "command"]
-        self.assertEqual(labels, ["Copy", "Edit in Rule builder", "Copy name", "Copy rule ID", "Copy file path"])
-        page.row_menu("0")[3][1]()
+        self.assertEqual(labels, ["Copy", "Edit in Rule builder", "Assign to clients…", "Preview and deploy…",
+                                  "Copy name", "Copy rule ID", "Copy file path"])
+        commands = {label: command for label, command, *rest in filter(None, page.row_menu("0"))}
+        self.assertIs(commands["Assign to clients…"].__func__, type(page).assign_selected)  # The buttons' own commands.
+        self.assertIs(commands["Preview and deploy…"].__func__, type(page).preview_selected)
+        commands["Copy rule ID"]()
         self.assertEqual(self.root.clipboard_get(), "33333333-3333-4333-8333-333333333333")
 
     def test_assignment_details_for_a_disabled_target(self):

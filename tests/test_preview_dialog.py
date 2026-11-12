@@ -57,6 +57,14 @@ class PreviewDialogTests(unittest.TestCase):
         self.assertEqual(len(self.dialog.selected), 2)
         self.dialog.clear(); self.assertFalse(self.dialog.selected)
 
+    def test_preselected_clients_start_ticked_where_eligible(self):
+        self.dialog.window.destroy()
+        targets = {c["target"] for c in self.snapshot["clients"]}
+        self.dialog = PreviewDialog(self.app, self.snapshot, self.snapshot["rules"][0], preselect=sorted(targets))
+        self.assertEqual(self.dialog.selected, {"client-1-primary", "example-primary"})  # Not the disabled target.
+        self.assertEqual(self.dialog.count.get(), "2 selected of 2 eligible")
+        self.assertEqual(self.box(self.item("example-primary")), str(kit.checkbox("on", self.root)))
+
     def test_disabled_row_cannot_be_selected(self):
         item = self.item("client-0-primary")
         self.assertEqual(self.box(item), str(kit.checkbox("disabled", self.root)))

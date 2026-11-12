@@ -282,6 +282,54 @@ class DriftPageTests(unittest.TestCase):
                    if label == "Show in Workspace rules"]
         self.assertEqual(missing, [[False]])  # Nothing live to show for a missing rule.
 
+    def menu(self, iid):
+        return {label: (command, *rest) for label, command, *rest in filter(None, self.page.row_menu(iid))}
+
+    def test_each_drifted_rule_offers_the_step_that_brings_it_in_step(self):
+        self.connect(); self.open(); self.load_library()
+        shown = []
+        for iid in ("0", "1", "2", "3"):  # Charlie missing, Bravo different, the Fusion rule, Delta assigned elsewhere.
+            self.page.tree.selection_set(iid); self.page.selected()
+            shown.append(self.page.action_button.cget("text") if self.page.actions.winfo_manager() else None)
+            menu = self.menu(iid)
+            self.assertEqual((menu["Assign to this client…"][1], menu["Preview and deploy…"][1]),
+                             (shown[-1] == "Assign to this client…", shown[-1] == "Preview and deploy…"))
+        self.assertEqual(shown, ["Preview and deploy…", "Preview and deploy…", None, "Assign to this client…"])
+        self.assertIn("acme-primary", self.page.action_button.tooltip_text)
+        self.app.set_busy(True, immediate=True)
+        try:
+            self.assertEqual(str(self.page.action_button.cget("state")), "disabled")
+            self.assertFalse(self.menu("3")["Assign to this client…"][1])
+        finally:
+            self.app.set_busy(False)
+
+    def test_actions_open_the_library_dialogs_for_this_client(self):
+        self.connect(); self.open()
+        # A local folder can't take an assignment or a preview: say why, and open nothing.
+        self.load_library()
+        self.page.tree.selection_set("3"); self.page.selected()
+        with patch("sentinel_app.drift_page.kit.alert") as alert, \
+                patch("sentinel_app.drift_page.AssignmentDialog") as dialog:
+            self.page.action_button.invoke()
+        dialog.assert_not_called()
+        self.assertIn("private GitHub repository", alert.call_args.args[2])
+        # From the team's GitHub library, each opens the Rule library's dialog with this client ticked.
+        snapshot = dict(library(), repository="example/detections", private=True, can_push=True, issues=[])
+        self.load_library(snapshot)
+        self.page.tree.selection_set("3"); self.page.selected()
+        with patch("sentinel_app.drift_page.AssignmentDialog") as dialog: self.page.action_button.invoke()
+        args, kwargs = dialog.call_args
+        self.assertEqual((args[2]["path"], kwargs), ("rules/sentinel/d.yml", dict(preselect=("acme-primary",), enabled=True)))
+        with patch("sentinel_app.drift_page.PreviewDialog") as dialog: self.menu("1")["Preview and deploy…"][0]()
+        args, kwargs = dialog.call_args
+        self.assertEqual((args[2]["path"], kwargs), ("rules/sentinel/b.yml", dict(preselect=("acme-primary",))))
+        # Library issues block both, as they do in the Rule library.
+        self.load_library(dict(snapshot, issues=["broken"]))
+        with patch("sentinel_app.drift_page.kit.alert") as alert, patch("sentinel_app.drift_page.PreviewDialog") as dialog:
+            self.menu("0")["Preview and deploy…"][0]()
+        dialog.assert_not_called()
+        self.assertIn("Fix the library issues", alert.call_args.args[2])
+
     def test_view_and_split_are_remembered_and_search_has_its_shortcut(self):
         self.connect(); self.root.deiconify(); self.root.geometry("1300x820"); self.open()
         self.app.focus_search(); self.root.update()

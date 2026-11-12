@@ -1,12 +1,16 @@
 """Drift view: the rule library's plan for the connected client beside the rules live in its workspace.
 
 Read-only. It compares what the Workspace rules and Rule library views have already read, and starts
-no read of its own: Refresh and Refresh library run those views' own loaders."""
+no read of its own: Refresh and Refresh library run those views' own loaders. Its actions open the
+Rule library's own dialogs (assign, preview and deploy) for the connected client, which go through
+review as they do from there."""
 import json
 import tkinter as tk
 from tkinter import ttk
 from . import ui_kit as kit
+from .assignment_dialog import AssignmentDialog
 from .catalog_page import overrides_text, plural
+from .preview_dialog import PreviewDialog
 from .desktop_theme import COLORS, px
 from .repository_catalog import state
 from .rule_drift import drift, key, DIFFERENT, LIVE_ONLY, MISSING
@@ -127,6 +131,10 @@ class DriftPage:
         self.explanation = tk.StringVar()
         self.explanation_label = kit.wrap_to_parent(ttk.Label(inner, textvariable=self.explanation, style="Body.TLabel",
                                                               justify="left", wraplength=px(300)), minimum=px(120))
+        self.actions = ttk.Frame(inner, style="Card.TFrame")
+        self.action_button = ttk.Button(self.actions, style="Small.Primary.TButton", command=self.act)
+        self.action_button.pack(side="left")
+        kit.tooltip(self.action_button, "")  # Its text is set per rule (action_button.tooltip_text).
         self.compare_label = kit.section_label(inner, "Library and workspace")
         self.compare_frame, self.compare, _ = kit.table(
             inner, (("setting", "Setting", 90, False), ("library", "Library", 100, True), ("live", "Workspace", 100, True)),
@@ -187,6 +195,7 @@ class DriftPage:
     def sync(self):
         """Refresh needs a workspace; Refresh library needs a library source."""
         idle = not self.app.busy
+        self.action_button.configure(state="normal" if idle else "disabled")
         self.refresh_button.configure(state="normal" if idle and self.app.rules_page.ready() else "disabled")
         self.library_button.configure(state="normal" if idle and self.app.catalog_page.source.get().strip() else "disabled")
 
@@ -290,10 +299,49 @@ class DriftPage:
 
     def row_menu(self, iid):
         entry = self.entries[int(iid)]
-        return [("Copy name", lambda: self.copy_text(entry["name"], "Rule name")),
+        action, idle = self.action(entry), not self.app.busy
+        return [("Assign to this client…", lambda: self.assign(entry), idle and action == "assign"),
+                ("Preview and deploy…", lambda: self.preview(entry), idle and action == "deploy"), None,
+                ("Copy name", lambda: self.copy_text(entry["name"], "Rule name")),
                 ("Copy rule ID", lambda: self.copy_text(entry["id"], "Rule ID"), bool(entry["id"])), None,
                 ("Show in Workspace rules", lambda: self.show_live(entry), entry["live"] is not None),
                 ("Show in Rule library", lambda: self.show_library(entry), entry["rule"] is not None)]
+
+    # ------------------------------------------------------------- actions
+    @staticmethod
+    def action(entry):
+        """What would bring ``entry`` in step from here: 'assign' (a library rule not assigned to this
+        client), 'deploy' (assigned, but missing or different live) or None (not in the library)."""
+        if entry["kind"] in (MISSING, DIFFERENT): return "deploy"
+        return "assign" if entry["rule"] is not None else None
+
+    def act(self):
+        index = self.shown
+        if index is None or index < 0 or self.app.busy: return
+        entry = self.entries[index]
+        {"assign": self.assign, "deploy": self.preview}.get(self.action(entry), lambda entry: None)(entry)
+
+    def blocked_by(self, problem, title):
+        """Say why the library can't take this step, in a dialog: the reason belongs to the Rule library."""
+        if problem is None: return False
+        text, _, tone = problem
+        kit.alert(self.app.root, title, text, tone=tone)
+        return True
+
+    def assign(self, entry):
+        """The Rule library's assignment dialog for this rule, with this client ticked at the rule's live state."""
+        library = self.app.catalog_page
+        if self.app.busy or entry["rule"] is None or not self.target(): return
+        if self.blocked_by(library.assign_problem(), "Assign to this client"): return
+        live = (entry["live"] or {}).get("properties", {}).get("enabled") is True
+        AssignmentDialog(self.app, library.snapshot, entry["rule"], preselect=(self.target(),), enabled=live)
+
+    def preview(self, entry):
+        """The Rule library's preview and deploy dialog for this rule, with this client ticked."""
+        library = self.app.catalog_page
+        if self.app.busy or entry["rule"] is None or not self.target(): return
+        if self.blocked_by(library.preview_problem(), "Preview and deploy"): return
+        PreviewDialog(self.app, library.snapshot, entry["rule"], preselect=(self.target(),))
 
     def show_live(self, entry):
         """Open the Workspace rules view on this rule."""
@@ -356,7 +404,7 @@ class DriftPage:
 
     def detail(self, entry=None):
         for child in self.pills.winfo_children(): child.destroy()
-        for part in (self.pills, self.explanation_label, self.compare_label, self.compare_frame, self.facts):
+        for part in (self.pills, self.explanation_label, self.actions, self.compare_label, self.compare_frame, self.facts):
             part.pack_forget()
         self.library_raw.place(False); self.live_raw.place(False)  # Repacked last, so the parts keep their order.
         self.compare.delete(*self.compare.get_children())
@@ -381,6 +429,15 @@ class DriftPage:
         self.pills.pack(fill="x", pady=(0, px(12)))
         self.explanation.set(self.explain(entry))
         self.explanation_label.pack(fill="x", pady=(0, px(12)))
+        action = self.action(entry)
+        if action:
+            target = self.target()
+            self.action_button.configure(text="Assign to this client…" if action == "assign" else "Preview and deploy…")
+            self.action_button.tooltip_text = (
+                f"Assign this rule to {target}. A teammate approves the change before anything deploys."
+                if action == "assign" else
+                f"Preview this rule for {target}, then deploy it once the preview passes.")
+            self.actions.pack(fill="x", pady=(0, px(12)))
         rows = comparison(entry)
         kit.set_headings(self.compare, {"library": "Library" if entry["kind"] != LIVE_ONLY or not entry["rule"]
                                         else "Library (not assigned)"})

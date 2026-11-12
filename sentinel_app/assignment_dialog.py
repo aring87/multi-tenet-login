@@ -28,6 +28,12 @@ def mixed_box(master):
     return cache["check", "mixed"]
 
 
+def reveal(tree, visible, selected):
+    """Scroll the first ticked row into view, so a client ticked before the dialog opened shows."""
+    item = next((item for item, target in visible.items() if target in selected), None)
+    if item is not None: tree.see(item)
+
+
 class ClientPicker:
     """Tick boxes for a client table made with kit.table(check=True). A click or Space ticks a
     row in place (the rows are not rebuilt, so a long list doesn't flicker), and the box in the
@@ -95,14 +101,17 @@ class ClientPicker:
 
 
 class AssignmentDialog(ClientPicker):
-    def __init__(self, app, snapshot=None, rule=None, record=None):
+    def __init__(self, app, snapshot=None, rule=None, record=None, preselect=(), enabled=False):
+        """``preselect`` ticks those targets to start with and ``enabled`` sets the starting rule
+        state: Drift opens the dialog for its own client, at the state the rule has live there."""
         self.app = app
         self.snapshot = copy.deepcopy(snapshot) if snapshot else {"clients": []}
         self.rule = copy.deepcopy(rule) if rule else {"name": record["plan"]["name"], "path": record["plan"]["rule_path"]}
         self.service = AssignmentService()
         self.folder = app.rule_builder.data_dir / "assignment-requests"
         self.record, self.locked = record, record is not None
-        self.selected, self.visible = set(), {}
+        known = {c["target"] for c in self.snapshot["clients"]}
+        self.selected, self.visible = (set() if self.locked else set(preselect) & known), {}
         self.window = tk.Toplevel(app.root)
         self.window.title("Assign rule to clients"); self.window.configure(bg=COLORS["card"])
         body = ttk.Frame(self.window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
@@ -114,7 +123,7 @@ class AssignmentDialog(ClientPicker):
         self.search = tk.StringVar(); self.search_box = ttk.Entry(toolbar, textvariable=self.search)
         self.search_box.pack(side="left", fill="x", expand=True, padx=(0, px(16)))
         kit.placeholder(self.search_box, self.search, "Search clients or workspaces", search=True)
-        self.enabled = tk.StringVar(value="Disabled")
+        self.enabled = tk.StringVar(value="Enabled" if enabled else "Disabled")
         self.state_box = ttk.Combobox(toolbar, textvariable=self.enabled, values=("Disabled", "Enabled"), state="readonly", width=10)
         self.state_box.pack(side="right"); self.state_box.bind("<MouseWheel>", lambda event: "break")
         ttk.Label(toolbar, text="Rule state for selected clients", style="Field.TLabel").pack(side="right", padx=(0, px(8)))
@@ -152,6 +161,7 @@ class AssignmentDialog(ClientPicker):
         kit.place_dialog(self.window, app.root, 1050, 800, 900, 720)
         kit.modal(self.window, app.root, self.close, primary=self.prepare_button, focus=self.search_box)
         self.render_clients()
+        reveal(self.clients, self.visible, self.selected)
         if record: self.render_review()
         self.refresh_controls()
 

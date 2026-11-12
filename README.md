@@ -29,7 +29,22 @@ Use the packaged app; you do not need Python, Git or this repository.
 
 Inside the app, **F1** opens the full guide ([docs/DESKTOP-START-HERE.md](docs/DESKTOP-START-HERE.md)),
 and **Check this PC** at the foot of the sidebar checks Azure CLI, GitHub CLI, GitHub sign-in
-and the data folder. The step-by-step team procedure is the SOP that comes in the zip.
+and the data folder. The step-by-step team procedures are the two SOPs that come in the zip
+as PDFs: **SOP: Sentinel Workspace desktop app** (setup, connecting, reviewing rules, drift,
+assigning, previewing and deploying) and **SOP: Building detection rules** (every Rule builder
+step, the KQL editor, test queries, validation and submitting for approval).
+
+## How a rule change flows
+
+1. **Connect** to the client and check what is live in **Rules > Workspace rules** or **Drift**.
+2. Write or edit the rule in the **Rule builder**, test its query read-only against the
+   workspace, and **Check rule** against the repository schema.
+3. **Submit for approval** opens a pull request in the detection repository. A teammate
+   reviews and merges it, and the repository pipeline tests the query live.
+4. An engineer uses **Assign to clients…**, then **Preview and deploy…** in the Rule library;
+   each step is its own reviewed request, and the deployment runs only after its previews pass.
+
+Nothing in the app changes a live rule directly.
 
 ## What it does
 
@@ -51,8 +66,9 @@ and the data folder. The step-by-step team procedure is the SOP that comes in th
   line and column, and one click to put the suggested spelling in), **Run test query**
   against the connected workspace (read-only, row-capped), a schema check that flags every
   problem at once, and
-  **Submit for approval**, which opens a ready-for-review pull request. **My submissions**
-  follows each one to merge. Unsaved work is autosaved and offered back after a crash.
+  **Submit for approval**, which opens a ready-for-review pull request (a new rule is also
+  added to the deploy workflows' rule dropdowns in the same commit, so the repository's
+  dropdown check passes). **My submissions** follows each one to merge. Unsaved work is autosaved and offered back after a crash.
 - **Support:** **Check this PC**, **Copy support info** (versions, checks and recent errors,
   without client data) and an optional notice when a newer version is in a shared folder.
   Unexpected errors are written to `desktop-data/logs/errors.log`.
@@ -116,7 +132,7 @@ The exe keeps its data in a `desktop-data` folder beside it, or under
 
 To make the analyst package, put these in a folder named `Sentinel Workspace` and zip it:
 
-- the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and the SOP as a PDF;
+- the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and both SOPs as PDFs;
 - `desktop-data\clients.json`, copied from your own desktop-data folder;
 - `desktop-data\settings.json` holding only the rule library:
   `{"github_owner": "isi-security", "github_repo": "detection-as-code"}`;
@@ -132,7 +148,7 @@ only through approved channels.
 
 To have analysts' apps announce a new version, keep the package in one folder on the team share
 with a `latest.json` beside it, for example
-`{"version": "2.3.0", "notes": "KQL check as you type in the Rule builder."}`. Analysts set
+`{"version": "2.3.0", "notes": "KQL editor with colours, completions and one-click fixes."}`. Analysts set
 that folder once in **Check this PC** > **Set update folder…**. The app only reads the file; it
 never downloads or installs anything.
 
@@ -215,6 +231,8 @@ certification.
 
 ## Documentation
 
+- Team SOPs: **SOP: Sentinel Workspace desktop app** and **SOP: Building detection rules**
+  (PDFs in the analyst package, kept with the team's procedures)
 - [Desktop guide](docs/DESKTOP-START-HERE.md) (also the in-app Help, F1)
 - [Repository catalog, rule builder, reviews and deployments](docs/REPOSITORY-PILOT.md)
 - [Current Lighthouse onboarding](docs/APP-ONBOARDING.md)

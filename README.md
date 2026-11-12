@@ -132,7 +132,7 @@ The exe keeps its data in a `desktop-data` folder beside it, or under
 
 To make the analyst package, put these in a folder named `Sentinel Workspace` and zip it:
 
-- the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and both SOPs as PDFs (from `docssop`);
+- the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and both SOPs as PDFs (from `docs/sop`);
 - `desktop-data\clients.json`, copied from your own desktop-data folder;
 - `desktop-data\settings.json` holding only the rule library:
   `{"github_owner": "isi-security", "github_repo": "detection-as-code"}`;

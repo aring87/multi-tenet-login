@@ -9,7 +9,11 @@ import yaml
 from sentinel_app import rule_assignments as assignments
 from sentinel_app.repository_catalog import GitHubReader, parse_yaml
 from sentinel_app.repository_reviews import ReviewError, fingerprint
+from sentinel_app import rule_drafts as drafts
 from test_repository_reviews import FakeGitHub, REPO, EXISTING
+from test_rule_drafts import valid_form
+
+SECOND = 'rules/sentinel/second.yml'
 
 
 class AssignmentGitHub(FakeGitHub):
@@ -88,6 +92,58 @@ class AssignmentTests(unittest.TestCase):
         self.assertEqual(self.remote.head,'a'*40)
         saved=assignments.load_request(next(self.folder.glob('*.assignment.json')))
         self.assertEqual(saved['pull_request'],url)
+
+    def add_second_rule(self):
+        form=valid_form();form.update(name='Second synthetic detection')
+        self.remote.files[SECOND]=drafts.validated_yaml(form)[0].encode()
+
+    def test_several_rules_in_one_request_each_at_its_own_state(self):
+        self.add_second_rule();self.remote.add_client('example',True)  # example already has EXISTING (enabled).
+        record=self.service.prepare(REPO,'a'*40,{EXISTING:True,SECOND:False},
+                                    ['413-workspace-commercial','example-workspace-commercial'])
+        p=record['plan']
+        self.assertEqual((p['name'],p['rule_path'],p['rule_paths'],p['enabled']),('2 rules',EXISTING,[EXISTING,SECOND],None))
+        self.assertEqual(p['names'],['Synthetic test detection','Second synthetic detection'])
+        self.assertEqual(len(p['files']),2)  # One file per client, holding both rules.
+        for f in p['files']:
+            rules={a['path']:a['overrides']['enabled'] for a in parse_yaml(f['content'].encode())['rules']}
+            self.assertEqual(rules,{EXISTING:True,SECOND:False})
+        actions={(c['target'],c['rule']):c['action'] for c in p['impact']}
+        self.assertEqual(actions,{('413-workspace-commercial',EXISTING):'Add assignment',('413-workspace-commercial',SECOND):'Add assignment',
+                                  ('example-workspace-commercial',EXISTING):'Already configured',
+                                  ('example-workspace-commercial',SECOND):'Add assignment'})
+        self.assertEqual(self.service.change_title(p),'Assign 2 Sentinel rules')
+        body=self.service.pull_body(p)
+        self.assertIn('`'+SECOND+'` (Second synthetic detection): Disabled',body)
+        self.assertIn('- example-workspace-commercial · `'+EXISTING+'`: Already configured',body)
+        # It submits as one commit, and a saved copy loads back.
+        self.service.submit(record,self.folder)
+        writes=self.remote.writes();self.assertEqual(len(writes[0][2]['tree']),2)
+        self.assertEqual(writes[-1][2]['title'],'Assign 2 Sentinel rules')
+        saved=assignments.load_request(next(self.folder.glob('*.assignment.json')))
+        self.assertEqual(assignments.plan_states(saved['plan']),{EXISTING:True,SECOND:False})
+
+    def test_a_list_of_rules_takes_one_state_and_one_rule_keeps_the_old_format(self):
+        self.add_second_rule()
+        p=self.service.prepare(REPO,'a'*40,[EXISTING,SECOND],['413-workspace-commercial'],True)['plan']
+        self.assertEqual((p['enabled'],p['states']),(True,{EXISTING:True,SECOND:True}))
+        single=self.prepare()['plan']
+        self.assertFalse({'states','rule_paths','names'} & set(single))  # As every saved single-rule request.
+        self.assertNotIn('rule',single['impact'][0])
+        self.assertEqual(assignments.plan_states(single),{EXISTING:False})
+
+    def test_tampered_or_oversized_rule_lists_are_rejected(self):
+        self.add_second_rule()
+        record=self.service.prepare(REPO,'a'*40,{EXISTING:True,SECOND:False},['413-workspace-commercial'])
+        for change in (dict(rule_paths=[SECOND,EXISTING]),dict(enabled=True),dict(names=['only one']),
+                       dict(states={EXISTING:True}),dict(rule_path=SECOND)):
+            tampered=copy.deepcopy(record);tampered['plan'].update(change)
+            tampered['fingerprint']=fingerprint(tampered['plan'])
+            with self.assertRaises(ReviewError): assignments.check_record(tampered)
+        with self.assertRaises(ReviewError):
+            assignments.rule_states({'rules/sentinel/r%d.yml'%i:True for i in range(assignments.MAX_RULES+1)})
+        with self.assertRaises(ReviewError): self.service.prepare(REPO,'a'*40,{EXISTING:'yes'},['413-workspace-commercial'])
+        with self.assertRaises(ReviewError): self.service.prepare(REPO,'a'*40,[EXISTING,'rules/sentinel/gone.yml'],['413-workspace-commercial'])
 
     def test_stale_catalog_or_base_stops_before_writes(self):
         record=self.prepare();self.remote.head='e'*40

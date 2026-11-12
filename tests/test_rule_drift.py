@@ -330,6 +330,27 @@ class DriftPageTests(unittest.TestCase):
         dialog.assert_not_called()
         self.assertIn("Fix the library issues", alert.call_args.args[2])
 
+    def test_several_selected_rules_are_assigned_together_at_their_live_states(self):
+        # Echo is in the library, assigned to nobody, and live here switched off.
+        self.connect(RECORDS + [live(E, "Echo", enabled=False, severity="Informational")]); self.open()
+        self.load_library(dict(library(), repository="example/detections", private=True, can_push=True, issues=[]))
+        iid = {self.page.entries[int(item)]["name"]: item for item in self.page.tree.get_children()}
+        self.page.tree.selection_set((iid["Delta"], iid["Echo"], iid["Bravo"])); self.page.selected()
+        self.assertEqual(self.page.action_button.cget("text"), "Assign 2 rules to this client…")
+        self.assertIn("1 selected rule with another kind of drift is left out", self.page.action_button.tooltip_text)
+        menu = self.menu(iid["Delta"])  # Right-clicking inside the selection keeps it.
+        self.assertTrue(menu["Assign 2 rules to this client…"][1])
+        self.assertFalse(menu["Preview and deploy…"][1])  # Previews run one rule at a time.
+        with patch("sentinel_app.drift_page.AssignmentDialog") as dialog: self.page.action_button.invoke()
+        args, kwargs = dialog.call_args
+        self.assertEqual([rule["path"] for rule in args[2]], ["rules/sentinel/d.yml", "rules/sentinel/e.yml"])
+        self.assertEqual(kwargs, dict(preselect=("acme-primary",),
+                                      enabled={"rules/sentinel/d.yml": True, "rules/sentinel/e.yml": False}))
+        # Only rules with other kinds of drift selected: no step.
+        self.page.tree.selection_set((iid["Bravo"], iid["Charlie"])); self.page.selected()
+        self.assertFalse(self.page.actions.winfo_manager())
+        self.assertFalse(self.menu(iid["Bravo"])["Assign to this client…"][1])
+
     def test_view_and_split_are_remembered_and_search_has_its_shortcut(self):
         self.connect(); self.root.deiconify(); self.root.geometry("1300x820"); self.open()
         self.app.focus_search(); self.root.update()

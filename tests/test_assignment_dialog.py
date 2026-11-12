@@ -10,7 +10,9 @@ from sentinel_app import ui_kit as kit
 from sentinel_app.assignment_dialog import AssignmentDialog, mixed_box
 from sentinel_app.rule_assignments import AssignmentService, load_request
 from sentinel_app.repository_catalog import GitHubReader
+from sentinel_app import rule_drafts as drafts
 from test_rule_assignments import AssignmentGitHub, REPO
+from test_rule_drafts import valid_form
 
 
 class AssignmentDialogTests(unittest.TestCase):
@@ -48,6 +50,43 @@ class AssignmentDialogTests(unittest.TestCase):
         self.dialog.window.destroy()
         self.dialog = AssignmentDialog(self.app, self.snapshot, self.snapshot['rules'][0])
         self.assertEqual((self.dialog.selected, self.dialog.enabled.get()), (set(), 'Disabled'))  # As from the library.
+
+    def test_several_rules_with_their_live_states(self):
+        self.dialog.window.destroy()
+        first = self.snapshot['rules'][0]
+        other = dict(first, name='Other synthetic rule', path='rules/sentinel/other.yml')
+        live = {first['path']: True, other['path']: False}
+        self.dialog = AssignmentDialog(self.app, self.snapshot, [first, other], enabled=live)
+        self.assertEqual(self.dialog.enabled.get(), 'As in the workspace')  # The live states differ.
+        self.assertIn('As in the workspace', self.dialog.state_box.cget('values'))
+        self.assertEqual(self.dialog.states(), live)
+        self.dialog.enabled.set('Enabled')
+        self.assertEqual(self.dialog.states(), {first['path']: True, other['path']: True})
+        self.assertEqual({self.dialog.clients.set(item, 'assignment') for item in self.dialog.clients.get_children()},
+                         {'Unassigned'})
+        client = self.snapshot['clients'][0]; client['assignments'] = [{'path': first['path']}]
+        self.assertEqual(self.dialog.current(client), '1 of 2 assigned')
+        # The same live state everywhere starts at that state, without the extra choice.
+        self.dialog.window.destroy()
+        self.dialog = AssignmentDialog(self.app, self.snapshot, [first, other], enabled=dict.fromkeys(live, True))
+        self.assertEqual(self.dialog.enabled.get(), 'Enabled')
+        self.assertNotIn('As in the workspace', self.dialog.state_box.cget('values'))
+
+    def test_checking_several_rules_reviews_each_rule_and_client(self):
+        self.dialog.window.destroy()
+        form = valid_form(); form.update(name='Second synthetic detection')
+        self.remote.files['rules/sentinel/second.yml'] = drafts.validated_yaml(form)[0].encode()
+        snapshot = GitHubReader(lambda endpoint: self.remote('GET', endpoint)).load(REPO)
+        rules = sorted(snapshot['rules'], key=lambda rule: rule['path'])
+        self.dialog = AssignmentDialog(self.app, snapshot, rules, enabled=True)
+        self.dialog.service = AssignmentService(self.remote)
+        self.assertEqual(self.dialog.window.title(), 'Assign rules to clients')
+        self.prepare()
+        text = self.dialog.text.get('1.0', 'end')
+        self.assertIn('Rules (2):', text)
+        for rule in rules: self.assertIn('  ' + rule['path'] + ' | Enabled', text)
+        self.assertIn(' | rules/sentinel/second.yml | Add assignment', text)
+        self.assertEqual(str(self.dialog.submit_button.cget('state')), 'normal')
 
     def test_search_selects_visible_targets_and_keeps_hidden_selection(self):
         self.dialog.search.set('413'); self.dialog.select_shown()

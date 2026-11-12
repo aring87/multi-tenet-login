@@ -9,9 +9,17 @@ import webbrowser
 
 from . import ui_kit as kit
 from .desktop_theme import COLORS, px
-from .rule_assignments import AssignmentService, assignment_diff
+from .rule_assignments import AssignmentService, assignment_diff, plan_states
 
 PULL_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
+MATCH = "As in the workspace"  # Each rule at the state it has live, when Drift's rules differ.
+
+
+def rules_text(rules):
+    """The dialog subtitle: the rule and its file, or how many rules and the first few names."""
+    if len(rules) == 1: return rules[0]["name"] + "  ·  " + rules[0]["path"]
+    names = ", ".join(rule["name"] for rule in rules[:3])
+    return f"{len(rules)} rules  ·  " + names + (f" and {len(rules) - 3} more" if len(rules) > 3 else "")
 
 
 def mixed_box(master):
@@ -102,29 +110,43 @@ class ClientPicker:
 
 class AssignmentDialog(ClientPicker):
     def __init__(self, app, snapshot=None, rule=None, record=None, preselect=(), enabled=False):
-        """``preselect`` ticks those targets to start with and ``enabled`` sets the starting rule
-        state: Drift opens the dialog for its own client, at the state the rule has live there."""
+        """``rule`` is one library rule or a list of them, assigned in one request. ``preselect``
+        ticks those targets to start with. ``enabled`` sets the starting rule state: a bool, or
+        {rule path: bool} for the state each rule has live (Drift), offered as As in the workspace
+        when they differ."""
         self.app = app
         self.snapshot = copy.deepcopy(snapshot) if snapshot else {"clients": []}
-        self.rule = copy.deepcopy(rule) if rule else {"name": record["plan"]["name"], "path": record["plan"]["rule_path"]}
+        if record:
+            plan = record["plan"]
+            self.rules = [{"name": name, "path": path}
+                          for name, path in zip(plan.get("names", [plan["name"]]), plan_states(plan))]
+        else:
+            self.rules = copy.deepcopy(list(rule) if isinstance(rule, (list, tuple)) else [rule])
+        self.rule = self.rules[0]  # The first; the only one for a single-rule request.
+        self.live = dict(enabled) if isinstance(enabled, dict) else None
+        live_values = set(self.live.values()) if self.live else {bool(enabled)}
+        start = MATCH if len(live_values) > 1 else "Enabled" if live_values.pop() else "Disabled"
         self.service = AssignmentService()
         self.folder = app.rule_builder.data_dir / "assignment-requests"
         self.record, self.locked = record, record is not None
         known = {c["target"] for c in self.snapshot["clients"]}
         self.selected, self.visible = (set() if self.locked else set(preselect) & known), {}
         self.window = tk.Toplevel(app.root)
-        self.window.title("Assign rule to clients"); self.window.configure(bg=COLORS["card"])
+        title = "Assign rules to clients" if len(self.rules) > 1 else "Assign rule to clients"
+        self.window.title(title); self.window.configure(bg=COLORS["card"])
         body = ttk.Frame(self.window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Assign rule to clients", style="CardTitle.TLabel").pack(anchor="w")
-        kit.wrap_to_parent(ttk.Label(body, text=self.rule["name"] + "  ·  " + self.rule["path"], style="CardSubtitle.TLabel",
+        ttk.Label(body, text=title, style="CardTitle.TLabel").pack(anchor="w")
+        kit.wrap_to_parent(ttk.Label(body, text=rules_text(self.rules), style="CardSubtitle.TLabel",
                                      justify="left", width=1), minimum=px(200)).pack(fill="x", pady=(px(2), px(14)))
         toolbar = ttk.Frame(body, style="Card.TFrame"); toolbar.pack(fill="x", pady=(0, px(10)))
         self.search = tk.StringVar(); self.search_box = ttk.Entry(toolbar, textvariable=self.search)
         self.search_box.pack(side="left", fill="x", expand=True, padx=(0, px(16)))
         kit.placeholder(self.search_box, self.search, "Search clients or workspaces", search=True)
-        self.enabled = tk.StringVar(value="Enabled" if enabled else "Disabled")
-        self.state_box = ttk.Combobox(toolbar, textvariable=self.enabled, values=("Disabled", "Enabled"), state="readonly", width=10)
+        self.enabled = tk.StringVar(value=start)
+        choices = ("Disabled", "Enabled") + ((MATCH,) if start == MATCH else ())
+        self.state_box = ttk.Combobox(toolbar, textvariable=self.enabled, values=choices, state="readonly",
+                                      width=18 if start == MATCH else 10)
         self.state_box.pack(side="right"); self.state_box.bind("<MouseWheel>", lambda event: "break")
         ttk.Label(toolbar, text="Rule state for selected clients", style="Field.TLabel").pack(side="right", padx=(0, px(8)))
         # Bottom-anchored controls are packed first so they always have room; the lists share what remains.
@@ -137,7 +159,7 @@ class AssignmentDialog(ClientPicker):
                                          "assignment; nothing is deployed from here.")
         self.banner = kit.Banner(body, self.notice); self.banner.pack(side="bottom", fill="x", pady=(px(10), 0))
         frame, self.clients, self.empty = kit.table(body, (("client", "Client", 150, True), ("workspace", "Workspace", 160, True),
-                                                           ("target", "Target", 210, True), ("assignment", "Current rule", 120, False),
+                                                           ("target", "Target", 210, True), ("assignment", "Current rules" if len(self.rules) > 1 else "Current rule", 120, False),
                                                            ("state", "Target state", 110, False)), height=6, check=True)
         frame.pack(fill="both", expand=True)
         self.pickable()
@@ -180,10 +202,7 @@ class AssignmentDialog(ClientPicker):
         for i, c in enumerate(sorted(self.snapshot["clients"], key=lambda c: (c["name"].casefold(), c["target"].casefold()))):
             if term and term not in " ".join((c["name"], c["workspace"], c["target"])).casefold(): continue
             self.visible[str(i)] = c["target"]
-            assignment = next((a for a in c["assignments"] if a["path"] == self.rule["path"]), None)
-            effective = None if assignment is None else assignment.get("overrides", {}).get("enabled", self.rule["raw"].get("enabled"))
-            current = ("Unassigned" if assignment is None else "Enabled" if effective is True else
-                       "Disabled" if effective is False else "Not specified")
+            current = self.current(c)
             self.clients.insert("", "end", iid=str(i), image=self.box(c["target"]),
                                 values=(c["name"], c["workspace"], c["target"], current,
                                         "Enabled" if c["raw"]["enabled"] else "Disabled"),
@@ -192,6 +211,23 @@ class AssignmentDialog(ClientPicker):
         elif self.snapshot["clients"]: self.empty.show("No clients match your search.", ("Clear search", lambda: self.search.set("")))
         else: self.empty.show("The rule library has no client workspaces yet.")
         self.paint()
+
+    def current(self, client):
+        """The Current rule column: the one rule's state for this client, or how many of the rules it has."""
+        assigned = {a["path"]: a for a in client["assignments"]}
+        if len(self.rules) > 1:
+            count = sum(rule["path"] in assigned for rule in self.rules)
+            return "Unassigned" if not count else "All assigned" if count == len(self.rules) else \
+                f"{count} of {len(self.rules)} assigned"
+        assignment = assigned.get(self.rule["path"])
+        if assignment is None: return "Unassigned"
+        effective = assignment.get("overrides", {}).get("enabled", self.rule.get("raw", {}).get("enabled"))
+        return "Enabled" if effective is True else "Disabled" if effective is False else "Not specified"
+
+    def states(self):
+        """{rule path: enabled} as chosen: one state for every rule, or each rule's live state."""
+        choice = self.enabled.get()
+        return {rule["path"]: self.live[rule["path"]] if choice == MATCH else choice == "Enabled" for rule in self.rules}
 
     def count_text(self):
         hidden = len(self.selected - set(self.visible.values()))
@@ -238,20 +274,27 @@ class AssignmentDialog(ClientPicker):
     def prepare(self):
         if self.app.busy or self.locked: return
         self.record = None; self.show("")
-        targets = sorted(self.selected); enabled = self.enabled.get() == "Enabled"
+        targets = sorted(self.selected); states = self.states()
         def done(record): self.record = record; self.render_review()
         self.work("Comparing client files with the rule library. Nothing is sent to GitHub yet…",
-                  lambda: self.service.prepare(self.snapshot["repository"], self.snapshot["revision"], self.rule["path"], targets, enabled),
+                  lambda: self.service.prepare(self.snapshot["repository"], self.snapshot["revision"], states, targets),
                   done)
 
     def render_review(self):
         p = self.record["plan"]
-        lines = ["Library: " + p["repository"], "GitHub account: " + p["identity"], "Checked against main: " + p["base_sha"],
-                 "Rule: " + p["rule_path"], "Requested rule state: " + ("Enabled" if p["enabled"] else "Disabled"),
-                 "Changed client files: " + str(len(p["files"])), ""]
+        state = lambda value: "Enabled" if value else "Disabled"
+        lines = ["Library: " + p["repository"], "GitHub account: " + p["identity"], "Checked against main: " + p["base_sha"]]
+        states = plan_states(p)
+        if len(states) > 1:
+            lines.append(f"Rules ({len(states)}):")
+            lines += ["  " + path + " | " + state(value) for path, value in states.items()]
+        else:
+            lines += ["Rule: " + p["rule_path"], "Requested rule state: " + state(p["enabled"])]
+        lines += ["Changed client files: " + str(len(p["files"])), ""]
         for c in p["impact"]:
-            lines.append(c["target"] + " | " + c["workspace"] + " | " + c["action"] + " | target "
-                         + ("enabled" if c["target_enabled"] else "disabled") + " | overrides: " + json.dumps(c["overrides"]))
+            lines.append(c["target"] + " | " + c["workspace"] + (" | " + c["rule"] if "rule" in c else "") + " | "
+                         + c["action"] + " | target " + ("enabled" if c["target_enabled"] else "disabled")
+                         + " | overrides: " + json.dumps(c["overrides"]))
         lines += ["", *p["warnings"], "", assignment_diff(p)]
         self.show("\n".join(lines))
         if self.record.get("pull_request"):

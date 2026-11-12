@@ -10,7 +10,7 @@ from .repository_catalog import GitHubReader, load_local, state
 from .preview_dialog import PreviewDialog
 from .assignment_dialog import AssignmentDialog
 from .workflow_history_dialog import WorkflowHistoryDialog
-from .rule_assignments import load_request as load_assignment_request
+from .rule_assignments import MAX_RULES, load_request as load_assignment_request
 from .rules_page import STATES, STATE_ORDER, CopyValues, Split, RawConfig, detail_pane, flow, fit_columns, link_search
 
 HEADINGS = {"Clients": ("Client", "State", "Workspace", "Target"), "Rules": ("Rule", "State", "Severity", "File")}
@@ -153,7 +153,9 @@ class CatalogPage:
         for button in (self.edit_button, self.assign_button, self.preview_button):
             button.pack(side="left", padx=(0, px(6)))
         self.rule_actions = [self.assign_button, self.preview_button]
-        self.table_frame, self.tree, self.empty = kit.table(body, COLUMNS, height=6, sort=self.sort_by, menu=self.row_menu)
+        # Ctrl- or Shift-click selects several rules, to assign them together.
+        self.table_frame, self.tree, self.empty = kit.table(body, COLUMNS, height=6, sort=self.sort_by, menu=self.row_menu,
+                                                            selectmode="extended")
         self.table_frame.pack(fill="both", expand=True)
         self.tree.sort_state = self.sort  # The library lists rules by name; the heading says so.
         self.empty.line.configure(width=px(160))  # The loading line's own width stays inside a narrow pane.
@@ -298,20 +300,28 @@ class CatalogPage:
         if rules and not self.edit_button.winfo_manager():
             self.edit_button.pack(side="left", padx=(0, px(6)), before=self.assign_button)
         elif not rules and self.edit_button.winfo_manager(): self.edit_button.pack_forget()
-        chosen = rules and self.snapshot is not None and bool(self.tree.selection()) and not self.app.busy
-        for button in (self.edit_button, *self.rule_actions):
-            button.configure(state="normal" if chosen else "disabled")
+        count = len(self.selected_rules()) if not self.app.busy else 0
+        # Several rules can be assigned together; editing and previews take one rule at a time.
+        self.assign_button.configure(state="normal" if count else "disabled",
+                                     text=f"Assign {count} rules to clients…" if count > 1 else "Assign to clients…")
+        for button in (self.edit_button, self.preview_button):
+            button.configure(state="normal" if count == 1 else "disabled")
+
+    def selected_rules(self):
+        """The selected rules, in list order; none outside the Rules view."""
+        if self.view.get() != "Rules" or not self.snapshot: return []
+        return [self.visible[int(item)] for item in self.tree.selection() if int(item) < len(self.visible)]
 
     def selected_rule(self):
-        selected = self.tree.selection()
-        if self.view.get() != "Rules" or not selected or not self.snapshot: return None
-        return self.visible[int(selected[0])]
+        """The selected rule when exactly one is selected."""
+        rows = self.selected_rules()
+        return rows[0] if len(rows) == 1 else None
 
     def edit_selected(self):
         if self.app.busy: return
         row = self.selected_rule()
         if row is None:
-            self.say("Choose Rules, then select the rule you want to edit."); return
+            self.say("Choose Rules, then select one rule to edit."); return
         source = None
         if self.snapshot.get("repository"):
             source = {"repository": self.snapshot["repository"], "revision": self.snapshot["revision"], "path": row["path"]}
@@ -342,7 +352,7 @@ class CatalogPage:
         if self.app.busy: return
         row = self.selected_rule()
         if row is None:
-            self.say("Choose Rules, then select the rule to preview."); return
+            self.say("Choose Rules, then select one rule to preview. Previews run one rule at a time."); return
         problem = self.preview_problem()
         if problem:
             self.say(*problem); return
@@ -353,13 +363,15 @@ class CatalogPage:
 
     def assign_selected(self):
         if self.app.busy: return
-        row = self.selected_rule()
-        if row is None:
-            self.say("Choose Rules, then select the rule to assign."); return
+        rows = self.selected_rules()
+        if not rows:
+            self.say("Choose Rules, then select the rules to assign."); return
+        if len(rows) > MAX_RULES:
+            self.say(f"Select up to {MAX_RULES} rules to assign together."); return
         problem = self.assign_problem()
         if problem:
             self.say(*problem); return
-        self.note.set(""); AssignmentDialog(self.app, self.snapshot, row)
+        self.note.set(""); AssignmentDialog(self.app, self.snapshot, rows if len(rows) > 1 else rows[0])
 
     def open_assignment_review(self):
         if self.app.busy: return
@@ -416,10 +428,11 @@ class CatalogPage:
         row = self.visible[int(iid)]
         copy_path = ("Copy file path", lambda: self.copy_text(row["path"], "File path"))
         if self.view.get() == "Rules":
-            idle = not self.app.busy
-            return [("Edit in Rule builder", self.edit_selected, idle),
-                    ("Assign to clients…", self.assign_selected, idle),
-                    ("Preview and deploy…", self.preview_selected, idle), None,
+            # Right-clicking inside a selection keeps it: assign takes them all; the rest take one rule.
+            idle, count = not self.app.busy, max(1, len(self.selected_rules()))
+            return [("Edit in Rule builder", self.edit_selected, idle and count == 1),
+                    (f"Assign {count} rules to clients…" if count > 1 else "Assign to clients…", self.assign_selected, idle),
+                    ("Preview and deploy…", self.preview_selected, idle and count == 1), None,
                     ("Copy name", lambda: self.copy_text(row["name"], "Rule name")),
                     ("Copy rule ID", lambda: self.copy_text(row.get("id", ""), "Rule ID"), bool(row.get("id"))),
                     copy_path]

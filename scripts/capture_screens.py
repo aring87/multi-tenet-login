@@ -152,6 +152,9 @@ def library():
     rules = {"brute-force": ("r1", "Brute force against Entra ID accounts", "High", True),
              "impossible-travel": ("r2", "Impossible travel sign-in", "Medium", True),
              "inbox-forwarding": ("r7", "Suspicious inbox forwarding rule", "High", False),
+             # In the library and live in acme's workspace, but not assigned to acme: Drift can assign them together.
+             "mass-download": ("r3", "Mass download from SharePoint", "Medium", False),
+             "failed-mfa": ("r10", "Multiple failed MFA challenges", "Medium", True),
              "mfa-fatigue": ("44444444-1111-4111-8111-111111111111", "MFA fatigue push notifications", "Medium", True)}
     files = {}
     for slug, (rule_id, name, severity, enabled) in rules.items():
@@ -358,6 +361,18 @@ def main():
                    side_effect=lambda *args, **kwargs: opened.append(AssignmentDialog(*args, **kwargs))):
             drift.action_button.invoke()  # As the button opens it: this client ticked, at the rule's live state.
         shot(opened[0].window, "39c-drift-assign-dialog"); opened[0].window.destroy()
+    # Several rules selected: Assign N rules to this client…, and the one dialog for all of them.
+    several = [iid for iid in drift.tree.get_children()
+               if drift.entries[int(iid)]["kind"] == "live_only" and drift.entries[int(iid)]["rule"]]
+    if len(several) < 2:  # The sample library assigns few rules elsewhere: add a rule that isn't.
+        several = [iid for iid in drift.tree.get_children() if drift.entries[int(iid)]["kind"] == "live_only"][:3]
+    drift.tree.selection_set(several); drift.selected(); root.update()
+    shot(root, "39d-rules-drift-assign-several")
+    opened = []
+    with patch("sentinel_app.drift_page.AssignmentDialog",
+               side_effect=lambda *args, **kwargs: opened.append(AssignmentDialog(*args, **kwargs))):
+        drift.action_button.invoke()
+    if opened: shot(opened[0].window, "39e-drift-assign-several-dialog"); opened[0].window.destroy()
 
     # ---- Rule builder
     app.show_page("builder"); root.update(); builder = app.rule_builder

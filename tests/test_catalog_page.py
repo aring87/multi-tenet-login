@@ -208,6 +208,29 @@ class CatalogPageTests(unittest.TestCase):
         self.assertEqual(str(self.page.edit_button.cget("state")), "disabled")
         self.app.set_busy(False)
 
+    def test_several_selected_rules_assign_together_and_edit_and_preview_take_one(self):
+        page = self.page
+        page.snapshot = dict(library(), repository="example/detections", private=True, can_push=True, issues=[])
+        page.render()
+        rows = page.tree.get_children(); several = f"Assign {len(rows)} rules to clients…"
+        self.assertGreater(len(rows), 1)
+        page.tree.selection_set(rows); page.selected()
+        self.assertEqual(page.assign_button.cget("text"), several)
+        self.assertEqual(str(page.assign_button.cget("state")), "normal")
+        for button in (page.edit_button, page.preview_button):
+            self.assertEqual(str(button.cget("state")), "disabled")
+        menu = {label: rest for label, command, *rest in filter(None, page.row_menu(rows[0]))}
+        self.assertEqual((menu["Edit in Rule builder"], menu[several], menu["Preview and deploy…"]),
+                         ([False], [True], [False]))
+        with patch("sentinel_app.catalog_page.AssignmentDialog") as dialog: page.assign_button.invoke()
+        self.assertEqual([rule["path"] for rule in dialog.call_args.args[2]], [page.visible[int(r)]["path"] for r in rows])
+        with patch("sentinel_app.catalog_page.PreviewDialog") as dialog: page.preview_selected()
+        dialog.assert_not_called(); self.assertIn("select one rule to preview", page.note.get())
+        page.tree.selection_set(rows[0]); page.selected()  # One rule: the dialog gets that rule, as before.
+        self.assertEqual(page.assign_button.cget("text"), "Assign to clients…")
+        with patch("sentinel_app.catalog_page.AssignmentDialog") as dialog: page.assign_button.invoke()
+        self.assertEqual(dialog.call_args.args[2], page.visible[int(rows[0])])
+
     def test_command_guidance_appears_above_the_commands(self):
         self.page.snapshot = catalog(fixtures(), "synthetic", "one"); self.page.render()
         self.page.tree.selection_set("0"); self.page.selected()

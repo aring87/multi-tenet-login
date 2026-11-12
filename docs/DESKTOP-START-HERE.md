@@ -77,7 +77,10 @@ Connect (**GitHub**) or from a **Folder on this PC**. It needs no Azure sign-in.
 **Refresh library** (F5) reads it again; if it can't be read, a red banner in the source
 card says why and how to fix it. Select a rule and choose **Edit selected rule**,
 or double-click it, to open it in the Rule builder. **Assign to clients…** and **Preview
-and deploy…** sit above the list and in the right-click menu of a rule; **Library issues**, **Open saved assignment…** and
+and deploy…** sit above the list and in the right-click menu of a rule. Ctrl-click or
+Shift-click selects several rules: **Assign N rules to clients…** then assigns them all in
+one request (up to 50), at the rule state you choose; editing and previews take one rule at
+a time. **Library issues**, **Open saved assignment…** and
 **Preview & deployment history…** are in the **Library ⋯** menu on the Rule library card.
 In the client lists of those dialogs, Space ticks or clears a client. The history lists
 request and check times in your local time; point at a time to see it in UTC, as the
@@ -106,7 +109,10 @@ The details of a drifted rule offer the step that brings it in step, also in its
 menu. **Assign to this client…** (a library rule not assigned to this target) opens the Rule
 library's assignment dialog with this client ticked and the rule state set to the one live in
 the workspace. **Preview and deploy…** (a Missing or Different rule) opens the preview dialog
-with this client ticked. Both go through review exactly as they do from Rule library, and
+with this client ticked. Select several rules (Ctrl-click or Shift-click) to assign every
+selected rule that isn't assigned here in one request, as **Assign N rules to this client…**;
+the rule state starts as **As in the workspace**, each rule at its live state, when they
+differ. Both go through review exactly as they do from Rule library, and
 need the library from your team's GitHub repository. A rule that is not in the library has
 no step here: add it to the library first.
 

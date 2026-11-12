@@ -11,6 +11,7 @@ from . import ui_kit as kit
 from .assignment_dialog import AssignmentDialog
 from .catalog_page import overrides_text, plural
 from .preview_dialog import PreviewDialog
+from .rule_assignments import MAX_RULES
 from .desktop_theme import COLORS, px
 from .repository_catalog import state
 from .rule_drift import drift, key, DIFFERENT, LIVE_ONLY, MISSING
@@ -108,8 +109,9 @@ class DriftPage:
         self.place_filters = flow(bar, self.filter_bar, 1)
         self.notice = tk.StringVar()
         self.banner = kit.Banner(body, self.notice, "warning")
+        # Ctrl- or Shift-click selects several rules, to assign them to this client together.
         self.table_frame, self.tree, self.empty = kit.table(body, COLUMNS, height=6, sort=True, menu=self.row_menu,
-                                                            marker=True)
+                                                            marker=True, selectmode="extended")
         self.table_frame.pack(fill="both", expand=True)
         self.empty.line.configure(width=px(160))  # The loading line's own width stays inside a narrow pane.
         fit_columns(self.tree, OPTIONAL)
@@ -296,12 +298,25 @@ class DriftPage:
     def selected(self, event=None):
         selection = self.tree.selection()
         self.show(int(selection[0]) if selection else None)
+        self.place_action()  # The details show the first rule; the step covers the whole selection.
+
+    def selected_entries(self):
+        return [self.entries[int(item)] for item in self.tree.selection() if int(item) < len(self.entries)]
 
     def row_menu(self, iid):
         entry = self.entries[int(iid)]
-        action, idle = self.action(entry), not self.app.busy
-        return [("Assign to this client…", lambda: self.assign(entry), idle and action == "assign"),
-                ("Preview and deploy…", lambda: self.preview(entry), idle and action == "deploy"), None,
+        chosen = self.selected_entries() or [entry]  # Right-clicking inside a selection keeps it.
+        idle = not self.app.busy
+        if len(chosen) > 1:
+            assignable = [item for item in chosen if self.action(item) == "assign"]
+            steps = [(f"Assign {len(assignable)} rules to this client…" if len(assignable) > 1 else "Assign to this client…",
+                      lambda: self.assign(assignable), idle and bool(assignable)),
+                     ("Preview and deploy…", lambda: None, False)]  # Previews run one rule at a time.
+        else:
+            action = self.action(entry)
+            steps = [("Assign to this client…", lambda: self.assign(entry), idle and action == "assign"),
+                     ("Preview and deploy…", lambda: self.preview(entry), idle and action == "deploy")]
+        return [*steps, None,
                 ("Copy name", lambda: self.copy_text(entry["name"], "Rule name")),
                 ("Copy rule ID", lambda: self.copy_text(entry["id"], "Rule ID"), bool(entry["id"])), None,
                 ("Show in Workspace rules", lambda: self.show_live(entry), entry["live"] is not None),
@@ -316,10 +331,45 @@ class DriftPage:
         return "assign" if entry["rule"] is not None else None
 
     def act(self):
+        if self.app.busy: return
+        chosen = self.selected_entries()
+        if len(chosen) > 1:
+            assignable = [entry for entry in chosen if self.action(entry) == "assign"]
+            if assignable: self.assign(assignable)
+            return
         index = self.shown
-        if index is None or index < 0 or self.app.busy: return
+        if index is None or index < 0: return
         entry = self.entries[index]
         {"assign": self.assign, "deploy": self.preview}.get(self.action(entry), lambda entry: None)(entry)
+
+    def place_action(self):
+        """The step under the explanation: for the one rule shown, or Assign N rules for a selection of
+        several (the ones not assigned here; the others are left out and the tip says so)."""
+        chosen, entry = self.selected_entries(), self.entries[self.shown] if self.shown not in (None, -1) else None
+        target, text, tip = self.target(), None, ""
+        if len(chosen) > 1:
+            assignable = [item for item in chosen if self.action(item) == "assign"]
+            if assignable:
+                text = f"Assign {len(assignable)} rules to this client…" if len(assignable) > 1 else "Assign to this client…"
+                skipped = len(chosen) - len(assignable)
+                tip = (f"Assign the selected rules that aren't assigned here to {target}, each at its state in the "
+                       "workspace, in one request a teammate approves.")
+                if skipped:
+                    tip += f" {plural(skipped, 'selected rule')} with another kind of drift " + \
+                           ("is" if skipped == 1 else "are") + " left out."
+        elif entry is not None:
+            action = self.action(entry)
+            if action == "assign":
+                text = "Assign to this client…"
+                tip = f"Assign this rule to {target}. A teammate approves the change before anything deploys."
+            elif action == "deploy":
+                text = "Preview and deploy…"
+                tip = f"Preview this rule for {target}, then deploy it once the preview passes."
+        if text is None:
+            self.actions.pack_forget(); return
+        self.action_button.configure(text=text); self.action_button.tooltip_text = tip
+        if not self.actions.winfo_manager():
+            self.actions.pack(fill="x", pady=(0, px(12)), after=self.explanation_label)
 
     def blocked_by(self, problem, title):
         """Say why the library can't take this step, in a dialog: the reason belongs to the Rule library."""
@@ -328,13 +378,23 @@ class DriftPage:
         kit.alert(self.app.root, title, text, tone=tone)
         return True
 
-    def assign(self, entry):
-        """The Rule library's assignment dialog for this rule, with this client ticked at the rule's live state."""
+    def assign(self, entries):
+        """The Rule library's assignment dialog for one rule (an entry) or several (a list), with this
+        client ticked and each rule at its live state."""
         library = self.app.catalog_page
-        if self.app.busy or entry["rule"] is None or not self.target(): return
+        entries = [entry for entry in (entries if isinstance(entries, list) else [entries]) if entry["rule"] is not None]
+        if self.app.busy or not entries or not self.target(): return
+        if len(entries) > MAX_RULES:
+            kit.alert(self.app.root, "Assign to this client", f"Select up to {MAX_RULES} rules to assign together.",
+                      tone="info"); return
         if self.blocked_by(library.assign_problem(), "Assign to this client"): return
-        live = (entry["live"] or {}).get("properties", {}).get("enabled") is True
-        AssignmentDialog(self.app, library.snapshot, entry["rule"], preselect=(self.target(),), enabled=live)
+        live = {entry["rule"]["path"]: (entry["live"] or {}).get("properties", {}).get("enabled") is True for entry in entries}
+        if len(entries) == 1:
+            AssignmentDialog(self.app, library.snapshot, entries[0]["rule"], preselect=(self.target(),),
+                             enabled=next(iter(live.values())))
+        else:
+            AssignmentDialog(self.app, library.snapshot, [entry["rule"] for entry in entries],
+                             preselect=(self.target(),), enabled=live)
 
     def preview(self, entry):
         """The Rule library's preview and deploy dialog for this rule, with this client ticked."""
@@ -429,15 +489,7 @@ class DriftPage:
         self.pills.pack(fill="x", pady=(0, px(12)))
         self.explanation.set(self.explain(entry))
         self.explanation_label.pack(fill="x", pady=(0, px(12)))
-        action = self.action(entry)
-        if action:
-            target = self.target()
-            self.action_button.configure(text="Assign to this client…" if action == "assign" else "Preview and deploy…")
-            self.action_button.tooltip_text = (
-                f"Assign this rule to {target}. A teammate approves the change before anything deploys."
-                if action == "assign" else
-                f"Preview this rule for {target}, then deploy it once the preview passes.")
-            self.actions.pack(fill="x", pady=(0, px(12)))
+        self.place_action()
         rows = comparison(entry)
         kit.set_headings(self.compare, {"library": "Library" if entry["kind"] != LIVE_ONLY or not entry["rule"]
                                         else "Library (not assigned)"})

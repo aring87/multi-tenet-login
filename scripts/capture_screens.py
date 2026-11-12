@@ -466,6 +466,12 @@ def main():
     app.show_page("rules"); app.rule_view.set("workspace"); settle(root, 500); shot(root, "34-rules-wide")
     app.rule_view.set("drift"); settle(root, 500); shot(root, "40-rules-drift-wide")
     app.show_page("builder"); settle(root, 500); shot(root, "35-builder-wide")
+    # A very wide window: the builder takes the width, and test results get the room.
+    root.geometry("2200x1250+0+0"); builder.steps.select(1); settle(root, 500)
+    builder.test_passed(dict(columns=TEST_COLUMNS, rows=test_rows(), more=False, partial=None, elapsed=1.84,
+                             seconds=query_runner.test_window("Scheduled", builder.vars["queryPeriod"].get()),
+                             workspace_name=WORKSPACE["workspace_name"]), session, query)
+    settle(root, 500); shot(root, "48-builder-test-query-extra-wide")
 
     for timer in root.tk.call("after", "info"):
         root.tk.call("after", "cancel", timer)

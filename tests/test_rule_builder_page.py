@@ -37,6 +37,21 @@ class RuleBuilderPageTests(unittest.TestCase):
         self.page.validate(); self.page.texts["query"].insert("end", " | take 1"); self.root.update()
         self.assertEqual(self.page.preview.get("1.0", "end-1c"), "")
 
+    def test_the_builder_takes_the_window_width_and_test_results_get_room(self):
+        # On a very wide window the builder's column fills it; Connect keeps its readable cap.
+        for name, wide in (("builder", True), ("connect", False)):
+            canvas = self.app.page_canvases[ui.PAGES.index(name)]
+            item = canvas.find_all()[0]
+            self.app.fit_page(canvas, item, ui.px(2200), ui.PAGE_MAX_WIDTH[name])
+            column = int(float(canvas.itemcget(item, "width")))
+            self.assertEqual(column, ui.px(2200) if wide else ui.px(ui.CONTENT_MAX_WIDTH), name)
+        # Test results show at least 8 rows and at most 16 before the table scrolls.
+        for count, height in ((3, 8), (12, 12), (50, 16)):
+            result = dict(columns=["A"], rows=[[str(i)] for i in range(count)], more=False, partial=None, elapsed=1.0,
+                          seconds=3600, workspace_name="law-example")
+            self.page.test_passed(result, None, "T")
+            self.assertEqual(int(self.page.test_tree.cget("height")), height, count)
+
     def test_invalid_export_does_not_open_save_dialog(self):
         with patch("sentinel_app.rule_builder_page.kit.alert"), patch("sentinel_app.rule_builder_page.filedialog.asksaveasfilename") as save:
             self.page.export(); save.assert_not_called()

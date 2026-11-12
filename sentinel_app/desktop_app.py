@@ -58,6 +58,8 @@ SIGNIN_FOCUS_POLL_MS = 750
 GITHUB_LOGIN_TIMEOUT_SECONDS = 900
 STATUS_PREVIEW_CHARS = 180
 CONTENT_MAX_WIDTH = 1320
+# The Rule builder takes the window's width: its query box and test results use every column there is.
+PAGE_MAX_WIDTH = dict(connect=CONTENT_MAX_WIDTH, builder=2400)
 SCROLL_TARGET_OFFSET = 140
 PROGRESS_REPORT_EVERY = 5
 FLASH_SECONDS = 8
@@ -469,7 +471,8 @@ class App:
             content = ttk.Frame(canvas, padding=(kit.space("page"), kit.space("xl"), kit.space("page"), kit.space("page")))
             window = canvas.create_window((0, 0), window=content, anchor="nw")
             content.bind("<Configure>", lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
-            canvas.bind("<Configure>", lambda e, c=canvas, w=window: self.fit_page(c, w, e.width))
+            canvas.bind("<Configure>", lambda e, c=canvas, w=window, n=name:
+                        self.fit_page(c, w, e.width, PAGE_MAX_WIDTH.get(n, CONTENT_MAX_WIDTH)))
             self.page_canvases.append(canvas); self.page_contents.append(content)
         connect, rules, builder = self.page_contents
         self.build_connect(connect)
@@ -485,9 +488,9 @@ class App:
         kit.install_edit_menu(self.root)
 
     @staticmethod
-    def fit_page(canvas, window, width):
-        # Keep line lengths readable on wide monitors by centring a capped column.
-        column = min(width, px(CONTENT_MAX_WIDTH))
+    def fit_page(canvas, window, width, limit=CONTENT_MAX_WIDTH):
+        # Keep line lengths readable on wide monitors by centring a column capped at ``limit`` (96-DPI px).
+        column = min(width, px(limit))
         canvas.itemconfigure(window, width=column)
         canvas.coords(window, max(0, (width - column) // 2), 0)
 

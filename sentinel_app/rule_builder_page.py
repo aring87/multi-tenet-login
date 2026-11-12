@@ -34,6 +34,7 @@ AUTOSAVE_MS = 30000  # How often unsaved work is copied to the recovery draft.
 # In drafts/. Not a *.rule-draft.json name, so Open draft file… never lists it as a draft.
 RECOVERY_NAME = ".autosave.rule-recovery.json"
 TACTIC_COLUMNS = 3
+TEST_ROWS = (8, 16)  # Test results show this many rows at least and at most; more scroll.
 QUERY_LINES = 7  # One line fewer than it could be: the KQL check line sits under the box.
 KQL_DELAY = 300  # Milliseconds after the last keystroke before the query is checked again.
 MAX_SCHEDULE = 14 * 86400
@@ -1165,7 +1166,8 @@ class RuleBuilderPage:
         if columns:
             self.test_frame, self.test_tree, empty = kit.table(
                 self.test_result, [("c%d" % index, name, 120, index == len(columns) - 1)
-                                   for index, name in enumerate(columns)], height=8, icon="search")
+                                   for index, name in enumerate(columns)],
+                height=max(TEST_ROWS[0], min(count, TEST_ROWS[1])), icon="search")
             for index, width in enumerate(column_widths(self.test_tree, columns, rows)):
                 self.test_tree.column("c%d" % index, width=width)
             for values in rows: self.test_tree.insert("", "end", values=values)

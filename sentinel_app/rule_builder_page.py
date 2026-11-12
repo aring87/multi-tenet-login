@@ -730,13 +730,15 @@ class RuleBuilderPage:
         self.app.work("Checking whether this rule is already in the rule library…", task, done, page="builder",
                       failed="Couldn't check the rule library")
 
-    def edit_rule(self, rule, source=None):
+    def edit_rule(self, rule, source=None, note=None):
+        """Open ``rule`` (a library rule dict) as a draft: an edit of ``source``'s file, or a new rule
+        without one. ``note`` replaces the banner text, as Drift does for a rule from the workspace."""
         if self.app.busy: return False
         try:
             form = drafts.from_rule(rule)
             if not self.can_discard(): return False
             self.load_form(form, source=source)
-            self.note.set("Library rule opened as a draft. Its rule ID and advanced properties are kept.")
+            self.note.set(note or "Library rule opened as a draft. Its rule ID and advanced properties are kept.")
             return True
         except (ValueError, OSError, RecursionError) as error: self.error(error); return False
 

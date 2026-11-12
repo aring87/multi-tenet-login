@@ -5,12 +5,13 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from sentinel_app import catalog_page, desktop_backend as backend, desktop_app as ui, rules_page
+from sentinel_app import catalog_page, desktop_backend as backend, desktop_app as ui, drift_page, rule_schema, rules_page
 from sentinel_app.repository_catalog import catalog
 from sentinel_app.rule_drift import DIFFERENT, LIVE_ONLY, MISSING, drift, match_targets
+import test_live_rules
 from test_desktop import SUB, TENANT, WORKSPACE, WS
 
-A, B, C, D, E = (f"{c * 8}-1111-4111-8111-111111111111" for c in "abcde")
+A, B, C, D, E, F = (f"{c * 8}-1111-4111-8111-111111111111" for c in "abcdef")
 MANAGING = "99999999-9999-4999-8999-999999999999"
 
 
@@ -350,6 +351,77 @@ class DriftPageTests(unittest.TestCase):
         self.page.tree.selection_set((iid["Bravo"], iid["Charlie"])); self.page.selected()
         self.assertFalse(self.page.actions.winfo_manager())
         self.assertFalse(self.menu(iid["Bravo"])["Assign to this client…"][1])
+
+    def test_the_key_explains_every_wording_the_list_uses(self):
+        keyed = {label for _, labels, *_ in drift_page.KEY for label in labels}
+        wordings = {drift_page.drift_text(dict(kind=MISSING)),
+                    drift_page.drift_text(dict(kind=LIVE_ONLY, rule={"path": "x"})),
+                    drift_page.drift_text(dict(kind=LIVE_ONLY, rule=None))}
+        for fields in (["State"], ["Severity"], ["State", "Severity"]):
+            wordings.add(drift_page.drift_text(dict(kind=DIFFERENT, differences=[(f, "a", "b") for f in fields])))
+        self.assertEqual(wordings, keyed)
+        self.connect(); self.open(); self.load_library()
+        self.app.set_busy(True, immediate=True)
+        try:
+            self.assertEqual(str(self.page.key_button.cget("state")), "normal")  # It only explains the list.
+        finally:
+            self.app.set_busy(False)
+        key = self.page.show_key(); self.root.update()
+        self.assertEqual(key.window.title(), "Drift key")
+        self.assertEqual([labels for labels, _ in key.labels], [labels for _, labels, *_ in drift_page.KEY])
+        self.assertIn("Add to library…", key.labels[-1][1].cget("text"))
+        key.ok_button.invoke(); self.root.update()
+        self.assertFalse(key.window.winfo_exists())
+
+    def portal_rule(self):
+        """A Scheduled rule live here that the library doesn't have, and Sentinel's record of it at the
+        pipeline's API version."""
+        record = test_live_rules.live(); record["name"] = F
+        return live(F, "Foxtrot from the portal"), record
+
+    def test_a_rule_not_in_the_library_is_added_through_the_rule_builder(self):
+        summary, record = self.portal_rule()
+        self.connect(RECORDS + [summary]); self.open(); self.load_library()
+        iid = {self.page.entries[int(item)]["name"]: item for item in self.page.tree.get_children()}
+        # A platform rule has no step, and says why.
+        self.page.tree.selection_set(iid["Advanced multistage attack"]); self.page.selected()
+        self.assertFalse(self.page.actions.winfo_manager())
+        self.assertIn("Fusion rules have no query of their own", self.page.explanation.get())
+        self.page.tree.selection_set(iid["Foxtrot from the portal"]); self.page.selected()
+        self.assertEqual(self.page.action_button.cget("text"), "Add to library…")
+        self.assertIn("Add to library opens it in the Rule builder", self.page.explanation.get())
+        self.assertTrue(self.menu(iid["Foxtrot from the portal"])["Add to library…"][1])
+        sync = lambda title, task, done, **kw: done(task())
+        with patch("sentinel_app.drift_page.read_rule", return_value=record) as read, \
+                patch.object(self.app, "work", side_effect=sync):
+            self.page.action_button.invoke()
+        session, workspace, rule_id, version = read.call_args.args
+        self.assertEqual((rule_id, version, workspace["workspace_name"]), (F, rule_schema.API_VERSION, "law-example-sentinel"))
+        # The real Rule builder opens on it, as a new rule that keeps the live rule ID.
+        builder = self.app.rule_builder
+        self.assertEqual(self.app.current_page(), "builder")
+        self.assertEqual((builder.vars["id"].get(), builder.source), (F, None))
+        self.assertTrue(builder.note.get().startswith("From law-example-sentinel: Foxtrot from the portal. "
+                                                      "It matches the live rule exactly."))
+        self.assertTrue(builder.note.get().endswith("Check it, then Submit for approval."))
+
+    def test_a_rule_that_would_not_deploy_back_exactly_is_refused(self):
+        summary, record = self.portal_rule()
+        del record["properties"]["subTechniques"]  # As a newer API version returns it.
+        self.connect(RECORDS + [summary]); self.open(); self.load_library()
+        item = next(i for i in self.page.tree.get_children() if self.page.entries[int(i)]["name"] == "Foxtrot from the portal")
+        sync = lambda title, task, done, **kw: done(task())
+        with patch("sentinel_app.drift_page.read_rule", return_value=record), patch.object(self.app, "work", side_effect=sync), \
+                patch("sentinel_app.drift_page.kit.alert") as alert, patch.object(self.app.rule_builder, "edit_rule") as edit:
+            self.menu(item)["Add to library…"][0]()
+        edit.assert_not_called()
+        self.assertIn("can't be added to the library from here", alert.call_args.args[2])
+        self.assertIn("properties.subTechniques: added by pipeline", alert.call_args.args[2])
+        # A workspace changed since the rules were read: read them again first, and nothing is read now.
+        self.app.workspace = dict(WORKSPACE, workspace_name="another-law")
+        with patch("sentinel_app.drift_page.read_rule") as read, patch("sentinel_app.drift_page.kit.alert") as alert:
+            self.menu(item)["Add to library…"][0]()
+        read.assert_not_called(); self.assertIn("Select Refresh", alert.call_args.args[2])
 
     def test_view_and_split_are_remembered_and_search_has_its_shortcut(self):
         self.connect(); self.root.deiconify(); self.root.geometry("1300x820"); self.open()

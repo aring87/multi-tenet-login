@@ -103,7 +103,10 @@ assigned rule file is missing from the library; the list says so when no target,
 than one, deploys to the workspace. **Refresh** (F5) reads the workspace rules again and
 **Refresh library** reads the library again. Opening Drift reads the saved GitHub library
 once if none is loaded, as Rule library does. Right-click a rule to copy its name or ID, or
-to open it in Workspace rules or Rule library.
+to open it in Workspace rules or Rule library. **Key** in the card's header explains each
+wording in the Drift column (Missing from workspace, State or Severity differs, Not assigned
+here, Not in library) with its dot and the step that fixes it; pointing at a filter says the
+same in short.
 
 The details of a drifted rule offer the step that brings it in step, also in its right-click
 menu. **Assign to this client…** (a library rule not assigned to this target) opens the Rule
@@ -113,8 +116,19 @@ with this client ticked. Select several rules (Ctrl-click or Shift-click) to ass
 selected rule that isn't assigned here in one request, as **Assign N rules to this client…**;
 the rule state starts as **As in the workspace**, each rule at its live state, when they
 differ. Both go through review exactly as they do from Rule library, and
-need the library from your team's GitHub repository. A rule that is not in the library has
-no step here: add it to the library first.
+need the library from your team's GitHub repository.
+
+A rule that is **Not in library** offers **Add to library…** when the library can hold it (a
+Scheduled or NRT rule whose ID is a GUID). The app reads that one rule from Sentinel again,
+at the API version the library's pipeline deploys with (newer versions leave sub-techniques
+out), converts it to the library's format, and checks that the converted rule would deploy
+back exactly as it is live. Only then does it open the rule in the Rule builder as a new rule
+with the same rule ID, with a note naming anything the conversion had to tidy and anything the
+library's checks will ask for (a description of at least 20 characters, MITRE details). Check
+it, then **Submit for approval** as for any new rule; once merged, Drift shows it as Not
+assigned here, ready to assign. If the rule wouldn't deploy back exactly, the app says which
+settings differ and opens nothing. Fusion, Microsoft incident-creation and other built-in rule
+types have no query of their own, so they stay in the portal and offer no step.
 
 ## Rule builder
 
@@ -132,7 +146,9 @@ schema and shows the file; **Export rule file…** saves it. **Submit for approv
 the rule against the library, shows exactly what will change (added lines green, removed
 lines red) and the clients that use the rule, asks why the rule is changing, then opens a
 pull request that is ready for a teammate's review; your note becomes its description.
-The library and file path sit under **Where it will be saved**. New rules start disabled.
+The library and file path sit under **Where it will be saved**; a new rule starts in the
+folder of its first MITRE tactic (CommandAndControl goes to `command-and-control/`), or in
+`uncategorized/` without one, as the library files its rules. New rules start disabled.
 Closing the app asks before discarding an unsaved draft. Every 30 seconds the builder also
 keeps a recovery copy of unsaved work (`desktop-data/drafts/.autosave.rule-recovery.json`),
 and again when Windows signs out or restarts with the app open. If the app or the PC stops

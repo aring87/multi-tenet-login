@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 from sentinel_app.desktop_backend import Stop
-from sentinel_app.workspace_tools import permits, access_plan, apply_contributor, rule_values, list_rules
+from sentinel_app.workspace_tools import permits, access_plan, apply_contributor, rule_values, list_rules, read_rule
 
 TARGET=dict(tenant_id="11111111-1111-1111-1111-111111111111",subscription_id="22222222-2222-2222-2222-222222222222")
 USER="33333333-3333-3333-3333-333333333333"
@@ -55,4 +55,17 @@ class Tests(unittest.TestCase):
             self.assertIs(list_rules(object(),{}),result)
             collector.verify_workspace.assert_called_once()
             self.assertIn("/alertRules?",collector.collect.call_args.args[2])
+    def test_one_rule_is_read_again_at_the_requested_api_version(self):
+        rule_id="5D0C9A51-2E4B-4C3F-9A7E-1B2C3D4E5F60"
+        with patch("sentinel_app.workspace_tools.Collector") as cls:
+            collector=cls.return_value;collector.base="https://management.azure.com/workspace"
+            collector.get.return_value=dict(name=rule_id,kind="Scheduled",properties={})
+            self.assertEqual(read_rule(object(),{},rule_id,"2023-12-01-preview")["kind"],"Scheduled")
+            collector.verify_workspace.assert_called_once()
+            url=collector.get.call_args.args[0]
+            self.assertTrue(url.endswith("/alertRules/"+rule_id.lower()+"?api-version=2023-12-01-preview"),url)
+            collector.get.return_value=dict(name="another-rule")  # Sentinel answered for a different rule.
+            with self.assertRaises(Stop):read_rule(object(),{},rule_id,"2023-12-01-preview")
+        for bad_id,version in (("../x","2023-12-01-preview"),(rule_id,"latest&x=1")):
+            with self.assertRaises(Stop):read_rule(object(),{},bad_id,version)
 if __name__=="__main__":unittest.main()

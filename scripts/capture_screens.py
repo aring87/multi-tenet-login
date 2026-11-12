@@ -143,7 +143,14 @@ RULES = [rule("r1", "Brute force against Entra ID accounts", True, "High"),
          rule("r7", "Suspicious inbox forwarding rule", False, "High"),
          rule("r8", "Anomalous Azure resource deployment", True, "Low"),
          rule("r9", "Password spray detected by Identity Protection", True, "High", kind="Fusion"),
-         rule("r10", "Multiple failed MFA challenges", True, "Medium")]
+         rule("r10", "Multiple failed MFA challenges", True, "Medium"),
+         # Made in the portal: a GUID like any real rule, and not in the library, so Drift offers Add to library.
+         rule("6b1d2c3e-4f50-4a61-8b72-9c83d4e5f601", "Sign-in from a country new to the user", True, "Medium",
+              subTechniques=[], suppressionDuration="PT5H", suppressionEnabled=False,
+              incidentConfiguration=dict(createIncident=True, groupingConfiguration=dict(
+                  enabled=False, reopenClosedIncident=False, lookbackDuration="PT5M", matchingMethod="AllEntities",
+                  groupByEntities=[], groupByAlertDetails=[], groupByCustomDetails=[])),
+              eventGroupingSettings=dict(aggregationKind="SingleAlert"))]
 
 
 def library():
@@ -373,6 +380,17 @@ def main():
                side_effect=lambda *args, **kwargs: opened.append(AssignmentDialog(*args, **kwargs))):
         drift.action_button.invoke()
     if opened: shot(opened[0].window, "39e-drift-assign-several-dialog"); opened[0].window.destroy()
+    # Not in library, made in the portal: Add to library…, and the Rule builder it opens.
+    portal = next(iid for iid in drift.tree.get_children()
+                  if drift.entries[int(iid)]["live"] and drift.entries[int(iid)]["live"]["name"] == RULES[-1]["name"])
+    drift.tree.selection_set(portal); drift.selected(); root.update()
+    shot(root, "39f-rules-drift-add-to-library")
+    key = drift.show_key(); settle(root)
+    shot(key.window, "39h-drift-key"); key.window.destroy()
+    with patch("sentinel_app.drift_page.read_rule", return_value=RULES[-1]):  # As read at the pipeline's API version.
+        drift.action_button.invoke(); settle(root, 1200)
+    shot(root, "39g-builder-from-the-workspace")
+    app.show_page("rules"); app.rule_view.set("drift"); root.update()
 
     # ---- Rule builder
     app.show_page("builder"); root.update(); builder = app.rule_builder

@@ -11,7 +11,9 @@ from . import ui_kit as kit
 from .assignment_dialog import AssignmentDialog
 from .catalog_page import overrides_text, plural
 from .preview_dialog import PreviewDialog
+from . import live_rules, rule_schema
 from .rule_assignments import MAX_RULES
+from .workspace_tools import read_rule
 from .desktop_theme import COLORS, px
 from .repository_catalog import state
 from .rule_drift import drift, key, DIFFERENT, LIVE_ONLY, MISSING
@@ -30,6 +32,68 @@ SUBTITLE = "What the rule library assigns to the connected client, against the r
 DETAIL_SUBTITLE = "Select a rule to see the library and the workspace side by side."
 MONO_KEYS = {"Rule ID", "File", "Target"}
 NONE = "—"
+
+
+# The Drift key: each wording the Drift column uses, its dot, what it means and the step that fixes it.
+# The labels are drift_text()'s own, so the key reads exactly as the list does.
+KEY = (
+    (MISSING, ("Missing from workspace",),
+     "The library assigns this rule to the client, but it isn't in the workspace: it was never deployed, or was "
+     "deleted in the portal.",
+     "Preview and deploy… puts it in the workspace."),
+    (DIFFERENT, ("State differs", "Severity differs", "State and severity differ"),
+     "The rule is in the library and in the workspace, but the workspace's enabled state or severity doesn't match "
+     "what the library sets for this client (after its overrides). Someone changed it in the portal, or the library "
+     "changed and wasn't deployed.",
+     "Preview and deploy… puts the library's settings back."),
+    (LIVE_ONLY, ("Not assigned here",),
+     "The rule is in the workspace and in the library, but the library doesn't assign it to this client, so GitHub "
+     "doesn't manage it here.",
+     "Assign to this client… adds it to the client's file."),
+    (LIVE_ONLY, ("Not in library",),
+     "The rule is only in the workspace: the library has no rule with its ID. It was made in the portal or turned on "
+     "from Content hub.",
+     "Add to library… opens it in the Rule builder as a new rule. Fusion and Microsoft incident-creation rules have "
+     "no query of their own, so they stay in the portal."),
+)
+KEY_NOTE = ("A rule the library assigns to this client whose state and severity match isn't listed: it is in step, "
+            "and the line under Rule drift counts those rules. Only the enabled state and severity are compared; "
+            "other settings, such as the query or schedule, aren't counted as drift.")
+FILTER_TIPS = {MISSING: "Assigned to this client in the library, but not in the workspace",
+               DIFFERENT: "In both, but the workspace's enabled state or severity doesn't match the library",
+               LIVE_ONLY: "In the workspace, but not in the library or not assigned to this client"}
+
+
+class DriftKey:
+    """What each kind of drift means, beside the dot the list shows it with."""
+
+    def __init__(self, app):
+        self.window = window = tk.Toplevel(app.root)
+        window.title("Drift key"); window.configure(bg=COLORS["card"])
+        body = ttk.Frame(window, style="Card.TFrame", padding=(kit.space("xl"), px(20), kit.space("xl"), px(18)))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="What the drift means", style="CardTitle.TLabel").pack(anchor="w")
+        ttk.Label(body, text="Each rule in the Drift list is out of step with the library in one of these ways.",
+                  style="CardSubtitle.TLabel").pack(anchor="w", pady=(px(2), px(14)))
+        rows = ttk.Frame(body, style="Card.TFrame"); rows.pack(fill="x")
+        rows.columnconfigure(1, weight=1)
+        wrap = px(520)
+        self.labels = []
+        for index, (kind, labels, meaning, step) in enumerate(KEY):
+            dot = ttk.Label(rows, image=kit.dot(KIND_TONES[kind], rows), style="Card.TLabel")
+            dot.grid(row=2 * index, column=0, sticky="nw", padx=(0, px(10)), pady=(px(10) if index else 0, 0))
+            head = ttk.Label(rows, text=" · ".join(labels), style="Section.TLabel")
+            head.grid(row=2 * index, column=1, sticky="w", pady=(px(8) if index else 0, 0))
+            text = ttk.Label(rows, text=meaning + " " + step, style="Body.TLabel", wraplength=wrap, justify="left")
+            text.grid(row=2 * index + 1, column=1, sticky="w", pady=(px(2), 0))
+            self.labels.append((labels, text))
+        ttk.Label(body, text=KEY_NOTE, style="Hint.TLabel", wraplength=wrap + px(24), justify="left").pack(
+            anchor="w", pady=(px(16), 0))
+        actions, buttons = kit.action_row(body, primary=("OK", window.destroy))
+        actions.pack(fill="x", pady=(px(18), 0))
+        self.ok_button = buttons[0]
+        kit.place_dialog(window, app.root, width=640)
+        kit.modal(window, app.root, window.destroy, primary=self.ok_button, focus=self.ok_button)
 
 
 def side_text(state_text, severity):
@@ -97,6 +161,10 @@ class DriftPage:
                                          style="Secondary.TButton")
         self.library_button.pack(side="right", padx=(0, px(8)))
         kit.tooltip(self.library_button, "Read the rule library again")
+        # Always usable: it only explains the list.
+        self.key_button = ttk.Button(card.actions, text="Key", command=self.show_key, style="Ghost.TButton")
+        self.key_button.pack(side="right", padx=(0, px(8)))
+        kit.tooltip(self.key_button, "What each kind of drift means, and the step that fixes it")
         body = card.body
         bar = ttk.Frame(body, style="Card.TFrame"); bar.pack(fill="x", pady=(0, px(12)))
         bar.columnconfigure(0, weight=1)
@@ -106,6 +174,7 @@ class DriftPage:
         app.inputs.append(self.search_entry)  # Searching stays possible while a task runs.
         kit.placeholder(self.search_entry, self.search, "Search drift  (Ctrl+F)", search=True)
         self.filter_bar = kit.Segmented(bar, self.filter, KINDS, compact=True)
+        for kind, tip in FILTER_TIPS.items(): kit.tooltip(self.filter_bar.items[kind], tip)
         self.place_filters = flow(bar, self.filter_bar, 1)
         self.notice = tk.StringVar()
         self.banner = kit.Banner(body, self.notice, "warning")
@@ -200,6 +269,9 @@ class DriftPage:
         self.action_button.configure(state="normal" if idle else "disabled")
         self.refresh_button.configure(state="normal" if idle and self.app.rules_page.ready() else "disabled")
         self.library_button.configure(state="normal" if idle and self.app.catalog_page.source.get().strip() else "disabled")
+
+    def show_key(self):
+        return DriftKey(self.app)
 
     def refresh(self):
         if not self.app.busy: self.app.rules_page.load()
@@ -316,6 +388,7 @@ class DriftPage:
             action = self.action(entry)
             steps = [("Assign to this client…", lambda: self.assign(entry), idle and action == "assign"),
                      ("Preview and deploy…", lambda: self.preview(entry), idle and action == "deploy")]
+            if action == "add": steps.insert(0, ("Add to library…", lambda: self.add(entry), idle))
         return [*steps, None,
                 ("Copy name", lambda: self.copy_text(entry["name"], "Rule name")),
                 ("Copy rule ID", lambda: self.copy_text(entry["id"], "Rule ID"), bool(entry["id"])), None,
@@ -326,9 +399,11 @@ class DriftPage:
     @staticmethod
     def action(entry):
         """What would bring ``entry`` in step from here: 'assign' (a library rule not assigned to this
-        client), 'deploy' (assigned, but missing or different live) or None (not in the library)."""
+        client), 'deploy' (assigned, but missing or different live), 'add' (a live rule the library could
+        hold but doesn't) or None (a live rule of a kind the library can't hold)."""
         if entry["kind"] in (MISSING, DIFFERENT): return "deploy"
-        return "assign" if entry["rule"] is not None else None
+        if entry["rule"] is not None: return "assign"
+        return "add" if live_rules.why_not(entry["live"]) is None else None
 
     def act(self):
         if self.app.busy: return
@@ -340,7 +415,7 @@ class DriftPage:
         index = self.shown
         if index is None or index < 0: return
         entry = self.entries[index]
-        {"assign": self.assign, "deploy": self.preview}.get(self.action(entry), lambda entry: None)(entry)
+        {"assign": self.assign, "deploy": self.preview, "add": self.add}.get(self.action(entry), lambda entry: None)(entry)
 
     def place_action(self):
         """The step under the explanation: for the one rule shown, or Assign N rules for a selection of
@@ -365,6 +440,10 @@ class DriftPage:
             elif action == "deploy":
                 text = "Preview and deploy…"
                 tip = f"Preview this rule for {target}, then deploy it once the preview passes."
+            elif action == "add":
+                text = "Add to library…"
+                tip = ("Open this rule in the Rule builder as a new library rule, exactly as it is live. "
+                       "Submitting it asks a teammate to approve it.")
         if text is None:
             self.actions.pack_forget(); return
         self.action_button.configure(text=text); self.action_button.tooltip_text = tip
@@ -395,6 +474,32 @@ class DriftPage:
         else:
             AssignmentDialog(self.app, library.snapshot, [entry["rule"] for entry in entries],
                              preselect=(self.target(),), enabled=live)
+
+    def add(self, entry):
+        """Read this live rule again at the version the pipeline deploys at, convert it into a library rule
+        proven to deploy back exactly as it is, and open it in the Rule builder as a new rule."""
+        app, rules = self.app, self.app.rules_page
+        if app.busy or entry["rule"] is not None or self.action(entry) != "add": return
+        session, workspace = app.session, dict(rules.loaded_workspace or {})
+        if session is None or not workspace or app.workspace != rules.loaded_workspace:
+            kit.alert(app.root, "Add to library", "Select Refresh to read the workspace rules again, then try again.",
+                      tone="info"); return
+        rule_id, name = live_rules.rule_id(entry["live"]), entry["name"]
+        def task():
+            record = read_rule(session, workspace, rule_id, rule_schema.API_VERSION)
+            try: return live_rules.convert(record)
+            except live_rules.NotConvertible as error: return dict(refused=str(error))
+        def done(result):
+            if result.get("refused"):
+                kit.alert(app.root, "Add to library", f"“{name}” can't be added to the library from here. "
+                          + result["refused"], tone="warning"); return
+            note = (f"From {workspace['workspace_name']}: {name}. It matches the live rule exactly"
+                    + (" (" + " ".join(result["notes"]) + ")" if result["notes"] else "") + ". "
+                    + ("Before you submit: " + " ".join(result["fixes"]) + " " if result["fixes"] else "")
+                    + "Check it, then Submit for approval.")
+            if app.rule_builder.edit_rule(result["rule"], source=None, note=note): app.show_page("builder")
+        app.work(f"Reading “{name}” from {workspace['workspace_name']} to add it to the library…", task, done,
+                 page="rules", failed="Couldn't read the rule from Sentinel")
 
     def preview(self, entry):
         """The Rule library's preview and deploy dialog for this rule, with this client ticked."""
@@ -460,7 +565,9 @@ class DriftPage:
                 for field, library, live in entry["differences"]) + "."
         if entry["rule"]:
             return f"This rule is in {name} and in the library, but the library doesn't assign it to {target}."
-        return f"This rule is in {name} but not in the rule library, so the library doesn't manage it."
+        text = f"This rule is in {name} but not in the rule library, so the library doesn't manage it."
+        reason = live_rules.why_not(entry["live"])
+        return text + (" " + reason if reason else " Add to library opens it in the Rule builder as a new rule.")
 
     def detail(self, entry=None):
         for child in self.pills.winfo_children(): child.destroy()

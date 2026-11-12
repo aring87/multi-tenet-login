@@ -61,7 +61,9 @@ Nothing in the app changes a live rule directly.
   live in its workspace: missing rules, different enabled state or severity, and live rules
   the library doesn't assign. A drifted rule offers **Assign to this client…** or **Preview
   and deploy…** for the connected client, through the same reviewed dialogs as the Rule library.
-  In both lists, several selected rules can be assigned in one request.
+  In both lists, several selected rules can be assigned in one request. A live rule that is not
+  in the library offers **Add to library…**: it is read again at the pipeline's API version,
+  converted, proven to deploy back exactly as it is, and opened in the Rule builder as a new rule.
 - **Rule builder:** five guided steps (Back/Next), a Query box that colours KQL in a choice of
   themes and completes steps, tables, columns and functions as you type, a KQL check as you
   type (unclosed quotes and brackets, misspelt steps, tables, functions and operators, with the

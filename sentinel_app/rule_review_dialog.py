@@ -27,6 +27,15 @@ def pull_reference(url):
     return f"pull request #{match.group(2)} in {match.group(1)}" if match else "the pull request"
 
 
+def new_rule_path(form):
+    """Where a new rule goes in the library: the folder of its first MITRE tactic (CommandAndControl ->
+    command-and-control/), or uncategorized/ without one, as the library's README files rules."""
+    filename = re.sub(r"[^a-z0-9]+", "-", form["name"].lower()).strip("-")[:80] or "new-rule"
+    first = next((t.strip() for t in str(form.get("tactics", "")).split(",") if t.strip()), "")
+    folder = re.sub(r"(?<!^)(?=[A-Z])", "-", first).lower() if re.fullmatch(r"[A-Za-z]+", first) else "uncategorized"
+    return "rules/sentinel/" + folder + "/" + filename + ".yml"
+
+
 class ReviewDialog:
     def __init__(self, builder, record=None, auto=False):
         self.builder, self.app = builder, builder.app
@@ -37,9 +46,9 @@ class ReviewDialog:
         self.service = ReviewService()
         self.folder = builder.data_dir / "review-requests"
         repository = (self.source or {}).get("repository") or self.app.github_repository()
-        filename = re.sub(r"[^a-z0-9]+", "-", self.form["name"].lower()).strip("-")[:80] or "new-rule"
         self.repository = tk.StringVar(value=record["plan"]["repository"] if record else repository.strip("/"))
-        self.path = tk.StringVar(value=record["plan"]["path"] if record else (self.source or {}).get("path", "rules/sentinel/" + filename + ".yml"))
+        self.path = tk.StringVar(value=record["plan"]["path"] if record else
+                                 (self.source or {}).get("path", new_rule_path(self.form)))
         self.controls = []
 
         window = self.window = tk.Toplevel(self.app.root)

@@ -1,5 +1,6 @@
 """Explicit subscription access and read-only Sentinel rule inventory."""
 import fnmatch
+import re
 import time
 import uuid
 from .desktop_backend import require, guid
@@ -73,6 +74,19 @@ def list_rules(session, workspace):
     title, resource, version = CONFIGURATIONS["rules"]
     return collector.collect("rules", title, collector.base + "/providers/Microsoft.SecurityInsights/" +
                              resource + "?api-version=" + version, "Configured analytics rules, including disabled rules")
+
+def read_rule(session, workspace, rule_id, api_version):
+    """One analytics rule, read again at ``api_version``: the rule library's converter reads at the version the
+    pipeline deploys at, because newer versions leave some properties out. Read-only."""
+    require(isinstance(rule_id, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", rule_id), "Invalid rule ID.")
+    require(isinstance(api_version, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}(-preview)?", api_version), "Invalid API version.")
+    collector = Collector(session, workspace)
+    collector.verify_workspace()
+    record = collector.get(collector.base + "/providers/Microsoft.SecurityInsights/alertRules/" + rule_id.lower()
+                           + "?api-version=" + api_version)
+    require(isinstance(record, dict) and str(record.get("name", "")).rsplit("/", 1)[-1].lower() == rule_id.lower(),
+            "Sentinel returned a different rule. Select Refresh, then try again.")
+    return record
 
 def rule_values(row):
     props = row.get("properties", {})

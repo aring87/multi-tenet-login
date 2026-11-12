@@ -85,12 +85,23 @@ def to_rule(form):
     return result
 
 
+def dump(rule):
+    """The library file's text for ``rule``, as the Rule builder writes it."""
+    return yaml.safe_dump(rule, sort_keys=False, allow_unicode=True)
+
+
 def validated_yaml(form):
     rule = to_rule(form)
     warnings = rule_schema.validate(rule, allow_missing_mitre=form["allow_missing_mitre"])
     # Exercise the same ARM transformation, without deploying or saving an ARM template.
     rule_schema.to_arm(rule)
-    return yaml.safe_dump(rule, sort_keys=False, allow_unicode=True), warnings
+    text = dump(rule)
+    # As the library's importer does: refuse a file that wouldn't read back as this rule (YAML folds a
+    # U+0085 line break into a space, for one).
+    if yaml.load(text, Loader=rule_schema.UniqueLoader) != rule:
+        raise ValueError("Saving the rule as YAML would change it: it holds a character YAML can't keep, "
+                         "such as U+0085. Remove or replace it.")
+    return text, warnings
 
 
 def read_bounded(path):

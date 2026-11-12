@@ -132,7 +132,7 @@ The exe keeps its data in a `desktop-data` folder beside it, or under
 
 To make the analyst package, put these in a folder named `Sentinel Workspace` and zip it:
 
-- the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and both SOPs as PDFs;
+- the new `Sentinel Workspace.exe`, `READ ME FIRST.txt` and both SOPs as PDFs (from `docs/sop`);
 - `desktop-data\clients.json`, copied from your own desktop-data folder;
 - `desktop-data\settings.json` holding only the rule library:
   `{"github_owner": "isi-security", "github_repo": "detection-as-code"}`;
@@ -231,8 +231,11 @@ certification.
 
 ## Documentation
 
-- Team SOPs: **SOP: Sentinel Workspace desktop app** and **SOP: Building detection rules**
-  (PDFs in the analyst package, kept with the team's procedures)
+- Team SOPs (PDF and Word, also shipped in the analyst package):
+  [SOP: Sentinel Workspace desktop app](docs/sop/SOP-Sentinel-Workspace-Desktop-App.pdf)
+  ([Word](docs/sop/SOP-Sentinel-Workspace-Desktop-App.docx)) and
+  [SOP: Building detection rules](docs/sop/SOP-Building-Detection-Rules.pdf)
+  ([Word](docs/sop/SOP-Building-Detection-Rules.docx))
 - [Desktop guide](docs/DESKTOP-START-HERE.md) (also the in-app Help, F1)
 - [Repository catalog, rule builder, reviews and deployments](docs/REPOSITORY-PILOT.md)
 - [Current Lighthouse onboarding](docs/APP-ONBOARDING.md)
